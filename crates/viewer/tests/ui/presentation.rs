@@ -278,6 +278,37 @@ fn leaving_fullscreen_by_the_window_keeps_presenting_windowed(cx: &mut TestAppCo
 }
 
 #[gpui_kit::test]
+fn a_fullscreen_the_person_makes_during_the_presentation_stays_after_it(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    three(dir.path());
+    let (handle, view) = open_checked(cx, dir.path());
+    // Each change of fullscreen resizes the window, as on the platform.
+    let green_button = |cx: &mut TestAppContext, width: f32, height: f32| {
+        toggle_fullscreen(cx, handle);
+        cx.simulate_window_resize(handle, size(px(width), px(height)));
+        cx.run_until_parked();
+    };
+    press(cx, handle, "space");
+    assert!(fullscreen(cx, handle));
+    cx.simulate_window_resize(handle, size(px(1400.), px(900.)));
+    cx.run_until_parked();
+
+    // Out by the window, then in again: that fullscreen is the person's.
+    green_button(cx, 1000., 700.);
+    assert!(!fullscreen(cx, handle));
+    green_button(cx, 1400., 900.);
+    assert!(fullscreen(cx, handle));
+    assert!(presenting(cx, &view));
+
+    press(cx, handle, "escape");
+    assert!(matches!(layout(cx, handle), Layout::Split(_)));
+    assert!(
+        fullscreen(cx, handle),
+        "Esc took away the person's fullscreen"
+    );
+}
+
+#[gpui_kit::test]
 fn the_split_comes_back_at_its_width_after_the_window_grows_and_shrinks(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     three(dir.path());

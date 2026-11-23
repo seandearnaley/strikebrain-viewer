@@ -69,6 +69,17 @@ pub struct Session {
     pub opened_at: Option<Bounds<Pixels>>,
 }
 
+/// What the root view knows of the window's fullscreen.
+#[derive(Clone, Copy, Debug, Default)]
+struct Fullscreen {
+    /// Whether the presentation made the window fullscreen, so leaving it
+    /// should make the window windowed again. Cleared when the person
+    /// takes the window out of that fullscreen themselves.
+    entered: bool,
+    /// Whether the window was fullscreen when its bounds last changed.
+    was: bool,
+}
+
 /// A pane that takes keyboard focus, in Tab order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Pane {
@@ -94,9 +105,8 @@ pub struct AppView {
     /// Whether the window is laid out for the presentation: follows
     /// [`AppState::is_presenting`].
     presenting: bool,
-    /// Whether the presentation made the window fullscreen, so leaving it
-    /// should make the window windowed again.
-    entered_fullscreen: bool,
+    /// What the view knows of the window's fullscreen.
+    fullscreen: Fullscreen,
     /// Where the window is, as last reported.
     window: Option<SavedWindow>,
     /// The window's place while windowed, as a window opens with it: the
@@ -155,6 +165,7 @@ impl AppView {
             }),
             cx.observe_window_appearance(window, |_, window, cx| theme::follow_system(window, cx)),
             cx.observe_window_bounds(window, |this, window, cx| {
+                this.follow_fullscreen(window);
                 this.window = Some(this.place(window, cx));
                 this.schedule_save(cx);
             }),
@@ -183,7 +194,10 @@ impl AppView {
             )),
             title: None,
             presenting: false,
-            entered_fullscreen: false,
+            fullscreen: Fullscreen {
+                entered: false,
+                was: window.is_fullscreen(),
+            },
             window: None,
             windowed: session.opened_at,
             store: session.store,
@@ -277,14 +291,27 @@ impl AppView {
         }
         self.presenting = presenting;
         if presenting {
-            self.entered_fullscreen = !window.is_fullscreen();
-            if self.entered_fullscreen {
+            self.fullscreen.entered = !window.is_fullscreen();
+            if self.fullscreen.entered {
                 window.toggle_fullscreen();
             }
-        } else if std::mem::take(&mut self.entered_fullscreen) && window.is_fullscreen() {
+        } else if std::mem::take(&mut self.fullscreen.entered) && window.is_fullscreen() {
             window.toggle_fullscreen();
         }
         cx.notify();
+    }
+
+    /// Follows the window in and out of fullscreen, which changes its
+    /// bounds. Once the person takes the window out of the fullscreen the
+    /// presentation made (the green button, the system gesture), the
+    /// window is theirs: leaving the presentation no longer changes it,
+    /// even if they make it fullscreen again meanwhile.
+    fn follow_fullscreen(&mut self, window: &Window) {
+        let fullscreen = window.is_fullscreen();
+        if self.presenting && self.fullscreen.entered && self.fullscreen.was && !fullscreen {
+            self.fullscreen.entered = false;
+        }
+        self.fullscreen.was = fullscreen;
     }
 
     // Saving
@@ -301,7 +328,7 @@ impl AppView {
             let windowed = self
                 .windowed
                 .unwrap_or_else(|| window.window_bounds().get_bounds());
-            if self.entered_fullscreen {
+            if self.fullscreen.entered {
                 WindowBounds::Windowed(windowed)
             } else {
                 WindowBounds::Fullscreen(windowed)
