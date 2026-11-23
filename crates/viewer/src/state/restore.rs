@@ -125,13 +125,13 @@ impl AppState {
         }
     }
 
-    /// The view to save, given the row at the top of the tree's scroll.
+    /// The view to save, with the row at the top of the tree's scroll.
     /// Cheap: the open folders and the checks of the tree on screen are
     /// copied as bit sets and named later, off the UI thread. A folder not
     /// on screen as it was seen saves the view waiting for it; one still
     /// scanning for the first time saves as open, as it will show. A tree
     /// built in memory has no folder to save.
-    pub(crate) fn take_snapshot(&self, top_row: Option<usize>) -> SnapshotView {
+    pub(crate) fn take_snapshot(&self) -> SnapshotView {
         let explorer = self.explorer.as_ref();
         let on_disk = |path: PathBuf| path.is_absolute().then_some(path);
         let pending = self.restore.as_ref();
@@ -139,11 +139,7 @@ impl AppState {
             .restore_top
             .clone()
             .or_else(|| pending.and_then(|pending| pending.top_row.clone()))
-            .or_else(|| {
-                let explorer = explorer?;
-                let id = *explorer.rows().get(top_row?)?;
-                on_disk(explorer.tree().abs_path(id))
-            });
+            .or_else(|| on_disk(explorer?.tree().abs_path(self.top_node()?)));
         let current = match (explorer, self.current) {
             (Some(explorer), Some(id)) => on_disk(explorer.tree().abs_path(id)),
             _ => pending.and_then(|pending| pending.current.clone()),

@@ -182,6 +182,7 @@ impl AppState {
             self.folders
                 .retain(|other| other.key == key || !other.path.starts_with(&path));
         }
+        let top = self.top_node();
         let joined = self.join(key, &old, &tree, error.is_some());
         let (map, current) = match joined {
             Ok(joined) => joined,
@@ -211,7 +212,7 @@ impl AppState {
             explorer.restore_folder(&SavedFolder { path, ..saved });
         }
         self.selection_changed();
-        self.landed(cx);
+        self.landed_keeping(top.and_then(|top| map.get(top)), cx);
         self.scan_settled(key, cx);
         (readable && !tree.has_sizes()).then_some(tree)
     }

@@ -370,8 +370,7 @@ impl AppView {
     /// A write that fails leaves the last good file in place.
     pub fn save(&mut self, cx: &mut Context<Self>) -> Option<Task<()>> {
         let store = self.store.clone()?;
-        let top_row = self.explorer.read(cx).top_row(cx);
-        let view = self.state.read(cx).take_snapshot(top_row);
+        let view = self.state.read(cx).take_snapshot();
         let snapshot = Snapshot {
             view,
             explorer_width: Some(self.explorer_width(cx)),

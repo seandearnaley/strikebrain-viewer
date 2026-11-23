@@ -20,6 +20,7 @@ mod scan;
 mod watch;
 
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use explorer::{Explorer, KindFilter, NodeId, Tree};
@@ -164,7 +165,14 @@ pub struct AppState {
     restore_top: Option<PathBuf>,
     /// How to follow the folders on disk; `None` does not.
     watching: Option<Watching>,
+    /// Which row is at the top of the tree's scroll, given how many rows
+    /// there are: a probe the tree view hands over, so a change of folders
+    /// can keep that row at the top, and a save can name it.
+    top_row: Option<TopRowProbe>,
 }
+
+/// See [`AppState::probe_top_row`].
+pub(crate) type TopRowProbe = Rc<dyn Fn(usize) -> Option<usize>>;
 
 impl std::fmt::Debug for AppState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -215,6 +223,7 @@ impl AppState {
             watching: options.watch.then_some(Watching {
                 quiet: options.quiet,
             }),
+            top_row: None,
         };
         // The filter and the rules apply to the first scans already.
         let waiting = options.view.map(|view| state.take_view(view));
@@ -326,7 +335,33 @@ impl AppState {
         Some(self.explorer.as_ref()?.tree().name(id))
     }
 
+    /// Takes the tree view's probe of the row at the top of its scroll.
+    pub(crate) fn probe_top_row(&mut self, probe: TopRowProbe) {
+        self.top_row = Some(probe);
+    }
+
     // Shared steps
+
+    /// The node of the row at the top of the tree's scroll, if the tree
+    /// view has laid it out.
+    fn top_node(&self) -> Option<NodeId> {
+        let rows = self.explorer.as_ref()?.rows();
+        rows.get((self.top_row.as_ref()?)(rows.len())?).copied()
+    }
+
+    /// After a change of folders that carried `top`, the old top row, to
+    /// the new tree: [`AppState::landed`], then the old top row back at
+    /// the top if it is still a row, unless a saved view's own top row
+    /// waits or applies. A later scroll request replaces an earlier one, so
+    /// it goes last.
+    fn landed_keeping(&mut self, top: Option<NodeId>, cx: &mut Context<Self>) {
+        let restoring = self.restore.is_some() || self.restore_top.is_some();
+        self.landed(cx);
+        let row = top.and_then(|top| self.explorer.as_ref()?.row_of(top));
+        if let Some(row) = row.filter(|_| !restoring) {
+            cx.emit(StateEvent::TopRow(row));
+        }
+    }
 
     /// Call whenever the tree on screen is replaced or removed.
     fn tree_replaced(&mut self) {

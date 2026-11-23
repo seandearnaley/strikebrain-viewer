@@ -186,3 +186,53 @@ fn the_toolbar_adds_a_folder_left_of_show_ignored(cx: &mut TestAppContext) {
     assert!(cx.did_prompt_for_paths());
     cx.simulate_path_prompt_response(|_| None);
 }
+
+#[gpui_kit::test]
+fn the_row_at_the_top_stays_there_as_a_folder_above_it_changes(cx: &mut TestAppContext) {
+    let names = |prefix: &str| -> Vec<(String, String)> {
+        (0..40)
+            .map(|i| (format!("{prefix}{i:02}.txt"), "x".to_owned()))
+            .collect()
+    };
+    let (a, b) = (names("a"), names("b"));
+    let (one, two) = (folder(&pairs(&a)), folder(&pairs(&b)));
+    let launch = Launch::Folders(vec![one.path().to_owned(), two.path().to_owned()]);
+    let (handle, view) = open_app(cx, launch);
+    let top = |cx: &mut TestAppContext| {
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            labels(window).first().cloned().unwrap_or_default()
+        })
+        .unwrap()
+    };
+    // Scrolled to the end, into the second folder.
+    cx.update_window(handle, |_, window, cx| {
+        let delta = gpui_kit::point(gpui_kit::px(0.), gpui_kit::px(-5000.));
+        window.scroll("tree", gpui_kit::ScrollDelta::Pixels(delta), cx);
+    })
+    .unwrap();
+    let before = top(cx);
+    assert!(before.starts_with('b'), "{before}");
+
+    // A file appears in the first folder, above the top row.
+    crate::write(one.path(), "a-new.txt", "n");
+    crate::click(cx, handle, "refresh");
+    let rows = |cx: &mut TestAppContext| read(cx, &view, |s| s.explorer().unwrap().rows().len());
+    assert_eq!(rows(cx), 83);
+    assert_eq!(top(cx), before);
+
+    // The first folder goes.
+    let first = node_at(cx, &view, one.path());
+    crate::state(cx, &view).update(cx, |state, cx| state.remove_folder(first, cx));
+    cx.run_until_parked();
+    assert_eq!(rows(cx), 41);
+    assert_eq!(top(cx), before);
+}
+
+/// Borrowed `(path, text)` pairs.
+fn pairs(names: &[(String, String)]) -> Vec<(&str, &str)> {
+    names
+        .iter()
+        .map(|(path, text)| (path.as_str(), text.as_str()))
+        .collect()
+}
