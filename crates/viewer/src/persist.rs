@@ -80,6 +80,15 @@ pub struct Saved {
     pub window: Option<SavedWindow>,
 }
 
+/// A saved folder with its view.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SavedFolder {
+    /// The folder, absolute and canonical.
+    pub root: PathBuf,
+    /// How it was seen.
+    pub view: FolderView,
+}
+
 /// What a launch opens and what of the saved state applies to it.
 #[derive(Debug)]
 pub struct Plan {
@@ -87,6 +96,9 @@ pub struct Plan {
     pub launch: Launch,
     /// The saved view, when it belongs to the folder opened.
     pub view: Option<FolderView>,
+    /// The saved folder, when the launch does not open it: it stays the
+    /// saved one, untouched, until another folder opens.
+    pub kept: Option<SavedFolder>,
     /// The explorer's saved width.
     pub explorer_width: Option<f32>,
     /// The window's saved place.
@@ -96,28 +108,39 @@ pub struct Plan {
 /// Decides what a launch opens. A folder from the command line opens, and
 /// takes the saved view only if it is the folder that was saved. With no
 /// folder the saved one reopens with its view, if it still exists;
-/// otherwise nothing opens. The window and the explorer's width are
-/// restored either way. Touches the disk: canonicalizing a path and
-/// asking whether a folder exists.
+/// otherwise nothing opens. A saved folder the launch does not open is
+/// kept, to be saved again as it was until another folder opens: a
+/// volume that is not mounted today loses nothing. The window and the
+/// explorer's width are restored either way. Touches the disk:
+/// canonicalizing a path and asking whether a folder exists.
 #[must_use]
 pub fn plan_launch(folder: Option<PathBuf>, saved: Option<Saved>) -> Plan {
     let saved = saved.unwrap_or_default();
-    let (launch, view) = match folder {
-        Some(folder) => {
-            let same = saved
-                .root
-                .as_ref()
-                .is_some_and(|root| fs::canonicalize(&folder).is_ok_and(|asked| &asked == root));
-            (Launch::Folder(folder), same.then_some(saved.view))
-        }
-        None => match saved.root {
-            Some(root) if root.is_dir() => (Launch::Folder(root), Some(saved.view)),
-            _ => (Launch::Empty, None),
-        },
+    let opens_saved = match &folder {
+        Some(folder) => saved
+            .root
+            .as_ref()
+            .is_some_and(|root| fs::canonicalize(folder).is_ok_and(|asked| &asked == root)),
+        None => saved.root.as_ref().is_some_and(|root| root.is_dir()),
+    };
+    let launch = match (folder, &saved.root) {
+        (Some(folder), _) => Launch::Folder(folder),
+        (None, Some(root)) if opens_saved => Launch::Folder(root.clone()),
+        (None, _) => Launch::Empty,
+    };
+    let (view, kept) = if opens_saved {
+        (Some(saved.view), None)
+    } else {
+        let kept = saved.root.map(|root| SavedFolder {
+            root,
+            view: saved.view,
+        });
+        (None, kept)
     };
     Plan {
         launch,
         view,
+        kept,
         explorer_width: saved.explorer_width,
         window: saved.window,
     }
@@ -151,28 +174,36 @@ pub(crate) struct Snapshot {
 }
 
 /// The view of the folder in a [`Snapshot`].
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum SnapshotView {
     /// A tree is on screen: its open folders and checks still to be named,
     /// the rest of `FolderView` filled in.
     Live(ViewSnapshot, FolderView),
-    /// The first scan has not landed: the view waiting to be restored.
+    /// No tree is on screen: the view waiting to be restored, or one
+    /// kept as it was saved.
     Waiting(FolderView),
+}
+
+impl SnapshotView {
+    /// The view with its open folders and checks named. Costs a path per
+    /// entry, so the UI thread calls it only where that is rare.
+    pub(crate) fn named(self) -> FolderView {
+        match self {
+            Self::Live(snapshot, rest) => FolderView {
+                expanded: snapshot.open_paths(),
+                selected: snapshot.selection(),
+                ..rest
+            },
+            Self::Waiting(view) => view,
+        }
+    }
 }
 
 impl Snapshot {
     /// The state to write. Names the open folders and the checks, and
     /// makes the root canonical, so it reads the disk once.
     pub(crate) fn saved(self) -> Saved {
-        let view = match self.view {
-            Some(SnapshotView::Live(snapshot, rest)) => FolderView {
-                expanded: snapshot.open_paths(),
-                selected: snapshot.selection(),
-                ..rest
-            },
-            Some(SnapshotView::Waiting(view)) => view,
-            None => FolderView::default(),
-        };
+        let view = self.view.map_or_default(SnapshotView::named);
         Saved {
             root: self
                 .root

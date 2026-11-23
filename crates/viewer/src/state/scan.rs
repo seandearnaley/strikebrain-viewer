@@ -5,7 +5,7 @@
 //! while the old tree stays on screen, read the sizes too, then swap the
 //! trees, carrying checks, open folders and the stage across by path.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -56,7 +56,10 @@ impl AppState {
 
     /// Scans `root` on the background executor and shows its tree. Sizes are
     /// read afterwards, also in the background. Supersedes any running scan.
+    /// Until the new tree is on screen, the view on screen before is what
+    /// is saved.
     pub fn open_folder(&mut self, root: PathBuf, cx: &mut Context<Self>) {
+        self.keep_view();
         self.root = Some(root.clone());
         self.explorer = None;
         self.tree_replaced();
@@ -71,14 +74,41 @@ impl AppState {
 
     /// Rescans the folder with the current rules, keeping the tree on screen
     /// until the new one is ready. Does nothing for a tree with no folder.
+    /// With no tree on screen (the first scan runs, or the folder could not
+    /// be read) it scans the folder again, and the view waiting for it, or
+    /// the view it had, applies when that scan lands.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
         let Some(root) = self.root.clone() else {
             return;
         };
-        if self.explorer.is_some() {
-            self.start_scan(root, ScanKind::Refresh, cx);
-        } else {
-            self.open_folder(root, cx);
+        if self.explorer.is_none() {
+            return self.reopen(root, cx);
+        }
+        self.start_scan(root, ScanKind::Refresh, cx);
+    }
+
+    /// Scans `root` again while no tree is on screen, keeping the view that
+    /// waits for it. After a failure, the view the folder had waits: named
+    /// here, on the UI thread, as this happens once per Refresh of a
+    /// folder that could not be read.
+    fn reopen(&mut self, root: PathBuf, cx: &mut Context<Self>) {
+        if self.restore.is_none()
+            && let Some((kept_root, kept)) = &self.kept
+            && same_folder(kept_root, &root)
+        {
+            self.restore = Some(kept.clone().named());
+        }
+        self.follow(root.clone(), cx);
+        self.start_scan(root, ScanKind::Open, cx);
+    }
+
+    /// Before the tree on screen goes: keeps its view, or the saved view
+    /// still waiting for it, as the one to save. Its top row is the one the
+    /// last save saw. With neither, whatever was kept before stays.
+    fn keep_view(&mut self) {
+        let top = self.saved_top.take();
+        if let (Some(root), Some(view)) = (self.saved_root(), self.saved_view(top)) {
+            self.kept = Some((root, view));
         }
     }
 
@@ -172,6 +202,7 @@ impl AppState {
         self.slow_task = None;
         let shown = match scanned {
             Ok(tree) => {
+                self.kept = None;
                 self.show_tree(Arc::clone(&tree));
                 self.restore_view(cx);
                 cx.notify();
@@ -230,7 +261,9 @@ impl AppState {
             }
         };
         let Some(explorer) = self.explorer.as_mut() else {
+            self.kept = None;
             self.show_tree(tree);
+            self.restore_view(cx);
             cx.notify();
             return self.scan_settled(cx);
         };
@@ -246,7 +279,12 @@ impl AppState {
         self.focus = self.focus.and_then(|focus| map.get(focus));
         self.status = ScanStatus::Idle;
         self.selection_changed();
-        self.rows_replaced(cx);
+        // A saved top row still waiting for sizes: this tree has them. The
+        // open scan's own read of them was cancelled by this one.
+        match self.restore_top.take() {
+            Some(top) => self.show_saved_top(Some(&top), cx),
+            None => self.rows_replaced(cx),
+        }
         self.scan_settled(cx);
     }
 
@@ -258,8 +296,12 @@ impl AppState {
         }
     }
 
-    /// The folder itself could not be read: show the system's message.
+    /// The folder itself could not be read: show the system's message. The
+    /// view it had stays the one to save.
     fn fail(&mut self, err: &ScanError, cx: &mut Context<Self>) {
+        if self.explorer.is_some() {
+            self.keep_view();
+        }
         self.explorer = None;
         self.tree_replaced();
         self.current = None;
@@ -284,6 +326,12 @@ impl AppState {
         self.selected = 0;
         self.status = ScanStatus::Idle;
     }
+}
+
+/// Whether two paths name the same folder: the same path, or the same
+/// folder once links and `..` are resolved.
+fn same_folder(a: &Path, b: &Path) -> bool {
+    a == b || std::fs::canonicalize(a).is_ok_and(|a| std::fs::canonicalize(b).is_ok_and(|b| a == b))
 }
 
 /// The operating system's message alone: Rust's `io::Error` ends it with

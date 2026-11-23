@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use explorer::{Explorer, KindFilter, NodeId, SortKey, Tree};
 use gpui_kit::{Context, EventEmitter, Result, SharedString, Task};
 
-use crate::persist::FolderView;
+use crate::persist::{FolderView, SavedFolder, SnapshotView};
 use watch::Watching;
 
 /// What the app shows when it starts.
@@ -43,6 +43,9 @@ pub struct StateOptions {
     /// A saved view of the folder `launch` opens, applied when its first
     /// scan lands. Its filter and Show ignored apply from the start.
     pub view: Option<FolderView>,
+    /// A saved folder `launch` does not open: saved again as it was until
+    /// another folder opens.
+    pub kept: Option<SavedFolder>,
     /// Rescan when something under the folder changes on disk.
     pub watch: bool,
     /// Changes under this folder never cause a rescan: where the app keeps
@@ -156,6 +159,14 @@ pub struct AppState {
     restore: Option<FolderView>,
     /// The saved top row, waiting for sizes before a Size sort settles.
     restore_top: Option<String>,
+    /// What to save while no tree is on screen and no saved view waits for
+    /// a scan: the saved folder this launch did not open, or the last tree
+    /// when its folder could no longer be read. Dropped once a folder
+    /// opens, so a folder that is away for a while loses nothing.
+    kept: Option<(PathBuf, SnapshotView)>,
+    /// The row at the top of the tree's scroll when the state was last
+    /// saved, by path: the top row of a view kept once its tree is gone.
+    saved_top: Option<String>,
     /// How to follow the folder on disk; `None` does not.
     watching: Option<Watching>,
     /// Follows the folder: its watcher and the task batching its events.
@@ -224,6 +235,10 @@ impl AppState {
             slow_task: None,
             restore: None,
             restore_top: None,
+            kept: options
+                .kept
+                .map(|kept| (kept.root, SnapshotView::Waiting(kept.view))),
+            saved_top: None,
             watching: options.watch.then_some(Watching {
                 quiet: options.quiet,
             }),

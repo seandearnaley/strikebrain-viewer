@@ -39,6 +39,7 @@ pub fn open_main_window(
     };
     let session = Session {
         view: plan.view,
+        kept: plan.kept,
         explorer_width: plan.explorer_width,
         store,
         watch,

@@ -31,7 +31,7 @@ use crate::keys::{
     StartPresenting, ToggleShowIgnored, Zoom,
 };
 use crate::menus;
-use crate::persist::{FolderView, SavedWindow, Snapshot, StateStore};
+use crate::persist::{FolderView, SavedFolder, SavedWindow, Snapshot, StateStore};
 use crate::stage::{Stage, StageProbe};
 use crate::state::{AppState, Launch, StateOptions};
 use crate::theme;
@@ -52,6 +52,9 @@ pub const SAVE_DELAY: Duration = Duration::from_millis(500);
 pub struct Session {
     /// The saved view of the folder being opened.
     pub view: Option<FolderView>,
+    /// The saved folder, when this launch does not open it: saved as it
+    /// was until another folder opens.
+    pub kept: Option<SavedFolder>,
     /// The explorer's saved width, in pixels.
     pub explorer_width: Option<f32>,
     /// Where to save. `None` saves nothing.
@@ -125,6 +128,7 @@ impl AppView {
     ) -> Self {
         let options = StateOptions {
             view: session.view,
+            kept: session.kept,
             watch: session.watch,
             quiet: session
                 .store
@@ -320,10 +324,12 @@ impl AppView {
     pub fn save(&mut self, cx: &mut Context<Self>) -> Option<Task<()>> {
         let store = self.store.clone()?;
         let top_row = self.explorer.read(cx).top_row(cx);
-        let state = self.state.read(cx);
+        let (root, view) = self
+            .state
+            .update(cx, |state, _| state.take_snapshot(top_row));
         let snapshot = Snapshot {
-            root: state.saved_root(),
-            view: state.saved_view(top_row),
+            root,
+            view,
             explorer_width: Some(self.explorer_width(cx)),
             window: self.window.clone(),
         };

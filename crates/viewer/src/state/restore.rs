@@ -7,7 +7,7 @@
 //! stage, and the row at the top of the tree's scroll. Under a Size sort
 //! the rows reorder once sizes are read, so the top row waits for them.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use explorer::SortKey;
 use gpui_kit::Context;
@@ -68,30 +68,57 @@ impl AppState {
         }
     }
 
-    /// The folder to save: the scanned folder, or the one asked for while
-    /// its first scan runs. `None` for a tree built in memory.
-    pub(crate) fn saved_root(&self) -> Option<PathBuf> {
-        let scanned = self
-            .explorer
-            .as_ref()
-            .map(|explorer| explorer.tree().root_path())
-            .filter(|root| !root.as_os_str().is_empty());
-        scanned.map(Path::to_path_buf).or_else(|| self.root.clone())
+    /// The folder to save: the scanned folder; with no tree on screen, the
+    /// one asked for while its saved view waits for it, else the one kept
+    /// (see `kept`), else the one asked for. `None` for a tree built in
+    /// memory.
+    pub(super) fn saved_root(&self) -> Option<PathBuf> {
+        if let Some(explorer) = &self.explorer {
+            let root = explorer.tree().root_path();
+            return (!root.as_os_str().is_empty()).then(|| root.to_path_buf());
+        }
+        match &self.kept {
+            Some((root, _)) if self.restore.is_none() => Some(root.clone()),
+            _ => self.root.clone(),
+        }
     }
 
-    /// The view to save, given the row at the top of the tree's scroll:
-    /// the tree on screen, or the saved view still waiting for its scan.
-    /// Cheap: the open folders and the checks are copied as bit sets and
-    /// named later, off the UI thread.
-    pub(crate) fn saved_view(&self, top_row: Option<usize>) -> Option<SnapshotView> {
+    /// The folder and its view to save, given the row at the top of the
+    /// tree's scroll. Remembers that row, for a view kept once the tree
+    /// is gone (see `keep_view`).
+    pub(crate) fn take_snapshot(
+        &mut self,
+        top_row: Option<usize>,
+    ) -> (Option<PathBuf>, Option<SnapshotView>) {
+        let top = self.restore_top.clone().or_else(|| {
+            let explorer = self.explorer.as_ref()?;
+            let id = *explorer.rows().get(top_row?)?;
+            Some(explorer.tree().path(id))
+        });
+        if self.explorer.is_some() {
+            self.saved_top.clone_from(&top);
+        }
+        (self.saved_root(), self.saved_view(top))
+    }
+
+    /// The view to save, given the path of the row at the top of the
+    /// tree's scroll: the tree on screen; else the saved view still
+    /// waiting for its scan, with the filter and the rules as they are
+    /// now; else the view kept. Cheap: the open folders and the checks are
+    /// copied as bit sets and named later, off the UI thread.
+    pub(super) fn saved_view(&self, top_row: Option<String>) -> Option<SnapshotView> {
         let Some(explorer) = &self.explorer else {
-            return self.restore.clone().map(SnapshotView::Waiting);
+            if let Some(waiting) = &self.restore {
+                return Some(SnapshotView::Waiting(FolderView {
+                    show_ignored: self.show_ignored,
+                    query: self.query.clone(),
+                    kind: self.kind,
+                    ..waiting.clone()
+                }));
+            }
+            return self.kept.as_ref().map(|(_, view)| view.clone());
         };
         let tree = explorer.tree();
-        let top_row = self.restore_top.clone().or_else(|| {
-            let id = *explorer.rows().get(top_row?)?;
-            Some(tree.path(id))
-        });
         let rest = FolderView {
             show_ignored: self.show_ignored,
             current: self.current.map(|id| tree.path(id)),

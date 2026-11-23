@@ -17,7 +17,8 @@ pub use app::{AppView, EXPLORER_MIN_WIDTH, EXPLORER_WIDTH, SAVE_DELAY, Session};
 pub use assets::AppAssets;
 pub use launch::{folder_from_url, open_main_window};
 pub use persist::{
-    APP_ID, FolderView, Plan, STATE_FILE_VAR, Saved, SavedWindow, StateStore, fit, plan_launch,
+    APP_ID, FolderView, Plan, STATE_FILE_VAR, Saved, SavedFolder, SavedWindow, StateStore, fit,
+    plan_launch,
 };
 pub use stage::StageProbe;
 pub use state::{AppState, Launch, ScanStatus, StateOptions};

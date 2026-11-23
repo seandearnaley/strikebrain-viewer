@@ -177,6 +177,12 @@ fn a_folder_argument_opens_and_takes_the_view_only_if_it_was_saved() {
     assert!(matches!(&plan.launch, Launch::Folder(path) if *path == b));
     assert_eq!(plan.view, None);
     assert_eq!(plan.window, saved.window);
+    // The saved folder stays saved until another one opens.
+    let kept = plan.kept.expect("the saved folder is kept");
+    assert_eq!(
+        (kept.root, kept.view),
+        (saved.root.clone().unwrap(), saved.view.clone())
+    );
 
     // A folder that does not exist opens, to show its error.
     let plan = plan_launch(Some(dir.path().join("gone")), Some(saved));
@@ -193,16 +199,21 @@ fn no_argument_reopens_the_saved_folder_while_it_exists() {
     let plan = plan_launch(None, Some(saved.clone()));
     assert!(matches!(&plan.launch, Launch::Folder(path) if *path == root));
     assert_eq!(plan.view, Some(saved.view.clone()));
+    assert_eq!(plan.kept, None);
 
     let gone = full(root.join("gone"));
-    let plan = plan_launch(None, Some(gone));
+    let plan = plan_launch(None, Some(gone.clone()));
     assert!(matches!(plan.launch, Launch::Empty));
     assert_eq!(plan.view, None);
     assert_eq!(plan.explorer_width, Some(412.5));
+    // Kept, to be saved again: an unmounted volume loses nothing.
+    let kept = plan.kept.expect("the saved folder is kept");
+    assert_eq!((Some(kept.root), kept.view), (gone.root, gone.view));
 
     let plan = plan_launch(None, None);
     assert!(matches!(plan.launch, Launch::Empty));
     assert!(plan.window.is_none() && plan.explorer_width.is_none());
+    assert!(plan.kept.is_none());
 }
 
 #[test]

@@ -91,7 +91,10 @@ impl ExplorerPanel {
             cx.subscribe(&state, |this, _, event: &StateEvent, cx| match event {
                 StateEvent::RowsReplaced => this.reveal_focus(cx),
                 StateEvent::CurrentMoved => this.reveal_current(cx),
-                StateEvent::TopRow(row) => this.scroll.scroll_to_item(*row, ScrollStrategy::Top),
+                StateEvent::TopRow(row) => {
+                    // Strict: at the top even when it is already on screen.
+                    this.scroll.scroll_to_item_strict(*row, ScrollStrategy::Top);
+                }
             }),
             cx.subscribe(&filter, |this, input, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Change) {
