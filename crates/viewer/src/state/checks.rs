@@ -27,6 +27,20 @@ impl AppState {
         self.checks_changed(before, cx);
     }
 
+    /// Checks the file `id`, if it is not checked, and puts it on the
+    /// stage as a check by hand does: a file opened with others.
+    pub(super) fn check_and_show(&mut self, id: NodeId, cx: &mut Context<Self>) {
+        let before = self.current;
+        let Some(explorer) = self.explorer.as_mut() else {
+            return;
+        };
+        if !explorer.is_selected(id) {
+            explorer.toggle_check(id);
+        }
+        self.current = Some(id);
+        self.checks_changed(before, cx);
+    }
+
     /// Checks every file the filter shows: the toolbar's Select all.
     pub fn select_all(&mut self, cx: &mut Context<Self>) {
         let before = self.current;

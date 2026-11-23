@@ -242,7 +242,7 @@ fn a_file_handed_over_shows_in_the_open_folder_or_adds_its_own(cx: &mut TestAppC
     // A file the open folder lists: no folder is added, the folders above
     // the file open, and it shows.
     let inside = dir.path().join("deep/down/a.txt");
-    view.update(cx, |view, cx| view.open_path(inside.clone(), cx));
+    view.update(cx, |view, cx| view.open_paths(vec![inside.clone()], cx));
     cx.run_until_parked();
     assert_eq!(
         rows_now(cx, handle),
@@ -255,7 +255,7 @@ fn a_file_handed_over_shows_in_the_open_folder_or_adds_its_own(cx: &mut TestAppC
     // A file elsewhere: its folder is added after those open, and it shows
     // once that folder's scan lands.
     let outside = other.path().join("c.txt");
-    view.update(cx, |view, cx| view.open_path(outside.clone(), cx));
+    view.update(cx, |view, cx| view.open_paths(vec![outside.clone()], cx));
     cx.run_until_parked();
     let rows = rows_now(cx, handle);
     assert_eq!(rows[rows.len() - 2..], under(other.path(), &["c.txt"]));
@@ -272,7 +272,7 @@ fn a_file_gone_before_its_folder_is_read_never_shows(cx: &mut TestAppContext) {
 
     // Asked for, then gone from disk before its folder is read.
     let file = other.path().join("c.txt");
-    view.update(cx, |view, cx| view.open_path(file.clone(), cx));
+    view.update(cx, |view, cx| view.open_paths(vec![file.clone()], cx));
     std::fs::remove_file(&file).unwrap();
     cx.run_until_parked();
     assert_eq!(crate::current(cx, &view), None);
@@ -290,10 +290,46 @@ fn a_file_handed_over_to_an_empty_window_opens_its_folder_and_shows(cx: &mut Tes
     let dir = folder(&[("a.txt", "a"), ("b.txt", "b")]);
     let (handle, view) = open_app(cx, Launch::Empty);
     let file = dir.path().join("b.txt");
-    view.update(cx, |view, cx| view.open_path(file.clone(), cx));
+    view.update(cx, |view, cx| view.open_paths(vec![file.clone()], cx));
     cx.run_until_parked();
     assert_eq!(rows_now(cx, handle), under(dir.path(), &["a.txt", "b.txt"]));
     let b = node_at(cx, &view, &file);
     assert_eq!(crate::current(cx, &view), Some(b));
     assert_eq!(crate::focus(cx, &view), Some(b));
+}
+
+#[gpui_kit::test]
+fn files_opened_together_are_checked_and_show_as_the_gallery(cx: &mut TestAppContext) {
+    let dir = folder(&[("a.txt", "a"), ("b.txt", "b"), ("c.txt", "c")]);
+    let other = folder(&[("d.txt", "d")]);
+    let (b, d) = (dir.path().join("b.txt"), other.path().join("d.txt"));
+    let (handle, view) = open_app(cx, Launch::Folders(vec![b.clone(), d.clone()]));
+
+    // Each file's folder opens, in the order asked for.
+    let mut rows = under(dir.path(), &["a.txt", "b.txt", "c.txt"]);
+    rows.extend(under(other.path(), &["d.txt"]));
+    assert_eq!(rows_now(cx, handle), rows);
+    // Both files are checked, nothing else, and the gallery shows them.
+    assert_eq!(crate::checked(cx, &view), ["b.txt", "d.txt"]);
+    assert!(read(cx, &view, AppState::shows_gallery));
+
+    // One more file alone shows in the file view and is not checked.
+    let a = dir.path().join("a.txt");
+    view.update(cx, |view, cx| view.open_paths(vec![a.clone()], cx));
+    cx.run_until_parked();
+    assert_eq!(crate::current(cx, &view), Some(node_at(cx, &view, &a)));
+    assert!(!read(cx, &view, AppState::shows_gallery));
+    assert_eq!(crate::checked(cx, &view), ["b.txt", "d.txt"]);
+
+    // Two handed over while running join the checks, one already there.
+    let c = dir.path().join("c.txt");
+    view.update(cx, |view, cx| {
+        view.open_paths(vec![b.clone(), c.clone()], cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(crate::checked(cx, &view), ["b.txt", "c.txt", "d.txt"]);
+    assert!(read(cx, &view, AppState::shows_gallery));
+    let c = node_at(cx, &view, &c);
+    assert_eq!(read(cx, &view, AppState::tile), Some(c));
+    assert_eq!(crate::focus(cx, &view), Some(c));
 }
