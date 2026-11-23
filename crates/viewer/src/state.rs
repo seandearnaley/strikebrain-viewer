@@ -23,7 +23,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use explorer::{Explorer, KindFilter, NodeId, Tree};
+use explorer::{Explorer, IdMap, KindFilter, NodeId, Tree};
 use gpui_kit::{Context, EventEmitter, Result, Task};
 
 use crate::persist::SavedView;
@@ -121,8 +121,30 @@ pub(crate) enum StateEvent {
     /// The stage moved to another file by its own keys. The tree scrolls
     /// that file's row into view if it is a row, and opens no folder.
     CurrentMoved,
-    /// A saved view was restored: the tree scrolls this row to its top.
+    /// A saved view was restored, or a launch settled: the tree scrolls
+    /// this row to its top.
     TopRow(usize),
+    /// A folder was rescanned, taken in or removed while the app runs. The
+    /// row that was at the top, if it is still a row, moved from the first
+    /// index to the second: the tree keeps it where it was, sub-row offset
+    /// and all. A focus row that was on screen stays on screen.
+    RowsMoved {
+        /// The top row's index before and after.
+        top: Option<(usize, usize)>,
+        /// How many rows there were before.
+        rows_before: usize,
+        /// The focus row's index before.
+        focus_before: Option<usize>,
+    },
+}
+
+/// What the tree showed before a change of folders: see
+/// [`StateEvent::RowsMoved`].
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Before {
+    top: Option<(usize, NodeId)>,
+    rows: usize,
+    focus: Option<usize>,
 }
 
 /// The application state. See the module docs.
@@ -229,7 +251,12 @@ impl AppState {
         let waiting = options.view.map(|view| state.take_view(view));
         match launch {
             Launch::Empty => {}
-            Launch::Folders(folders) => state.add_folders(folders, waiting.unwrap_or_default(), cx),
+            Launch::Folders(folders) => {
+                // The launch settles once every folder is on screen: at
+                // its saved top row, or at the top.
+                state.restore.get_or_insert_with(Pending::default);
+                state.add_folders(folders, waiting.unwrap_or_default(), cx);
+            }
             Launch::Tree(tree) => {
                 state.show_tree(tree);
                 for folder in waiting.unwrap_or_default() {
@@ -342,25 +369,50 @@ impl AppState {
 
     // Shared steps
 
-    /// The node of the row at the top of the tree's scroll, if the tree
+    /// The row at the top of the tree's scroll and its node, if the tree
     /// view has laid it out.
-    fn top_node(&self) -> Option<NodeId> {
+    fn top_row(&self) -> Option<(usize, NodeId)> {
         let rows = self.explorer.as_ref()?.rows();
-        rows.get((self.top_row.as_ref()?)(rows.len())?).copied()
+        let at = (self.top_row.as_ref()?)(rows.len())?;
+        Some((at, *rows.get(at)?))
     }
 
-    /// After a change of folders that carried `top`, the old top row, to
-    /// the new tree: [`AppState::landed`], then the old top row back at
-    /// the top if it is still a row, unless a saved view's own top row
-    /// waits or applies. A later scroll request replaces an earlier one, so
-    /// it goes last.
-    fn landed_keeping(&mut self, top: Option<NodeId>, cx: &mut Context<Self>) {
-        let restoring = self.restore.is_some() || self.restore_top.is_some();
-        self.landed(cx);
-        let row = top.and_then(|top| self.explorer.as_ref()?.row_of(top));
-        if let Some(row) = row.filter(|_| !restoring) {
-            cx.emit(StateEvent::TopRow(row));
+    /// The node of the row at the top of the tree's scroll.
+    fn top_node(&self) -> Option<NodeId> {
+        self.top_row().map(|(_, id)| id)
+    }
+
+    /// What the tree shows now, before a change of folders.
+    fn before(&self) -> Before {
+        Before {
+            top: self.top_row(),
+            rows: self
+                .explorer
+                .as_ref()
+                .map_or(0, |explorer| explorer.rows().len()),
+            focus: self.focus_index(),
         }
+    }
+
+    /// After a change of folders, given what the tree showed `before` and
+    /// the old-to-new `map`: while a launch or a saved view settles,
+    /// [`AppState::landed`]; otherwise the views hear which way the rows
+    /// moved, so the tree keeps what was on screen.
+    fn landed_keeping(&mut self, before: Before, map: &IdMap, cx: &mut Context<Self>) {
+        if self.restore.is_some() || self.restore_top.is_some() {
+            return self.landed(cx);
+        }
+        self.settle_focus();
+        let top = before.top.and_then(|(from, id)| {
+            let to = self.explorer.as_ref()?.row_of(map.get(id)?)?;
+            Some((from, to))
+        });
+        cx.emit(StateEvent::RowsMoved {
+            top,
+            rows_before: before.rows,
+            focus_before: before.focus,
+        });
+        cx.notify();
     }
 
     /// Call whenever the tree on screen is replaced or removed.

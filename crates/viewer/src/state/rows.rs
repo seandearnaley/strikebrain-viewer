@@ -155,7 +155,7 @@ impl AppState {
     /// Keeps `focus` on a row on screen after the rows changed. A focus row
     /// that is gone moves to its deepest folder still on screen, else to
     /// the first row. One pass over the rows, stopping at the focus row.
-    fn settle_focus(&mut self) {
+    pub(super) fn settle_focus(&mut self) {
         let Some(explorer) = &self.explorer else {
             return;
         };

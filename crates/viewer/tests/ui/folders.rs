@@ -1,7 +1,7 @@
 //! Several folders: each a top-level row, its remove button and ⌘⌫, the
 //! filter over them, and the toolbar's Add Folder.
 
-use gpui_kit::test::TestWindowExt as _;
+use gpui_kit::test::{TestQueryExt as _, TestWindowExt as _};
 use gpui_kit::{AnyWindowHandle, AppContext as _, Entity, TestAppContext};
 use viewer::{AppState, AppView, Launch};
 
@@ -383,4 +383,59 @@ fn a_folder_asked_for_inside_one_still_scanning_waits_for_its_scan(cx: &mut Test
     let mut rows = under(dir.path(), &["src", ".gitignore"]);
     rows.extend(["target".to_owned(), "out.o".to_owned()]);
     assert_eq!(rows_now(cx, handle), rows);
+}
+
+/// Where the first row drawn sits below the top of the tree.
+fn first_row_offset(cx: &mut TestAppContext, handle: AnyWindowHandle) -> gpui_kit::Pixels {
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        let tree = window.find("tree").bounds().top();
+        let first = window
+            .find_all_by_role(gpui_kit::Role::TreeItem)
+            .into_iter()
+            .find(gpui_kit::test::ElementSnapshot::visible)
+            .expect("a row is drawn");
+        first.bounds().top() - tree
+    })
+    .expect("read the tree")
+}
+
+#[gpui_kit::test]
+fn a_rescan_leaves_the_scroll_where_it_was_to_the_pixel(cx: &mut TestAppContext) {
+    let names: Vec<(String, String)> = (0..60)
+        .map(|i| (format!("f{i:02}.txt"), "x".to_owned()))
+        .collect();
+    let dir = folder(&pairs(&names));
+    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
+    // Part of a row down: the first row drawn is cut by 10 px.
+    cx.update_window(handle, |_, window, cx| {
+        let delta = gpui_kit::point(gpui_kit::px(0.), gpui_kit::px(-10.));
+        window.scroll("tree", gpui_kit::ScrollDelta::Pixels(delta), cx);
+    })
+    .unwrap();
+    let before = first_row_offset(cx, handle);
+    assert_eq!(before, gpui_kit::px(-10.));
+    crate::click(cx, handle, "refresh");
+    assert_eq!(read(cx, &view, AppState::scans), 2);
+    assert_eq!(first_row_offset(cx, handle), before);
+}
+
+#[gpui_kit::test]
+fn a_folder_added_while_the_app_runs_is_the_focus_row_on_screen(cx: &mut TestAppContext) {
+    let names: Vec<(String, String)> = (0..60)
+        .map(|i| (format!("f{i:02}.txt"), "x".to_owned()))
+        .collect();
+    let long = folder(&pairs(&names));
+    let (handle, view) = open_app(cx, Launch::Folders(vec![long.path().to_owned()]));
+    // The launch starts at the top.
+    assert_eq!(rows_now(cx, handle)[0], name_of(long.path()));
+    let other = folder(&[("b.txt", "b")]);
+    add(cx, &view, &[other.path()]);
+    let top = node_at(cx, &view, other.path());
+    assert_eq!(read(cx, &view, AppState::focus), Some(top));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find(row(top)).visible());
+    })
+    .unwrap();
 }

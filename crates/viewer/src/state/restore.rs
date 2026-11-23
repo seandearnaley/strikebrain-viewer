@@ -16,8 +16,9 @@ use gpui_kit::Context;
 use super::{AppState, StateEvent};
 use crate::persist::{FolderSnapshot, SavedView, SnapshotView};
 
-/// The parts of a saved view that wait for the folders to land.
-#[derive(Clone, Debug)]
+/// The parts of a saved view that wait for the folders to land; empty for
+/// a launch with no saved view, which settles at the top.
+#[derive(Clone, Debug, Default)]
 pub(super) struct Pending {
     sort: Sort,
     current: Option<PathBuf>,
@@ -110,11 +111,16 @@ impl AppState {
     }
 
     /// Scrolls the saved top row to the top of the tree, with keyboard
-    /// focus on it, and tells the views the rows were rebuilt.
+    /// focus on it, and tells the views the rows were rebuilt. With no
+    /// saved top row, or one that is gone, the first row: a launch starts
+    /// at the top.
     pub(super) fn show_saved_top(&mut self, top: Option<&Path>, cx: &mut Context<Self>) {
         let found = self.explorer.as_ref().and_then(|explorer| {
-            let id = explorer.tree().find_abs(top?)?;
-            Some((id, explorer.row_of(id)?))
+            let saved = top.and_then(|top| {
+                let id = explorer.tree().find_abs(top)?;
+                Some((id, explorer.row_of(id)?))
+            });
+            saved.or_else(|| Some((*explorer.rows().first()?, 0)))
         });
         if let Some((id, row)) = found {
             self.set_focus(id, row);

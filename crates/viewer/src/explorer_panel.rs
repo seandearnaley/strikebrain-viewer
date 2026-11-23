@@ -22,7 +22,7 @@ use gpui_kit::{
     AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable, IntoElement,
     ParentElement as _, Render, Role, ScrollStrategy, SharedString,
     StatefulInteractiveElement as _, Styled as _, Subscription, TestSupportExt as _,
-    UniformListScrollHandle, Window, div, prelude::*, uniform_list,
+    UniformListScrollHandle, Window, div, point, prelude::*, uniform_list,
 };
 
 use crate::keys::{
@@ -105,6 +105,11 @@ impl ExplorerPanel {
                     // Strict: at the top even when it is already on screen.
                     this.scroll.scroll_to_item_strict(*row, ScrollStrategy::Top);
                 }
+                StateEvent::RowsMoved {
+                    top,
+                    rows_before,
+                    focus_before,
+                } => this.rows_moved(*top, *rows_before, *focus_before, cx),
             }),
             cx.subscribe(&filter, |this, input, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Change) {
@@ -258,6 +263,40 @@ impl ExplorerPanel {
         }
     }
 
+    /// After a change of folders: the row that was at the top stays there,
+    /// moved by as many rows as it moved, sub-row offset and all; a focus
+    /// row that was on screen stays on screen, untouched if it kept its
+    /// place below the top row. With no top row to keep, the focus row is
+    /// kept on screen as after any rebuild.
+    fn rows_moved(
+        &mut self,
+        top: Option<(usize, usize)>,
+        rows_before: usize,
+        focus_before: Option<usize>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((from, to)) = top else {
+            return self.reveal_focus(cx);
+        };
+        if from != to
+            && let Some(height) = row_height(&self.scroll, rows_before)
+        {
+            let handle = &self.scroll.0.borrow().base_handle;
+            let offset = handle.offset();
+            handle.set_offset(point(offset.x, offset.y - height * rows_between(from, to)));
+        }
+        // A focus row on screen that kept its place below the top row is
+        // where it was; one that moved is brought back into view.
+        let page = page_rows(&self.scroll, rows_before).unwrap_or(FALLBACK_PAGE);
+        let focus_now = self.state.read(cx).focus_index();
+        let was_shown = focus_before.filter(|focus| (from..from + page).contains(focus));
+        if let Some(before) = was_shown
+            && focus_now.is_none_or(|now| now.wrapping_sub(to) != before - from)
+        {
+            self.reveal_focus(cx);
+        }
+    }
+
     /// Keeps the stage's file on screen while the stage's keys move it: the
     /// row scrolls into view if it is a row. A file inside a closed folder
     /// or hidden by the filter stays out of sight; nothing opens.
@@ -279,36 +318,14 @@ impl ExplorerPanel {
         self.state.update(cx, |state, cx| state.set_query("", cx));
     }
 
-    /// One row's height, from the last layout of `rows` rows.
-    fn row_height(&self, rows: usize) -> Option<gpui_kit::Pixels> {
-        row_height(&self.scroll, rows)
-    }
-
     /// How many whole rows fit in the tree's viewport, from the last layout.
-    /// The list records its viewport and content heights; the content is
-    /// one row height per row.
-    #[expect(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "`fit` is a whole, positive number of rows"
-    )]
     fn page(&self, cx: &App) -> usize {
         let rows = self
             .state
             .read(cx)
             .explorer()
             .map_or(0, |explorer| explorer.rows().len());
-        let viewport = self
-            .scroll
-            .0
-            .borrow()
-            .last_item_size
-            .map(|size| size.item.height);
-        let (Some(row_height), Some(viewport)) = (self.row_height(rows), viewport) else {
-            return FALLBACK_PAGE;
-        };
-        let fit = (viewport / row_height).floor();
-        if fit >= 1. { fit as usize } else { 1 }
+        page_rows(&self.scroll, rows).unwrap_or(FALLBACK_PAGE)
     }
 
     // Pointer
@@ -495,6 +512,29 @@ fn top_index(scroll: &UniformListScrollHandle, rows: usize) -> Option<usize> {
     let scrolled = -scroll.0.borrow().base_handle.offset().y;
     let top = (scrolled / height).floor().max(0.) as usize;
     Some(top.min(rows.saturating_sub(1)))
+}
+
+/// How many whole rows of a list of `rows` rows fit in its viewport, from
+/// its last layout: the list records its viewport and content heights, and
+/// the content is one row height per row.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "`fit` is a whole, positive number of rows"
+)]
+fn page_rows(scroll: &UniformListScrollHandle, rows: usize) -> Option<usize> {
+    let viewport = scroll.0.borrow().last_item_size?.item.height;
+    let fit = (viewport / row_height(scroll, rows)?).floor();
+    Some(if fit >= 1. { fit as usize } else { 1 })
+}
+
+/// `to - from` rows, as a multiplier of a row's height.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "a row count past 2^24 only blurs a fraction of a row"
+)]
+fn rows_between(from: usize, to: usize) -> f32 {
+    to as f32 - from as f32
 }
 
 /// One row's height in a list of `rows` rows, from its last layout.

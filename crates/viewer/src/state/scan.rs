@@ -199,7 +199,7 @@ impl AppState {
                 }
             }
         }
-        let top = self.top_node();
+        let before = self.before();
         let joined = self.join(key, &old, &tree, error.is_some());
         let (map, current) = match joined {
             Ok(joined) => joined,
@@ -226,10 +226,24 @@ impl AppState {
             None
         };
         if let (Some(saved), Some(explorer)) = (waiting, self.explorer.as_mut()) {
-            explorer.restore_folder(&SavedFolder { path, ..saved });
+            explorer.restore_folder(&SavedFolder {
+                path: path.clone(),
+                ..saved
+            });
         }
         self.selection_changed();
-        self.landed_keeping(top.and_then(|top| map.get(top)), cx);
+        let settling = self.restore.is_some() || self.restore_top.is_some();
+        match self.folder_node(&path) {
+            // Added while the app runs: its row is the focus row, on screen.
+            Some(top) if first && !settling => {
+                let row = self.explorer.as_ref().and_then(|e| e.row_of(top));
+                if let Some(row) = row {
+                    self.set_focus(top, row);
+                }
+                self.rows_replaced(cx);
+            }
+            _ => self.landed_keeping(before, &map, cx),
+        }
         let asked = self
             .folder_mut(key)
             .map_or_else(Vec::new, |folder| std::mem::take(&mut folder.asked_inside));
@@ -359,7 +373,7 @@ mod tests {
     use gpui_kit::{AppContext as _, TestAppContext};
 
     use super::os_message;
-    use crate::state::{AppState, Launch};
+    use crate::state::{AppState, Launch, StateEvent};
 
     #[gpui_kit::test]
     fn folders_keep_the_order_they_were_added_in_whichever_scan_lands_first(
@@ -370,6 +384,15 @@ mod tests {
         std::fs::write(b.path().join("b.txt"), "b").unwrap();
         let launch = Launch::Folders(vec![a.path().to_owned(), b.path().to_owned()]);
         let state = cx.new(|cx| AppState::new(launch, cx));
+        let tops: std::rc::Rc<std::cell::RefCell<Vec<usize>>> = std::rc::Rc::default();
+        let seen = std::rc::Rc::clone(&tops);
+        let _events = cx.update(|cx| {
+            cx.subscribe(&state, move |_, event: &StateEvent, _| {
+                if let StateEvent::TopRow(row) = event {
+                    seen.borrow_mut().push(*row);
+                }
+            })
+        });
         state.update(cx, |state, cx| {
             // The scans the launch started never land; these do, the
             // second folder's first.
@@ -391,7 +414,12 @@ mod tests {
                     .into_owned()
             };
             assert_eq!(names, [name(&a), name(&b)]);
+            // The launch settles at the top, on the first folder's row,
+            // though the second landed first and took focus then.
+            assert_eq!(state.focus(), tree.folders().next());
         });
+        cx.run_until_parked();
+        assert_eq!(tops.borrow().last(), Some(&0));
     }
 
     #[test]

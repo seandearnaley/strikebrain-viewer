@@ -231,7 +231,7 @@ impl AppState {
         if !self.is_folder_row(top) {
             return;
         }
-        let (row, current, top_row) = (self.focus_index(), self.current, self.top_node());
+        let (row, current, before) = (self.focus_index(), self.current, self.before());
         let Some(explorer) = self.explorer.as_mut() else {
             return;
         };
@@ -261,7 +261,7 @@ impl AppState {
             self.restore_top = None;
         }
         self.selection_changed();
-        self.landed_keeping(top_row.and_then(|row| map.get(row)), cx);
+        self.landed_keeping(before, &map, cx);
     }
 
     /// ⌘⌫ on the focus row: removes it if it is a top-level folder.
