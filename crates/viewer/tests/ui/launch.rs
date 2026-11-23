@@ -31,10 +31,8 @@ fn an_unreadable_folder_shows_the_os_error(cx: &mut TestAppContext) {
         window.render_frame(cx);
         let error = window.find("scan-error");
         assert!(error.visible());
-        assert_eq!(
-            error.label(),
-            Some("No such file or directory (os error 2)")
-        );
+        // The operating system's message alone, without Rust's error code.
+        assert_eq!(error.label(), Some("No such file or directory"));
         assert!(window.try_find("tree").is_none());
     })
     .unwrap();

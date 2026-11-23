@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use explorer::{Explorer, ScanError, ScanOptions, Tree, read_sizes, scan};
+use explorer::{Explorer, ScanError, ScanOptions, SortKey, Tree, read_sizes, scan};
 use gpui_kit::{AppContext as _, Context, PathPromptOptions, Result, TaskExt as _};
 
 use super::{AppState, ScanStatus};
@@ -80,7 +80,11 @@ impl AppState {
     }
 
     /// Shows or hides the files the ignore rules leave out, by rescanning.
+    /// Does nothing for a tree with no folder.
     pub fn toggle_show_ignored(&mut self, cx: &mut Context<Self>) {
+        if self.root.is_none() {
+            return;
+        }
         self.show_ignored = !self.show_ignored;
         self.refresh(cx);
         cx.notify();
@@ -175,11 +179,20 @@ impl AppState {
         }
     }
 
+    /// The sizes of the tree on screen are in. Under a Size sort they
+    /// reorder the rows, which keeps the focus row on screen as any command
+    /// that rebuilds the rows does.
     fn finish_sizes(&mut self, generation: u64, cx: &mut Context<Self>) {
-        if generation == self.scan_generation
-            && let Some(explorer) = &mut self.explorer
-        {
-            explorer.sizes_loaded();
+        if generation != self.scan_generation {
+            return;
+        }
+        let Some(explorer) = &mut self.explorer else {
+            return;
+        };
+        explorer.sizes_loaded();
+        if explorer.sort().key == SortKey::Size {
+            self.rows_replaced(cx);
+        } else {
             cx.notify();
         }
     }
@@ -228,7 +241,7 @@ impl AppState {
         self.current = None;
         self.focus = None;
         self.selected = 0;
-        self.status = ScanStatus::Failed(err.to_string().into());
+        self.status = ScanStatus::Failed(os_message(&err.to_string()).to_owned().into());
         cx.notify();
     }
 
@@ -246,5 +259,40 @@ impl AppState {
         self.current = None;
         self.selected = 0;
         self.status = ScanStatus::Idle;
+    }
+}
+
+/// The operating system's message alone: Rust's `io::Error` ends it with
+/// " (os error N)", which the interface does not show.
+fn os_message(text: &str) -> &str {
+    text.rsplit_once(" (os error ")
+        .filter(|(_, code)| {
+            code.strip_suffix(')')
+                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        })
+        .map_or(text, |(message, _)| message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::os_message;
+
+    #[test]
+    fn the_os_message_loses_only_the_error_code() {
+        assert_eq!(
+            os_message("No such file or directory (os error 2)"),
+            "No such file or directory"
+        );
+        assert_eq!(
+            os_message("Permission denied (os error 13)"),
+            "Permission denied"
+        );
+        // Anything else is shown as it is.
+        assert_eq!(
+            os_message("the folder holds too many entries"),
+            "the folder holds too many entries"
+        );
+        assert_eq!(os_message("odd (os error x)"), "odd (os error x)");
+        assert_eq!(os_message("odd (os error )"), "odd (os error )");
     }
 }

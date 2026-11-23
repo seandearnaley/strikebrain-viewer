@@ -42,6 +42,17 @@ impl AppState {
         cx.notify();
     }
 
+    /// Esc in the tree: no query and every kind, in one job.
+    pub fn clear_filter(&mut self, cx: &mut Context<Self>) {
+        if !self.filter_asked() {
+            return;
+        }
+        self.query.clear();
+        self.kind = KindFilter::All;
+        self.start_filter(cx);
+        cx.notify();
+    }
+
     /// Whether the filter asked for is not the inactive one.
     pub(super) fn filter_asked(&self) -> bool {
         !self.query.is_empty() || self.kind != KindFilter::All

@@ -41,7 +41,7 @@ impl SelectionBar {
 impl RenderOnce for SelectionBar {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.theme();
-        let text: SharedString = format!("{} selected", self.count).into();
+        let text: SharedString = format!("{} selected", grouped(self.count)).into();
         let on_clear = self.on_clear;
 
         div()
@@ -79,5 +79,32 @@ impl RenderOnce for SelectionBar {
                             .on_click(move |event, window, cx| on_clear(event, window, cx)),
                     ),
             )
+    }
+}
+
+/// `n` with its digits grouped in threes: 1,650,231.
+fn grouped(n: usize) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (ix, digit) in digits.chars().enumerate() {
+        if ix > 0 && (digits.len() - ix).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(digit);
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::grouped;
+
+    #[test]
+    fn digits_group_in_threes() {
+        assert_eq!(grouped(0), "0");
+        assert_eq!(grouped(999), "999");
+        assert_eq!(grouped(1_000), "1,000");
+        assert_eq!(grouped(65_536), "65,536");
+        assert_eq!(grouped(1_650_231), "1,650,231");
     }
 }

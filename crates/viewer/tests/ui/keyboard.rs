@@ -1,13 +1,13 @@
 //! Keys over the tree, and the focus ring.
 
-use gpui_kit::AppContext as _;
-use gpui_kit::TestAppContext;
-use gpui_kit::test::TestWindowExt as _;
-use viewer::Launch;
+use explorer::KindFilter;
+use gpui_kit::test::{TestQueryExt as _, TestWindowExt as _};
+use gpui_kit::{AppContext as _, ElementId, TestAppContext};
+use viewer::{AppState, Launch};
 
 use crate::{
     PROJECT, click, filter_value, fixture_folder, focus, folder, is_focused, node, open_app, press,
-    row, rows_now, state, tree, type_query,
+    read, row, rows_now, state, tree, type_query,
 };
 
 #[gpui_kit::test]
@@ -205,19 +205,30 @@ fn tab_moves_from_the_filter_to_the_tree_to_the_stage_and_round(cx: &mut TestApp
 }
 
 #[gpui_kit::test]
-fn escape_in_the_tree_clears_the_filter(cx: &mut TestAppContext) {
-    let (handle, _) = open_app(cx, tree(PROJECT));
-    type_query(cx, handle, "main");
+fn escape_in_the_tree_clears_the_query_and_the_kind(cx: &mut TestAppContext) {
+    let (handle, view) = open_app(cx, tree(PROJECT));
+    type_query(cx, handle, "a.md");
+    // Text files only.
+    cx.update_window(handle, |_, window, cx| {
+        window.within("kind").click(ElementId::from(2usize), cx);
+    })
+    .unwrap();
     press(cx, handle, "tab");
     assert!(is_focused(cx, handle, "tree"));
+    assert_eq!(rows_now(cx, handle), ["docs", "a.md"]);
 
     press(cx, handle, "escape");
 
     assert_eq!(filter_value(cx, handle), "");
+    assert_eq!(read(cx, &view, AppState::kind), KindFilter::All);
     assert_eq!(
         rows_now(cx, handle),
         ["docs", "src", "file2.txt", "file10.txt", "README.md"]
     );
+    cx.update_window(handle, |_, window, _| {
+        assert_eq!(window.find_by_label("All").selected(), Some(true));
+    })
+    .unwrap();
     assert!(is_focused(cx, handle, "tree"));
 }
 

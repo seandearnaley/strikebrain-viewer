@@ -7,7 +7,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use explorer::Explorer;
+use explorer::{Explorer, SortKey};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
     AnyWindowHandle, AppContext as _, Entity, Pixels, Point, Subscription, TestAppContext,
@@ -342,4 +342,55 @@ fn a_fast_scan_never_shows_the_progress_bar(cx: &mut TestAppContext) {
 
     assert!(!slow_seen.get());
     assert_eq!(rows_now(cx, handle), ["a.txt"]);
+}
+
+/// A Size sort chosen before the sizes are read: when they land the rows
+/// reorder, and the focus row stays on screen at its new place.
+#[gpui_kit::test]
+fn sizes_landing_under_a_size_sort_keep_the_focus_row_on_screen(cx: &mut TestAppContext) {
+    // f00 is the largest: first by name, last by size.
+    let mut owned = vec![("f00.txt".to_owned(), "x".repeat(100))];
+    owned.extend((1..60).map(|i| (format!("f{i:02}.txt"), "x".repeat(i))));
+    let files: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(p, t)| (p.as_str(), t.as_str()))
+        .collect();
+    let dir = folder(&files);
+    let (handle, view) = open_app(cx, Launch::Empty);
+    let state = state(cx, &view);
+    let armed = Rc::new(Cell::new(true));
+    let fired = Rc::clone(&armed);
+    let _sort = cx.update(|cx| {
+        cx.observe(&state, move |state, cx| {
+            let landed = state
+                .read(cx)
+                .explorer()
+                .is_some_and(|explorer| !explorer.tree().has_sizes());
+            if fired.get() && landed {
+                fired.set(false);
+                state.update(cx, |state, cx| state.sort_by(SortKey::Size, cx));
+            }
+        })
+    });
+
+    state.update(cx, |state, cx| state.open_folder(dir.path().to_owned(), cx));
+    cx.run_until_parked();
+
+    assert!(!armed.get(), "the tree landed before its sizes");
+    let f00 = node(cx, &view, "f00.txt");
+    assert_eq!(crate::focus(cx, &view), Some(f00));
+    assert_eq!(
+        read(cx, &view, |state| state
+            .explorer()
+            .unwrap()
+            .rows()
+            .last()
+            .copied()),
+        Some(f00)
+    );
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find(row(f00)).is_some_and(|row| row.visible()));
+    })
+    .unwrap();
 }

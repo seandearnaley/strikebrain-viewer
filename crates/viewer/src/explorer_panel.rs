@@ -214,9 +214,11 @@ impl ExplorerPanel {
         self.after_key(row, cx);
     }
 
-    /// Esc in the tree: clears the query.
+    /// Esc in the tree: clears the filter, the query and the kind.
     fn clear_filter(&mut self, _: &ClearFilter, window: &mut Window, cx: &mut Context<Self>) {
-        self.clear_query(window, cx);
+        self.state.update(cx, AppState::clear_filter);
+        self.filter
+            .update(cx, |input, cx| input.set_value("", window, cx));
         let row = self.state.read(cx).focus_index();
         self.after_key(row, cx);
     }

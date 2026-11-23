@@ -5,7 +5,7 @@ use gpui_kit::{AppContext as _, TestAppContext};
 use viewer::{AppState, Launch};
 
 use crate::{
-    click, current, folder, node, open_app, press, read, row, rows_now, type_query, write,
+    click, current, folder, node, open_app, press, read, row, rows_now, tree, type_query, write,
 };
 
 #[gpui_kit::test]
@@ -99,4 +99,19 @@ fn show_ignored_lists_ignored_files_only_while_on(cx: &mut TestAppContext) {
     click(cx, handle, "show-ignored");
     assert_eq!(rows_now(cx, handle), [".gitignore", "keep.txt"]);
     assert_eq!(read(cx, &view, AppState::selected_count), 1);
+}
+
+#[gpui_kit::test]
+fn show_ignored_does_nothing_without_a_folder(cx: &mut TestAppContext) {
+    // A tree built in memory has no folder to rescan.
+    let (handle, view) = open_app(cx, tree(&["a.txt"]));
+
+    click(cx, handle, "show-ignored");
+
+    assert!(!read(cx, &view, AppState::shows_ignored));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(window.find("show-ignored").checked(), Some(false));
+    })
+    .unwrap();
 }

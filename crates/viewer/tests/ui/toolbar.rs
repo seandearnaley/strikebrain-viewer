@@ -150,3 +150,18 @@ fn the_selection_bar_never_covers_a_row_and_never_moves_one(cx: &mut TestAppCont
     })
     .unwrap();
 }
+
+#[gpui_kit::test]
+fn the_selection_bar_groups_the_digits_of_its_count(cx: &mut TestAppContext) {
+    let names: Vec<String> = (0..1_234).map(|i| format!("f{i:04}")).collect();
+    let paths: Vec<&str> = names.iter().map(String::as_str).collect();
+    let (handle, _) = open_app(cx, tree(&paths));
+
+    click(cx, handle, "select-all");
+
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(window.find("selection-bar").label(), Some("1,234 selected"));
+    })
+    .unwrap();
+}
