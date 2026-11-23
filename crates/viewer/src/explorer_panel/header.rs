@@ -2,6 +2,10 @@
 //! stays put. Name always; Type and Size as the tree widens, in the same
 //! cells the rows use. A click sorts by a column; a second click flips the
 //! direction. An arrow marks the sorted column and its direction.
+//!
+//! For assistive technology the header is what a native table header is: a
+//! group of sort buttons, each labelled with its column and, on the sorted
+//! one, the direction.
 
 use std::rc::Rc;
 
@@ -16,16 +20,15 @@ use gpui_kit::{
 use super::ExplorerPanel;
 use crate::columns::{self, Columns};
 
-type SortHandler = Rc<dyn Fn(SortKey, &mut Window, &mut App)>;
+type SortHandler = Rc<dyn Fn(&SortKey, &mut Window, &mut App)>;
 
 impl ExplorerPanel {
-    pub(super) fn render_header(&self, sort: Sort, _: &Context<Self>) -> impl IntoElement + use<> {
-        let state = self.state.clone();
+    pub(super) fn render_header(sort: Sort, cx: &Context<Self>) -> impl IntoElement + use<> {
         ColumnHeader {
             sort,
-            on_sort: Rc::new(move |key, _, cx| {
-                state.update(cx, |state, cx| state.sort_by(key, cx));
-            }),
+            on_sort: Rc::new(cx.listener(|this, key: &SortKey, _, cx| {
+                this.state.update(cx, |state, cx| state.sort_by(*key, cx));
+            })),
         }
     }
 }
@@ -42,7 +45,7 @@ impl RenderOnce for ColumnHeader {
         div()
             .id("header")
             .test_support()
-            .role(Role::Row)
+            .role(Role::Group)
             .flex_shrink_0()
             .h_7()
             .w_full()
@@ -63,9 +66,9 @@ impl ColumnHeader {
             SortKey::Name,
             cx,
         );
-        let kind = columns.kind.then(|| {
+        let extension = columns.extension.then(|| {
             self.cell(
-                columns::kind_cell(),
+                columns::extension_cell(),
                 "header-type",
                 "Type",
                 SortKey::Type,
@@ -81,7 +84,10 @@ impl ColumnHeader {
                 cx,
             )
         });
-        columns::line().child(name).children(kind).children(size)
+        columns::line()
+            .child(name)
+            .children(extension)
+            .children(size)
     }
 
     /// One clickable header cell on the column's own cell. The arrow sits
@@ -99,29 +105,31 @@ impl ColumnHeader {
         let theme = cx.theme();
         let (foreground, muted) = (theme.foreground, theme.muted_foreground);
         let active = self.sort.key == key;
-        let arrow = active.then(|| {
-            let (id, icon) = match self.sort.direction {
-                Direction::Ascending => ("sort-ascending", IconName::ArrowUp),
-                Direction::Descending => ("sort-descending", IconName::ArrowDown),
+        let (arrow, accessible_label): (_, SharedString) = if active {
+            let (id, icon, said) = match self.sort.direction {
+                Direction::Ascending => ("sort-ascending", IconName::ArrowUp, "ascending"),
+                Direction::Descending => ("sort-descending", IconName::ArrowDown, "descending"),
             };
-            div()
+            let arrow = div()
                 .id(id)
                 .test_support()
                 .flex_shrink_0()
-                .child(Icon::new(icon).size_3())
-        });
+                .child(Icon::new(icon).size_3());
+            (Some(arrow), format!("{label}, sorted {said}").into())
+        } else {
+            (None, label.into())
+        };
         let (before, after) = if key == SortKey::Size {
             (arrow, None)
         } else {
             (None, arrow)
         };
         let on_sort = Rc::clone(&self.on_sort);
-        let label: SharedString = label.into();
 
         cell.id(id)
             .test_support()
-            .role(Role::ColumnHeader)
-            .aria_label(label.clone())
+            .role(Role::Button)
+            .aria_label(accessible_label)
             .h_full()
             .flex()
             .items_center()
@@ -130,7 +138,7 @@ impl ColumnHeader {
             .font_weight(FontWeight::MEDIUM)
             .text_color(if active { foreground } else { muted })
             .hover(|style| style.text_color(foreground))
-            .on_click(move |_, window, cx| on_sort(key, window, cx))
+            .on_click(move |_, window, cx| on_sort(&key, window, cx))
             .children(before)
             .child(div().min_w_0().truncate().child(label))
             .children(after)

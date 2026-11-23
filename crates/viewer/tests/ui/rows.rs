@@ -1,7 +1,7 @@
 //! Rows: order, indent, semantics, and opening folders.
 
 use gpui_kit::AppContext as _;
-use gpui_kit::test::TestWindowExt as _;
+use gpui_kit::test::{TestQueryExt as _, TestWindowExt as _};
 use gpui_kit::{Role, TestAppContext, px};
 use viewer::{AppState, Launch};
 
@@ -89,6 +89,11 @@ fn rows_carry_their_tree_semantics(cx: &mut TestAppContext) {
         assert_eq!(folder.label(), Some("src"));
         assert_eq!(folder.expanded(), Some(true));
         assert_eq!(folder.checked(), Some(false));
+        // The row says its name and checked state once: the checkbox inside
+        // it is drawn, not announced again.
+        let check = window.within(row(src)).find("check");
+        assert_eq!((check.role(), check.label()), (None, None));
+        assert_eq!(window.find_all_by_label("src").len(), 1);
 
         let file = window.find(row(lib));
         assert_eq!(file.expanded(), None);

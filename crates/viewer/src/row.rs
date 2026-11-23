@@ -11,7 +11,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use explorer::{Check, Kind, NodeId, RowView, format_size};
-use gpui_kit::base::{Checkbox, CheckboxIndicator, CheckboxState};
+use gpui_kit::base::{Checkbox, CheckboxIndicator, CheckboxState, RoleOverride};
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, h_flex};
 use gpui_kit::{
     AccessibleAction, App, FontFeatures, IntoElement, MouseButton, ParentElement as _, Rems,
@@ -223,9 +223,9 @@ impl TreeRow {
                             .child(self.name),
                     ),
             )
-            .when(columns.kind, |line| {
+            .when(columns.extension, |line| {
                 line.child(
-                    columns::kind_cell()
+                    columns::extension_cell()
                         .id("type")
                         .test_support()
                         .text_xs()
@@ -299,10 +299,12 @@ impl TreeRow {
             CheckboxState::Unchecked => None,
         };
         let on_event = Rc::clone(&self.on_event);
+        // The row carries the name and the checked state; the checkbox is
+        // drawn, not announced a second time.
         Checkbox::new("check")
+            .role(RoleOverride::Presentational)
             .state(state)
             .tab_stop(false)
-            .accessibility_label(self.name.clone())
             .on_change(move |_, _, window, cx| {
                 cx.stop_propagation();
                 on_event(&RowAction::ToggleCheck, window, cx);

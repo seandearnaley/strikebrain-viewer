@@ -20,7 +20,7 @@ const TYPE_WIDTH: Rems = Rems(4.5);
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Columns {
     /// The Type column: the extension, muted.
-    pub(crate) kind: bool,
+    pub(crate) extension: bool,
     /// The Size column.
     pub(crate) size: bool,
 }
@@ -29,7 +29,7 @@ impl Columns {
     /// The columns for a tree `width` wide, at the window's `rem` size.
     pub(crate) fn for_width(width: Pixels, rem: Pixels) -> Self {
         Self {
-            kind: width >= TYPE_FROM.to_pixels(rem),
+            extension: width >= TYPE_FROM.to_pixels(rem),
             size: width >= SIZE_FROM.to_pixels(rem),
         }
     }
@@ -40,8 +40,9 @@ pub(crate) fn line() -> Div {
     h_flex().size_full().pl_2()
 }
 
-/// The Type cell: 72 px, its text 8 px in from each side.
-pub(crate) fn kind_cell() -> Div {
+/// The Type cell, which holds the extension: 72 px, its text 8 px in from
+/// each side.
+pub(crate) fn extension_cell() -> Div {
     div().flex_shrink_0().w(TYPE_WIDTH).px_2().truncate()
 }
 

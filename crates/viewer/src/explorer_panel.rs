@@ -449,7 +449,7 @@ impl Render for ExplorerPanel {
                 self.render_without_tree(Some(Self::render_error(message, cx))),
             ),
             (_, Some(explorer)) => (
-                Some(self.render_header(explorer.sort(), cx)),
+                Some(Self::render_header(explorer.sort(), cx)),
                 self.render_tree(explorer, state.selected_count(), cx),
             ),
             (_, None) => (None, self.render_without_tree(None)),

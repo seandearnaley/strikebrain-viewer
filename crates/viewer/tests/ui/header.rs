@@ -40,13 +40,30 @@ fn size_and_type_columns_show_from_their_widths(cx: &mut TestAppContext) {
     // 420 px: all three.
     drag_divider(cx, handle, 420.);
     assert_eq!(columns(cx), ((true, true), (6, 6)));
+    // Each label says the column and, on the sorted one, the direction.
     assert_eq!(
         cx.update_window(handle, |_, window, _| {
-            window.find("header-name").label().map(str::to_owned)
+            ["header-name", "header-type", "header-size"]
+                .map(|id| window.find(id).label().map(str::to_owned))
         })
-        .unwrap()
-        .as_deref(),
-        Some("Name")
+        .unwrap(),
+        [
+            Some("Name, sorted ascending".to_owned()),
+            Some("Type".to_owned()),
+            Some("Size".to_owned())
+        ]
+    );
+    click(cx, handle, "header-size");
+    click(cx, handle, "header-size");
+    assert_eq!(
+        cx.update_window(handle, |_, window, _| {
+            ["header-name", "header-size"].map(|id| window.find(id).label().map(str::to_owned))
+        })
+        .unwrap(),
+        [
+            Some("Name".to_owned()),
+            Some("Size, sorted descending".to_owned())
+        ]
     );
 }
 
@@ -60,7 +77,12 @@ fn header_cells_line_up_with_the_row_cells(cx: &mut TestAppContext) {
         window.render_frame(cx);
         let header = window.find("header").bounds();
         assert_eq!(header.size.height, px(28.));
-        assert_eq!(window.find("header").role(), Some(Role::Row));
+        // Outside a table, the header is a group of sort buttons, as a
+        // native table header is.
+        assert_eq!(window.find("header").role(), Some(Role::Group));
+        for id in ["header-name", "header-type", "header-size"] {
+            assert_eq!(window.find(id).role(), Some(Role::Button), "{id}");
+        }
         for id in [alpha, d] {
             let (kind, size) = (
                 window.within(row(id)).find("type").bounds(),
