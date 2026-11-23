@@ -4,6 +4,7 @@
 
 mod bits;
 mod content;
+mod filter;
 mod scan;
 mod selection;
 mod tree;
@@ -12,6 +13,7 @@ pub use content::{
     BINARY_EXTENSIONS, HEAD_LEN, IMAGE_EXTENSIONS, Viewer, format_size, is_binary_extension,
     is_image_extension, viewer_for,
 };
+pub use filter::{KindFilter, Query, Visibility, filter};
 pub use fixedbitset::FixedBitSet;
 pub use scan::{ScanError, ScanOptions, read_sizes, scan};
 pub use selection::{Check, Selection};

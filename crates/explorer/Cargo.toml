@@ -9,6 +9,7 @@ publish.workspace = true
 fixedbitset = "0.5.9"
 icu_collator = "2.4.0"
 ignore = "0.4.35"
+memchr = "2.8.3"
 
 [dev-dependencies]
 proptest = "1.12.0"

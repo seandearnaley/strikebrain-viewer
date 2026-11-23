@@ -27,7 +27,7 @@ pub(crate) mod tests;
 
 pub(crate) use build::{NO_PARENT, RawTree};
 use names::NameArena;
-pub(crate) use names::extension_of;
+pub(crate) use names::{extension_of, push_lowercase};
 
 /// What a node is on disk.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -205,6 +205,12 @@ impl Tree {
     #[must_use]
     pub fn haystack(&self) -> &str {
         self.haystack.as_str()
+    }
+
+    /// Where each haystack entry ends: entry `i` is `ends[i - 1]..ends[i]`
+    /// (or `0..ends[0]`), its `'\0'` included.
+    pub(crate) fn haystack_ends(&self) -> &[u32] {
+        self.haystack.ends()
     }
 
     /// The node whose haystack entry contains byte `offset`.

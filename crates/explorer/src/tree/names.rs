@@ -56,6 +56,11 @@ impl NameArena {
         start..self.ends[i] as usize
     }
 
+    /// Each entry's end offset in [`Self::as_str`].
+    pub(crate) fn ends(&self) -> &[u32] {
+        &self.ends
+    }
+
     /// The index of the entry whose span contains byte `offset`.
     pub(crate) fn entry_at(&self, offset: usize) -> usize {
         self.ends.partition_point(|&end| end as usize <= offset)

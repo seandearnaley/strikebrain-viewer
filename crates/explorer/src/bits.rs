@@ -55,12 +55,37 @@ pub(crate) fn or_and(
     }
 }
 
+/// The highest set bit below `before`, if any.
+///
+/// # Panics
+///
+/// If `before` is past the end of the set.
+pub(crate) fn prev_one(set: &FixedBitSet, before: usize) -> Option<usize> {
+    assert!(before <= set.len(), "{before} is past the set");
+    let last = before.checked_sub(1)?;
+    let blocks = set.as_slice();
+    let mut w = last / WORD;
+    let keep = last % WORD;
+    let mut word = blocks[w]
+        & match keep {
+            k if k == WORD - 1 => usize::MAX,
+            k => (1 << (k + 1)) - 1,
+        };
+    loop {
+        if word != 0 {
+            return Some(w * WORD + (WORD - 1 - word.leading_zeros() as usize));
+        }
+        w = w.checked_sub(1)?;
+        word = blocks[w];
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use fixedbitset::FixedBitSet;
     use proptest::prelude::*;
 
-    use super::{count_and, or_and};
+    use super::{count_and, or_and, prev_one};
 
     fn set(len: usize, bits: &[bool]) -> FixedBitSet {
         let mut set = FixedBitSet::with_capacity(len);
@@ -82,7 +107,32 @@ mod tests {
         assert_eq!(count_and(&a, &b, 200..200), 0);
     }
 
+    #[test]
+    fn prev_one_finds_the_highest_bit_below() {
+        let mut set = FixedBitSet::with_capacity(200);
+        for bit in [0, 63, 64, 130] {
+            set.insert(bit);
+        }
+        assert_eq!(prev_one(&set, 200), Some(130));
+        assert_eq!(prev_one(&set, 130), Some(64));
+        assert_eq!(prev_one(&set, 64), Some(63));
+        assert_eq!(prev_one(&set, 63), Some(0));
+        assert_eq!(prev_one(&set, 0), None);
+        assert_eq!(prev_one(&FixedBitSet::with_capacity(70), 70), None);
+    }
+
     proptest! {
+        #[test]
+        fn prev_one_matches_a_bit_loop(
+            len in 0_usize..300,
+            bits in prop::collection::vec(any::<bool>(), 300),
+            before in 0_usize..300,
+        ) {
+            let set = set(len, &bits);
+            let before = before.min(len);
+            prop_assert_eq!(prev_one(&set, before), (0..before).rev().find(|&i| set.contains(i)));
+        }
+
         #[test]
         fn count_and_matches_a_bit_loop(
             len in 0_usize..300,
