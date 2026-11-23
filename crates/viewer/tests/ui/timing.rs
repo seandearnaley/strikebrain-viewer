@@ -4,7 +4,8 @@
 //! Over the spec's 1.65 M-entry reference corpus as one flat list: how far
 //! small scroll deltas move the list at the top, the middle and the end,
 //! and how long a scrolling frame takes there. On the stage: the code view
-//! and the Markdown view on large files, and an 8000 x 6000 photo.
+//! and the Markdown view on large files, an 8000 x 6000 photo, and the
+//! gallery over a hundred thousand checked files.
 //! Ignored by default; the numbers only mean something in release mode,
 //! one at a time, since several report the process's memory:
 //!
@@ -145,17 +146,18 @@ fn scroll_by(cx: &mut TestAppContext, handle: AnyWindowHandle, dy: f32) {
     .expect("scroll the tree");
 }
 
-/// Draws `frames` frames, each after one scroll event of `dy`, as the
-/// platform delivers them: the event, then a draw that rebuilds only what
-/// it made dirty. Returns each frame's time.
+/// Draws `frames` frames, each after one scroll event of `dy` over the
+/// element `over`, as the platform delivers them: the event, then a draw
+/// that rebuilds only what it made dirty. Returns each frame's time.
 fn time_frames(
     cx: &mut TestAppContext,
     handle: AnyWindowHandle,
+    over: &'static str,
     dy: f32,
     frames: usize,
 ) -> Vec<Duration> {
     cx.update_window(handle, |_, window, cx| {
-        let position = window.find("tree").bounds().center();
+        let position = window.find(over).bounds().center();
         (0..frames)
             .map(|_| {
                 let start = Instant::now();
@@ -173,7 +175,7 @@ fn time_frames(
             })
             .collect()
     })
-    .expect("scroll the tree")
+    .expect("scroll")
 }
 
 fn summary(mut times: Vec<Duration>) -> String {
@@ -277,7 +279,10 @@ fn timing_scrolling_the_reference_corpus(cx: &mut TestAppContext) {
         // Two seconds at 60 Hz of a 12 px-per-frame scroll toward the end
         // (or the top, from the end).
         let dy = if place == Place::End { 12. } else { -12. };
-        eprintln!("  frames: {}", summary(time_frames(cx, handle, dy, 120)));
+        eprintln!(
+            "  frames: {}",
+            summary(time_frames(cx, handle, "tree", dy, 120))
+        );
     }
 }
 
@@ -600,4 +605,89 @@ fn timing_a_large_photo(cx: &mut TestAppContext) {
             after.unwrap_or(f64::NAN),
         );
     }
+}
+
+#[gpui_kit::test]
+#[ignore = "timing probe; run in release with --ignored --nocapture"]
+#[expect(clippy::print_stderr, reason = "the probe reports its timings")]
+fn timing_the_gallery_over_a_hundred_thousand_checked_files(cx: &mut TestAppContext) {
+    // A tree built in memory: its tiles are their kinds' icons, so this
+    // times the grid, not the reading of files.
+    let names: Vec<String> = (0..100_000).map(|i| format!("f{i:06}.rs")).collect();
+    let paths: Vec<&str> = names.iter().map(String::as_str).collect();
+    let (handle, view) = open_app(
+        cx,
+        Launch::Tree(Arc::new(
+            Tree::from_paths(&paths).expect("the names are distinct"),
+        )),
+    );
+    // Select all, as the platform delivers a click and the frame after:
+    // the checks, the gallery's first frame and the tree's redraw.
+    let took = timed(cx, handle, |cx| click(cx, handle, "select-all"));
+    let probe = cx.update(|cx| view.read(cx).gallery_probe(cx));
+    eprintln!(
+        "select all, the gallery on screen: {took:.2?} ({} columns, {} rows drawn)",
+        probe.columns(),
+        probe.rows_drawn()
+    );
+    // From a file view back to the gallery: the gallery alone.
+    press(cx, handle, "tab");
+    press(cx, handle, "enter");
+    let took = timed(cx, handle, |cx| press(cx, handle, "escape"));
+    eprintln!("from the file view back to the gallery: {took:.2?}");
+
+    for (place, key) in [("top", "home"), ("end", "end")] {
+        press(cx, handle, key);
+        for dy in [-40., 40.] {
+            let frames = time_frames(cx, handle, "gallery", dy, 120);
+            eprintln!("scrolling at the {place} by {dy} px: {}", summary(frames));
+        }
+    }
+    press(cx, handle, "home");
+    let frames = time_frames(cx, handle, "gallery", -400., 120);
+    eprintln!("flinging down 400 px a frame: {}", summary(frames));
+}
+
+#[gpui_kit::test]
+#[ignore = "probe; run in release with --ignored --nocapture"]
+#[expect(clippy::print_stderr, reason = "the probe reports its measurements")]
+fn timing_the_gallery_over_large_photos(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().expect("a temporary folder");
+    // Forty 24-megapixel photos, one picture written forty times: each is
+    // read and decoded on its own all the same.
+    let photo = noisy_jpeg(6000, 4000);
+    for ix in 0..40 {
+        crate::write(dir.path(), &format!("p{ix:02}.jpg"), &photo);
+    }
+    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
+    let before = resident_mb();
+    // The test executor reads the tiles one after another on this thread,
+    // so this is their whole cost, not the time to the screen.
+    let took = timed(cx, handle, |cx| click(cx, handle, "select-all"));
+    let probe = cx.update(|cx| view.read(cx).gallery_probe(cx));
+    eprintln!(
+        "select all over 40 photos of 6000 x 4000, {:.1} MB each: {took:.2?} to read {} tiles \
+         ({:.0} ms a tile); {:.1} MB of thumbnails, the largest {:?} in a box of {:?}; \
+         RSS {:.0} -> {:.0} MB",
+        megabytes(photo.len() as u64),
+        probe.thumbnails(),
+        took.as_secs_f64() * 1000.
+            / f64::from(u32::try_from(probe.thumbnails().max(1)).unwrap_or(1)),
+        megabytes(probe.bytes() as u64),
+        probe.largest(),
+        probe.fit(),
+        before.unwrap_or(f64::NAN),
+        resident_mb().unwrap_or(f64::NAN),
+    );
+    // The rest, down to the end: memory stays where the first screen left
+    // it, the decoding buffers reused.
+    press(cx, handle, "tab");
+    let took = timed(cx, handle, |cx| press(cx, handle, "end"));
+    let probe = cx.update(|cx| view.read(cx).gallery_probe(cx));
+    eprintln!(
+        "to the end: {took:.2?}, {} tiles held, {:.1} MB; RSS {:.0} MB",
+        probe.thumbnails(),
+        megabytes(probe.bytes() as u64),
+        resident_mb().unwrap_or(f64::NAN),
+    );
 }

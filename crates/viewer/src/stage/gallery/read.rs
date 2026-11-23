@@ -13,7 +13,7 @@
 //! GPUI does, drawn by GPUI's renderer at its own size, or at the box's
 //! when that is smaller.
 
-use std::fs;
+use std::fs::{self, File};
 use std::io::{self, Cursor, Read as _};
 use std::path::Path;
 use std::sync::Arc;
@@ -105,9 +105,7 @@ fn try_read(
         Viewer::Unsupported => unsupported,
         Viewer::Image if stamp.len() > image_limit(name, &bytes) => unsupported,
         Viewer::Image => {
-            // One byte past the limit tells a file that grew since.
-            let rest = IMAGE_LIMIT + 1 - bytes.len() as u64;
-            file.take(rest).read_to_end(&mut bytes)?;
+            read_rest(file, &mut bytes, stamp.len())?;
             match picture(&bytes, fit, svg) {
                 Some((image, whole)) if bytes.len() as u64 <= IMAGE_LIMIT => Read::Image {
                     stamp,
@@ -123,6 +121,19 @@ fn try_read(
             head: head(&bytes, stamp.len() <= HEAD_LEN as u64),
         },
     })
+}
+
+/// Reads the rest of a picture of `len` bytes after `bytes`, its head,
+/// into the same buffer, sized for the whole file at once: a buffer grown
+/// by doubling leaves the allocator holding every size it passed through,
+/// some 30 MB a photo on macOS. One byte past the limit tells a file that
+/// grew since.
+fn read_rest(file: File, bytes: &mut Vec<u8>, len: u64) -> io::Result<()> {
+    let len = usize::try_from(len.min(IMAGE_LIMIT)).unwrap_or(usize::MAX);
+    bytes.reserve_exact(len.saturating_sub(bytes.len()).saturating_add(1));
+    let rest = (IMAGE_LIMIT + 1).saturating_sub(bytes.len() as u64);
+    file.take(rest).read_to_end(bytes)?;
+    Ok(())
 }
 
 /// The top of a text: its first lines, each cut short, tabs as four
@@ -225,6 +236,8 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use gpui_kit::{SvgRenderer, TestAppContext};
+
+    use explorer::HEAD_LEN;
 
     use super::{HEAD_COLUMNS, HEAD_LINES, Read, head, read};
     use crate::stage::load::{IMAGE_LIMIT, TEXT_LIMIT, stamp};
@@ -364,6 +377,23 @@ mod tests {
             read(&path, "main.rs", Some(held), (64, 64), &svg(cx)),
             Read::Unchanged
         ));
+    }
+
+    #[test]
+    fn a_picture_is_read_into_one_buffer_of_its_size() {
+        use std::io::Read as _;
+        let dir = tempfile::tempdir().unwrap();
+        let len = 300_000;
+        let path = write(dir.path(), "large.png", &vec![7; len]);
+        let mut file = std::fs::File::open(&path).unwrap();
+        let mut bytes = Vec::with_capacity(HEAD_LEN);
+        file.by_ref()
+            .take(HEAD_LEN as u64)
+            .read_to_end(&mut bytes)
+            .unwrap();
+        super::read_rest(file, &mut bytes, len as u64).unwrap();
+        assert_eq!(bytes.len(), len);
+        assert!(bytes.capacity() <= len + 1, "{}", bytes.capacity());
     }
 
     #[test]
