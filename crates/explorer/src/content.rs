@@ -29,13 +29,15 @@ pub const IMAGE_EXTENSIONS: [&str; 10] = [
 /// databases and opaque data. The Text kind leaves them out, and the stage
 /// never shows them as text. Lowercase, without the dot. Brainstrike's list,
 /// without its search-index and lock-file entries (`Cargo.lock` is text).
+/// Extensions that are often text, such as `obj` (Wavefront meshes) and
+/// `dat`, are left to the NUL test in [`viewer_for`].
 pub const BINARY_EXTENSIONS: &[&str] = &[
-    "7z", "a", "aac", "aiff", "arw", "avi", "avif", "bin", "br", "bz2", "class", "cr2", "dat",
-    "db", "dll", "dmg", "dng", "doc", "docx", "dylib", "eot", "exe", "flac", "flv", "gz", "heic",
-    "heif", "iso", "jar", "lz4", "lzma", "m4a", "m4v", "mkv", "mov", "mp3", "mp4", "nef", "o",
-    "obj", "odp", "ods", "odt", "ogg", "otf", "pdf", "ppt", "pptx", "psd", "pyc", "rar", "raw",
-    "so", "sqlite", "sqlite3", "tar", "tgz", "ttf", "war", "wasm", "wav", "webm", "wma", "wmv",
-    "woff", "woff2", "xcf", "xls", "xlsx", "xz", "zip", "zst",
+    "7z", "a", "aac", "aiff", "arw", "avi", "avif", "bin", "br", "bz2", "class", "cr2", "db",
+    "dll", "dmg", "dng", "doc", "docx", "dylib", "eot", "exe", "flac", "flv", "gz", "heic", "heif",
+    "iso", "jar", "lz4", "lzma", "m4a", "m4v", "mkv", "mov", "mp3", "mp4", "nef", "o", "odp",
+    "ods", "odt", "ogg", "otf", "pdf", "ppt", "pptx", "psd", "pyc", "rar", "raw", "so", "sqlite",
+    "sqlite3", "tar", "tgz", "ttf", "war", "wasm", "wav", "webm", "wma", "wmv", "woff", "woff2",
+    "xcf", "xls", "xlsx", "xz", "zip", "zst",
 ];
 
 /// How many bytes of a file's start [`viewer_for`] expects.
@@ -115,6 +117,7 @@ mod tests {
         BINARY_EXTENSIONS, IMAGE_EXTENSIONS, Viewer, format_size, is_binary_extension,
         is_image_extension, viewer_for,
     };
+    use crate::KindFilter;
 
     const TEXT: &[u8] = b"fn main() {}\n";
     const BINARY: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR";
@@ -141,6 +144,16 @@ mod tests {
         assert_eq!(viewer_for("paper.pdf", b"%PDF-1.7"), Viewer::Unsupported);
         assert_eq!(viewer_for("archive.tar.GZ", TEXT), Viewer::Unsupported);
         assert_eq!(viewer_for("song.mp3", b""), Viewer::Unsupported);
+    }
+
+    #[test]
+    fn obj_and_dat_are_text_unless_their_bytes_say_otherwise() {
+        assert!(!is_binary_extension("obj"));
+        assert!(!is_binary_extension("DAT"));
+        assert!(KindFilter::Text.passes("obj"));
+        assert_eq!(viewer_for("model.obj", b"v 0 0 0\n"), Viewer::Code);
+        assert_eq!(viewer_for("table.dat", b"1 2 3\n"), Viewer::Code);
+        assert_eq!(viewer_for("model.obj", b"\x01\0"), Viewer::Unsupported);
     }
 
     #[test]
