@@ -3,8 +3,12 @@
 use gpui_kit::AppContext as _;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{Role, TestAppContext, px};
+use viewer::{AppState, Launch};
 
-use crate::{PROJECT, focus, labels, node, open_app, row, stage, tree};
+use crate::{
+    Locked, PROJECT, current, focus, folder, labels, node, open_app, press, read, row, rows_now,
+    stage, tree,
+};
 
 #[gpui_kit::test]
 fn rows_render_in_order_with_their_indent(cx: &mut TestAppContext) {
@@ -116,4 +120,60 @@ fn clicking_a_folder_row_does_not_open_it_the_chevron_does(cx: &mut TestAppConte
         assert_eq!(window.find(row(src)).expanded(), Some(false));
     })
     .unwrap();
+}
+
+#[gpui_kit::test]
+fn an_unreadable_folder_shows_a_warning_and_never_opens(cx: &mut TestAppContext) {
+    let dir = folder(&[("locked/secret.txt", "x"), ("open.txt", "x")]);
+    let Some(_lock) = Locked::new(&dir.path().join("locked")) else {
+        return;
+    };
+    let (handle, view) = open_app(cx, Launch::Folder(dir.path().to_owned()));
+    let locked = node(cx, &view, "locked");
+    assert_eq!(rows_now(cx, handle), ["locked", "open.txt"]);
+
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        let folder = window.find(row(locked));
+        assert_eq!(folder.label(), Some("locked"));
+        // No disclosure state: a screen reader hears no "collapsed".
+        assert_eq!(folder.expanded(), None);
+        assert!(window.within(row(locked)).find("warning").visible());
+        // A press on the warning, where a chevron would be, opens nothing.
+        window.within(row(locked)).click("chevron", cx);
+    })
+    .unwrap();
+    assert_eq!(rows_now(cx, handle), ["locked", "open.txt"]);
+    assert_eq!(focus(cx, &view), Some(locked));
+
+    press(cx, handle, "right");
+    assert_eq!(rows_now(cx, handle), ["locked", "open.txt"]);
+    assert_eq!(focus(cx, &view), Some(locked));
+}
+
+#[gpui_kit::test]
+fn a_symlink_is_a_file_row_that_never_opens(cx: &mut TestAppContext) {
+    let dir = folder(&[("real/inside.txt", "x")]);
+    std::os::unix::fs::symlink(dir.path().join("real"), dir.path().join("link")).unwrap();
+    let (handle, view) = open_app(cx, Launch::Folder(dir.path().to_owned()));
+    let link = node(cx, &view, "link");
+    // Folders first; the link to a folder sorts with the files.
+    assert_eq!(rows_now(cx, handle), ["real", "link"]);
+
+    cx.update_window(handle, |_, window, cx| {
+        let row_facts = window.find(row(link));
+        assert_eq!(row_facts.expanded(), None);
+        assert!(window.within(row(link)).try_find("warning").is_none());
+        window.within(row(link)).click("chevron", cx);
+    })
+    .unwrap();
+    // A press where a chevron would be is a press on the row: it shows the
+    // link on the stage, as any file.
+    assert_eq!(rows_now(cx, handle), ["real", "link"]);
+    assert_eq!(current(cx, &view), Some(link));
+
+    press(cx, handle, "right");
+    assert_eq!(rows_now(cx, handle), ["real", "link"]);
+    press(cx, handle, "space");
+    assert_eq!(read(cx, &view, AppState::selected_count), 1);
 }

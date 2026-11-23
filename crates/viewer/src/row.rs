@@ -262,9 +262,11 @@ impl TreeRow {
             Disclosure::Leaf => return target,
             Disclosure::Unreadable => {
                 return target.child(
-                    Icon::new(IconName::TriangleAlert)
-                        .size_4()
-                        .text_color(theme.warning),
+                    div().id("warning").test_support().child(
+                        Icon::new(IconName::TriangleAlert)
+                            .size_4()
+                            .text_color(theme.warning),
+                    ),
                 );
             }
             Disclosure::Closed => IconName::ChevronRight,

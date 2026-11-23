@@ -251,12 +251,17 @@ fn a_stale_query_never_lands(cx: &mut TestAppContext) {
         })
     });
 
-    // Two keystrokes before any job runs: "a", then "ap".
+    // Two keystrokes, two filter jobs, and no job runs before both are
+    // typed: "a", then "ap".
     cx.update_window(handle, |_, window, cx| {
         window.click("filter", cx);
-        window.input("ap", cx);
+        window.input("a", cx);
     })
     .unwrap();
+    assert_eq!(read(cx, &view, |state| state.query().to_owned()), "a");
+    cx.update_window(handle, |_, window, cx| window.input("p", cx))
+        .unwrap();
+    assert_eq!(read(cx, &view, |state| state.query().to_owned()), "ap");
     cx.run_until_parked();
 
     let only_ap = vec!["src".to_owned(), "app".to_owned()];

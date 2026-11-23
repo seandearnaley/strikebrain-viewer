@@ -69,6 +69,29 @@ fn folder(files: &[(&str, &str)]) -> tempfile::TempDir {
     dir
 }
 
+/// Takes every permission from a folder and gives them back on drop, so
+/// the temporary folder can be deleted even if the test fails.
+struct Locked(PathBuf);
+
+impl Locked {
+    /// `None` when the lock does not stop reads, as for root.
+    fn new(path: &Path) -> Option<Self> {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o000))
+            .expect("lock the folder");
+        let locked = Self(path.to_path_buf());
+        std::fs::read_dir(path).is_err().then_some(locked)
+    }
+}
+
+impl Drop for Locked {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755))
+            .expect("unlock the folder");
+    }
+}
+
 /// Writes `text` to `root/path`, making its folders.
 fn write(root: &Path, path: &str, text: &str) {
     let path = root.join(path);

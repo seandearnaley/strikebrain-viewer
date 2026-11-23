@@ -2,17 +2,49 @@
 //! made to take: it runs nothing until the test parks, so each test lines
 //! up its events and jobs first and only then lets them run.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
+use explorer::Explorer;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
     AnyWindowHandle, AppContext as _, Entity, Pixels, Point, Subscription, TestAppContext,
 };
-use viewer::{AppState, AppView, Launch};
+use viewer::{AppState, AppView, Launch, ScanStatus};
 
-use crate::{click_without_frame, current, folder, node, open_app, read, row, rows_now, state};
+use crate::{
+    click_without_frame, current, filter_value, folder, node, open_app, read, row, rows_now, state,
+    write,
+};
+
+/// The rows' names in an explorer.
+fn names(explorer: &Explorer) -> Vec<String> {
+    explorer
+        .rows()
+        .iter()
+        .map(|&id| explorer.tree().name(id).to_owned())
+        .collect()
+}
+
+/// Records the rows each time the state changes while a tree is on screen.
+fn log_rows(
+    cx: &mut TestAppContext,
+    view: &Entity<AppView>,
+) -> (Rc<RefCell<Vec<Vec<String>>>>, Subscription) {
+    let seen: Rc<RefCell<Vec<Vec<String>>>> = Rc::default();
+    let log = Rc::clone(&seen);
+    let state = state(cx, view);
+    let subscription = cx.update(|cx| {
+        cx.observe(&state, move |state, cx| {
+            if let Some(explorer) = state.read(cx).explorer() {
+                log.borrow_mut().push(names(explorer));
+            }
+        })
+    });
+    (seen, subscription)
+}
 
 /// Arms a click at `position` that fires the moment another tree lands,
 /// inside the update that swaps it and before any frame is drawn: the click
@@ -92,4 +124,222 @@ fn a_click_drawn_before_a_refresh_does_nothing(cx: &mut TestAppContext) {
     assert_eq!(rows_now(cx, handle), ["b.txt"]);
     assert_eq!(current(cx, &view), None);
     assert_eq!(read(cx, &view, AppState::selected_count), 0);
+}
+
+#[gpui_kit::test]
+fn opening_a_second_folder_before_the_first_lands_shows_only_the_second(cx: &mut TestAppContext) {
+    let first = folder(&[("from-first.txt", "1")]);
+    let second = folder(&[("from-second.txt", "2")]);
+    let (handle, view) = open_app(cx, Launch::Empty);
+    let (seen, _log) = log_rows(cx, &view);
+
+    let state = state(cx, &view);
+    state.update(cx, |state, cx| {
+        state.open_folder(first.path().to_owned(), cx);
+    });
+    state.update(cx, |state, cx| {
+        state.open_folder(second.path().to_owned(), cx);
+    });
+    cx.run_until_parked();
+
+    assert_eq!(rows_now(cx, handle), ["from-second.txt"]);
+    assert!(
+        seen.borrow()
+            .iter()
+            .flatten()
+            .all(|name| name != "from-first.txt")
+    );
+    let title = cx.update(|cx| view.read(cx).title().cloned());
+    let second_name = second.path().file_name().unwrap().to_string_lossy();
+    assert_eq!(title.as_deref(), Some(&*second_name));
+    assert_eq!(
+        read(cx, &view, |state| state.status().clone()),
+        ScanStatus::Idle
+    );
+}
+
+#[gpui_kit::test]
+fn a_query_typed_during_the_first_scan_applies_when_the_tree_lands(cx: &mut TestAppContext) {
+    let dir = folder(&[("main.rs", ""), ("notes.md", "")]);
+    let (handle, view) = open_app(cx, Launch::Empty);
+    let (seen, _log) = log_rows(cx, &view);
+
+    // The scan has not run: the filter is on screen, the tree is not.
+    state(cx, &view).update(cx, |state, cx| state.open_folder(dir.path().to_owned(), cx));
+    cx.update_window(handle, |_, window, cx| {
+        window.click("filter", cx);
+        window.input("main", cx);
+    })
+    .unwrap();
+    assert!(read(cx, &view, |state| state.explorer().is_none()));
+    cx.run_until_parked();
+
+    assert_eq!(rows_now(cx, handle), ["main.rs"]);
+    assert_eq!(filter_value(cx, handle), "main");
+    // The tree never showed unfiltered.
+    assert!(seen.borrow().iter().all(|rows| *rows == ["main.rs"]));
+}
+
+#[gpui_kit::test]
+fn a_refresh_while_a_filter_job_is_pending_shows_the_new_tree_filtered(cx: &mut TestAppContext) {
+    let dir = folder(&[("main.rs", ""), ("notes.md", "")]);
+    let (handle, view) = open_app(cx, Launch::Folder(dir.path().to_owned()));
+    let (seen, _log) = log_rows(cx, &view);
+    write(dir.path(), "main2.rs", "");
+
+    // A filter job and a rescan, both waiting.
+    cx.update_window(handle, |_, window, cx| {
+        window.click("filter", cx);
+        window.input("main", cx);
+        window.click("refresh", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+
+    assert_eq!(rows_now(cx, handle), ["main.rs", "main2.rs"]);
+    assert_eq!(filter_value(cx, handle), "main");
+    // The new tree never showed unfiltered.
+    for rows in seen.borrow().iter() {
+        assert!(!(rows.contains(&"main2.rs".to_owned()) && rows.contains(&"notes.md".to_owned())));
+    }
+}
+
+#[gpui_kit::test]
+fn show_ignored_clicked_twice_before_a_scan_lands_shows_them_hidden(cx: &mut TestAppContext) {
+    let dir = folder(&[
+        (".gitignore", "secret.txt\n"),
+        ("secret.txt", "s"),
+        ("keep.txt", "k"),
+    ]);
+    let (handle, view) = open_app(cx, Launch::Folder(dir.path().to_owned()));
+    let (seen, _log) = log_rows(cx, &view);
+
+    cx.update_window(handle, |_, window, cx| {
+        window.click("show-ignored", cx);
+        window.click("show-ignored", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+
+    assert!(!read(cx, &view, AppState::shows_ignored));
+    assert_eq!(rows_now(cx, handle), [".gitignore", "keep.txt"]);
+    assert!(
+        seen.borrow()
+            .iter()
+            .flatten()
+            .all(|name| name != "secret.txt")
+    );
+    assert_eq!(
+        read(cx, &view, |state| state.status().clone()),
+        ScanStatus::Idle
+    );
+    cx.update_window(handle, |_, window, _| {
+        assert_eq!(window.find("show-ignored").checked(), Some(false));
+    })
+    .unwrap();
+}
+
+/// A refresh that starts the moment an opened tree lands, while its sizes
+/// are still to be read: the old read never lands, and the Size column
+/// shows the refreshed tree's sizes.
+#[gpui_kit::test]
+fn sizes_read_for_a_replaced_tree_never_land(cx: &mut TestAppContext) {
+    let dir = folder(&[("a.txt", "a")]);
+    let (handle, view) = open_app(cx, Launch::Empty);
+    let state = state(cx, &view);
+    let armed = Rc::new(Cell::new(true));
+    let fired = Rc::clone(&armed);
+    let path = dir.path().to_owned();
+    let _refresh = cx.update(|cx| {
+        cx.observe(&state, move |state, cx| {
+            let landed = state
+                .read(cx)
+                .explorer()
+                .is_some_and(|explorer| !explorer.tree().has_sizes());
+            if fired.get() && landed {
+                fired.set(false);
+                write(&path, "a.txt", "abcd");
+                state.update(cx, AppState::refresh);
+            }
+        })
+    });
+
+    state.update(cx, |state, cx| state.open_folder(dir.path().to_owned(), cx));
+    cx.run_until_parked();
+
+    assert!(!armed.get(), "the opened tree landed before its sizes");
+    let a = node(cx, &view, "a.txt");
+    assert_eq!(
+        read(cx, &view, |state| state.explorer().unwrap().tree().size(a)),
+        Some(4)
+    );
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.within(row(a)).find("size").visible());
+    })
+    .unwrap();
+}
+
+/// The scan's progress bar shows once a scan has run for 200 ms. The test
+/// moves the simulated clock past 200 ms before any task runs, runs the
+/// expired timer alone, then the foreground tasks in the order they were
+/// spawned: the slow mark comes before the task that starts the scan job.
+#[gpui_kit::test]
+fn a_scan_slower_than_200_ms_shows_the_progress_bar_until_it_lands(cx: &mut TestAppContext) {
+    let dir = folder(&[("a.txt", "a")]);
+    let (handle, view) = open_app(cx, Launch::Empty);
+    let status = |cx: &mut TestAppContext| read(cx, &view, |state| state.status().clone());
+
+    state(cx, &view).update(cx, |state, cx| state.open_folder(dir.path().to_owned(), cx));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("scan-progress").is_none());
+    })
+    .unwrap();
+
+    cx.dispatcher
+        .scheduler()
+        .clock()
+        .advance(Duration::from_millis(200));
+    while cx.dispatcher.tick(true) {}
+    while status(cx) == (ScanStatus::Scanning { slow: false }) && cx.dispatcher.tick(false) {}
+
+    assert_eq!(status(cx), ScanStatus::Scanning { slow: true });
+    assert!(read(cx, &view, |state| state.explorer().is_none()));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("scan-progress").visible());
+    })
+    .unwrap();
+
+    cx.run_until_parked();
+    assert_eq!(status(cx), ScanStatus::Idle);
+    assert_eq!(rows_now(cx, handle), ["a.txt"]);
+    cx.update_window(handle, |_, window, _| {
+        assert!(window.try_find("scan-progress").is_none());
+    })
+    .unwrap();
+}
+
+/// Without the 200 ms, the scan lands with no bar ever shown.
+#[gpui_kit::test]
+fn a_fast_scan_never_shows_the_progress_bar(cx: &mut TestAppContext) {
+    let dir = folder(&[("a.txt", "a")]);
+    let (handle, view) = open_app(cx, Launch::Empty);
+    let state = state(cx, &view);
+    let slow_seen = Rc::new(Cell::new(false));
+    let seen = Rc::clone(&slow_seen);
+    let _watch = cx.update(|cx| {
+        cx.observe(&state, move |state, cx| {
+            if *state.read(cx).status() == (ScanStatus::Scanning { slow: true }) {
+                seen.set(true);
+            }
+        })
+    });
+
+    state.update(cx, |state, cx| state.open_folder(dir.path().to_owned(), cx));
+    cx.run_until_parked();
+
+    assert!(!slow_seen.get());
+    assert_eq!(rows_now(cx, handle), ["a.txt"]);
 }
