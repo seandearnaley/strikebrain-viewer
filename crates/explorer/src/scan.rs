@@ -108,10 +108,15 @@ impl From<TreeError> for ScanError {
 /// - Outside a repository: only ignore files at or below `root`.
 ///
 /// Dotfiles are listed; `.git` and `.DS_Store` are always skipped; symlinks
-/// are leaves and never followed, except that a root which is itself a
-/// symlink is resolved first; a folder that cannot be read becomes a
-/// [`Kind::Unreadable`] leaf. Entries the walker cannot describe at all are
-/// left out. There are no caps.
+/// are leaves and never followed; FIFOs, sockets and devices are left out,
+/// since reading one can block forever; a folder that cannot be read becomes
+/// a [`Kind::Unreadable`] leaf. Entries the walker cannot describe at all
+/// are left out. There are no caps.
+///
+/// `root` is made absolute and canonical first, so [`Tree::root_path`] is
+/// the real folder and the root node is named after it: `.` scans the
+/// current folder under its own name, and a root that is a symlink is its
+/// target.
 ///
 /// Setting `cancel` stops the walk at the next entry each thread visits,
 /// so a superseded scan ends early.
@@ -141,7 +146,9 @@ pub fn scan(root: &Path, options: ScanOptions, cancel: &AtomicBool) -> Result<Tr
     Ok(tree)
 }
 
-/// The folder to walk: `root` itself, or its target when `root` is a symlink.
+/// The folder to walk: `root` made absolute and canonical, so the tree's
+/// root is named after the real folder (not `.` or `..`) and a root that is
+/// a symlink is its target.
 fn resolve_root(root: &Path) -> Result<PathBuf, ScanError> {
     let followed = fs::metadata(root).map_err(ScanError::Root)?;
     if !followed.is_dir() {
@@ -151,12 +158,7 @@ fn resolve_root(root: &Path) -> Result<PathBuf, ScanError> {
             message,
         )));
     }
-    let link = fs::symlink_metadata(root).map_err(ScanError::Root)?;
-    if link.file_type().is_symlink() {
-        fs::canonicalize(root).map_err(ScanError::Root)
-    } else {
-        Ok(root.to_path_buf())
-    }
+    fs::canonicalize(root).map_err(ScanError::Root)
 }
 
 /// The walker with this app's rules.
@@ -285,13 +287,14 @@ impl Collector<'_> {
         let Some(parent) = entry.path().parent().filter(|_| entry.depth() > 0) else {
             return;
         };
-        let parent = self.parent_key(parent);
         // The type comes from the folder listing; nothing here stats the file.
         let kind = match entry.file_type() {
             Some(t) if t.is_symlink() => Kind::Symlink,
             Some(t) if t.is_dir() => Kind::Dir,
+            Some(t) if is_special(t) => return,
             _ => Kind::File,
         };
+        let parent = self.parent_key(parent);
         let batch = &mut self.batch;
         let index = batch.len();
         batch.names.push_str(&entry.file_name().to_string_lossy());
@@ -326,6 +329,23 @@ impl Drop for Collector<'_> {
             .unwrap_or_else(PoisonError::into_inner)
             .push(batch);
     }
+}
+
+/// Whether the entry is a FIFO, a socket or a device: none is a file to
+/// show, and opening a FIFO blocks until something writes to it.
+#[cfg(unix)]
+fn is_special(file_type: fs::FileType) -> bool {
+    use std::os::unix::fs::FileTypeExt;
+    file_type.is_fifo()
+        || file_type.is_socket()
+        || file_type.is_block_device()
+        || file_type.is_char_device()
+}
+
+/// Elsewhere every entry that is neither a folder nor a link is a file.
+#[cfg(not(unix))]
+fn is_special(_: fs::FileType) -> bool {
+    false
 }
 
 /// Joins the batches into a tree.
@@ -474,6 +494,7 @@ mod tests {
             ("empty/", ""),
         ]);
         let tree = scan_default(dir.path());
+        let real = fs::canonicalize(dir.path()).unwrap();
         assert_eq!(
             paths(&tree),
             [
@@ -486,10 +507,10 @@ mod tests {
                 "b.txt"
             ]
         );
-        assert_eq!(tree.root_path(), dir.path());
+        assert_eq!(tree.root_path(), real);
         assert_eq!(
             tree.name(NodeId::ROOT),
-            dir.path().file_name().unwrap().to_str().unwrap()
+            real.file_name().unwrap().to_str().unwrap()
         );
         assert_eq!(tree.kind(id(&tree, "A/two")), Kind::Dir);
         assert_eq!(tree.kind(id(&tree, "b.txt")), Kind::File);
@@ -501,7 +522,7 @@ mod tests {
         assert_eq!(tree.size(NodeId::ROOT), Some(18));
         assert_eq!(
             tree.abs_path(id(&tree, "A/one.md")),
-            dir.path().join("A").join("one.md")
+            real.join("A").join("one.md")
         );
     }
 
@@ -530,6 +551,35 @@ mod tests {
             assert_eq!(scanned.size(node), expected.size(node));
             assert_eq!(scanned.kind(node), expected.kind(node));
         }
+    }
+
+    #[test]
+    fn a_root_reached_through_dot_dot_is_named_after_the_real_folder() {
+        let dir = folder(&[("a/b.txt", "x"), ("c.txt", "x")]);
+        let real = fs::canonicalize(dir.path()).unwrap();
+        let tree = scan_default(&dir.path().join("a").join(".."));
+        assert_eq!(tree.root_path(), real);
+        assert_eq!(
+            tree.name(NodeId::ROOT),
+            real.file_name().unwrap().to_str().unwrap()
+        );
+        assert_eq!(paths(&tree), ["a", "a/b.txt", "c.txt"]);
+    }
+
+    #[test]
+    fn a_relative_root_is_made_absolute() {
+        let cwd = fs::canonicalize(std::env::current_dir().unwrap()).unwrap();
+        let tree = scan(
+            Path::new("."),
+            ScanOptions::default(),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(tree.root_path(), cwd);
+        assert_eq!(
+            tree.name(NodeId::ROOT),
+            cwd.file_name().unwrap().to_str().unwrap()
+        );
     }
 
     #[test]
@@ -748,7 +798,9 @@ mod tests {
     mod unix {
         use std::fs;
         use std::os::unix::fs::{PermissionsExt, symlink};
+        use std::os::unix::net::UnixListener;
         use std::path::{Path, PathBuf};
+        use std::process::Command;
         use std::sync::atomic::AtomicBool;
 
         use super::{folder, id, paths, scan_default};
@@ -837,6 +889,25 @@ mod tests {
             let tree = scan_default(&link);
             assert_eq!(paths(&tree), ["a.txt"]);
             assert_eq!(tree.name(NodeId::ROOT), "real");
+        }
+
+        #[test]
+        fn fifos_and_sockets_are_left_out() {
+            let dir = folder(&[("keep.txt", "x"), ("sub/also.txt", "x")]);
+            let _socket = UnixListener::bind(dir.path().join("socket")).unwrap();
+            // `mkfifo` may be missing; the socket still tests the rule.
+            let fifo = Command::new("mkfifo")
+                .arg(dir.path().join("sub/pipe"))
+                .status()
+                .is_ok_and(|status| status.success());
+            assert_eq!(
+                fs::symlink_metadata(dir.path().join("sub/pipe")).is_ok(),
+                fifo
+            );
+            let tree = scan_default(dir.path());
+            assert_eq!(paths(&tree), ["sub", "sub/also.txt", "keep.txt"]);
+            read_sizes(&tree, &AtomicBool::new(false)).unwrap();
+            assert_eq!(tree.size(NodeId::ROOT), Some(2));
         }
     }
 }
