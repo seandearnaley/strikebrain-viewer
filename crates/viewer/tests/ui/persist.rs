@@ -550,14 +550,18 @@ fn a_folder_argument_that_cannot_be_read_opens_as_its_row(cx: &mut TestAppContex
     assert_eq!(rows_now(&mut cx, handle), ["no such folder"]);
     assert_eq!(read(&mut cx, &view, AppState::selected_count), 0);
     cx.quit();
-    // Exactly the folders asked for: the one saved before is not.
+    // Exactly the folders asked for: the one saved before is not. One that
+    // is gone is where its parent resolves to.
     let paths: Vec<PathBuf> = saved(store.path())
         .view
         .folders
         .into_iter()
         .map(|folder| folder.path)
         .collect();
-    assert_eq!(paths, [missing]);
+    let resolved = std::fs::canonicalize(state_dir.path())
+        .unwrap()
+        .join("no such folder");
+    assert_eq!(paths, [resolved]);
 }
 
 #[gpui_kit::test]
@@ -669,4 +673,42 @@ fn a_saved_explorer_wider_than_the_window_fits_it(cx: &mut TestAppContext) {
     let width = cx.update(|cx| view.read(cx).explorer_width(cx));
     assert_eq!(px(width), explorer.size.width);
     cx.quit();
+}
+
+#[gpui_kit::test]
+fn a_named_folder_missing_at_launch_keeps_its_saved_view(cx: &mut TestAppContext) {
+    let dir = folder(&[("a.txt", "a"), ("b.txt", "b"), ("sub/c.txt", "c")]);
+    let state_dir = tempfile::tempdir().unwrap();
+    let store = StateStore::at(state_dir.path().join("state.json"));
+    save_three_checked(cx, dir.path(), &store);
+    let before = saved(store.path()).view.folders;
+
+    // Named on the command line while its volume is away: an unreadable
+    // row that keeps the view saved for it.
+    let moved = tempfile::tempdir().unwrap();
+    std::fs::rename(dir.path(), moved.path().join("away")).unwrap();
+    let mut cx = cx.new_app();
+    let (_, view) = launch(&mut cx, &[dir.path()], &StateStore::at(store.path()));
+    assert!(read(&mut cx, &view, |state| state.explorer().is_some()));
+    cx.quit();
+    assert_eq!(saved(store.path()).view.folders, before);
+
+    // Back: the view returns.
+    std::fs::rename(moved.path().join("away"), dir.path()).unwrap();
+    let mut cx = cx.new_app();
+    let (_, view) = launch(&mut cx, &[], &StateStore::at(store.path()));
+    assert_eq!(read(&mut cx, &view, AppState::selected_count), 3);
+    cx.quit();
+}
+
+#[gpui_kit::test]
+fn a_folder_never_read_saves_as_open(cx: &mut TestAppContext) {
+    let state_dir = tempfile::tempdir().unwrap();
+    let store = StateStore::at(state_dir.path().join("state.json"));
+    let missing = state_dir.path().join("not yet");
+    let (_, _view) = launch(cx, &[&missing], &store);
+    cx.quit();
+    let folders = saved(store.path()).view.folders;
+    assert_eq!(folders.len(), 1);
+    assert_eq!(folders[0].open, [""]);
 }

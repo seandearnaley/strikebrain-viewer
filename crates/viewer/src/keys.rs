@@ -2,10 +2,11 @@
 //!
 //! Each pane declares a key context while it holds focus: the explorer's
 //! tree [`EXPLORER`], its filter input [`FILTER`] and the stage [`STAGE`].
-//! Before a tree is on screen (no folder, a first scan, a folder that
-//! cannot be read) the explorer's body holds focus in the tree's place, in
-//! [`EXPLORER_BODY`]. Tab moves between the panes from each of them.
-//! Adding a folder and quitting bind everywhere.
+//! Before a tree is on screen (no folder, or the first scans still
+//! running) the explorer's body holds focus in the tree's place, in
+//! [`EXPLORER_BODY`]; a folder that cannot be read is a row of the tree.
+//! Tab moves between the panes from each of them. Adding a folder and
+//! quitting bind everywhere.
 //!
 //! The stage's code view is the Kit's editor, which takes focus on a click
 //! so its text can be selected and copied. It declares the Kit's `Input`

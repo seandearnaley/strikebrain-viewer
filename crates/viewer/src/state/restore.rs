@@ -10,7 +10,7 @@
 
 use std::path::{Path, PathBuf};
 
-use explorer::{Explorer, SavedFolder, Sort, SortKey};
+use explorer::{Explorer, SavedFolder, SortKey};
 use gpui_kit::Context;
 
 use super::{AppState, StateEvent};
@@ -20,7 +20,6 @@ use crate::persist::{FolderSnapshot, SavedView, SnapshotView};
 /// a launch with no saved view, which settles at the top.
 #[derive(Clone, Debug, Default)]
 pub(super) struct Pending {
-    sort: Sort,
     current: Option<PathBuf>,
     top_row: Option<PathBuf>,
 }
@@ -33,21 +32,19 @@ impl AppState {
         self.query = view.query;
         self.kind = view.kind;
         self.show_ignored = view.show_ignored;
+        self.sort = view.sort;
         self.restore = Some(Pending {
-            sort: view.sort,
             current: view.current,
             top_row: view.top_row,
         });
         view.folders
     }
 
-    /// The explorer the first tree joins: with the sort a saved view waits
-    /// with, and the filter asked for.
+    /// The explorer the first tree joins: with the sort, saved or last
+    /// chosen, and the filter asked for.
     pub(super) fn new_explorer(&self) -> Explorer {
         let mut explorer = Explorer::empty();
-        if let Some(pending) = &self.restore {
-            explorer.set_sort(pending.sort);
-        }
+        explorer.set_sort(self.sort);
         if self.filter_asked() {
             explorer.set_filter(&self.query, self.kind);
         }
@@ -90,14 +87,13 @@ impl AppState {
         let Some(explorer) = self.explorer.as_mut() else {
             return self.rows_replaced(cx);
         };
-        explorer.set_sort(pending.sort);
         let tree = explorer.tree();
         let current = pending
             .current
             .as_deref()
             .and_then(|path| tree.find_abs(path))
             .filter(|&id| tree.is_file(id));
-        let waits_for_sizes = pending.sort.key == SortKey::Size && !tree.has_sizes();
+        let waits_for_sizes = self.sort.key == SortKey::Size && !tree.has_sizes();
         if current.is_some() {
             self.current = current;
         }
@@ -135,8 +131,8 @@ impl AppState {
     /// Cheap: the open folders and the checks of the tree on screen are
     /// copied as bit sets and named later, off the UI thread. A folder not
     /// on screen as it was seen saves the view waiting for it; one still
-    /// scanning for the first time saves as open, as it will show. A tree
-    /// built in memory has no folder to save.
+    /// scanning for the first time, or never read, saves as open, as it
+    /// will show. A tree built in memory has no folder to save.
     pub(crate) fn take_snapshot(&self) -> SnapshotView {
         let explorer = self.explorer.as_ref();
         let on_disk = |path: PathBuf| path.is_absolute().then_some(path);
@@ -150,17 +146,17 @@ impl AppState {
             (Some(explorer), Some(id)) => on_disk(explorer.tree().abs_path(id)),
             _ => pending.and_then(|pending| pending.current.clone()),
         };
-        let sort = explorer
-            .map(Explorer::sort)
-            .or(pending.map(|pending| pending.sort))
-            .unwrap_or_default();
+        let sort = self.sort;
         let folders: Vec<FolderSnapshot> = self
             .folders
             .iter()
-            .map(|folder| match (&folder.waiting, folder.shown) {
-                (Some(waiting), _) => FolderSnapshot::Waiting(waiting.clone()),
-                (None, true) => FolderSnapshot::Live(folder.path.clone()),
-                (None, false) => FolderSnapshot::Waiting(SavedFolder {
+            .map(|folder| match &folder.waiting {
+                Some(waiting) => FolderSnapshot::Waiting(waiting.clone()),
+                None if folder.shown && folder.error.is_none() => {
+                    FolderSnapshot::Live(folder.path.clone())
+                }
+                // Still to be scanned, or never read: open, as it will show.
+                None => FolderSnapshot::Waiting(SavedFolder {
                     path: folder.path.clone(),
                     open: vec![String::new()],
                     ..SavedFolder::default()

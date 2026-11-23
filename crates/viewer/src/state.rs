@@ -23,7 +23,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use explorer::{Explorer, IdMap, KindFilter, NodeId, Tree};
+use explorer::{Explorer, IdMap, KindFilter, NodeId, Sort, Tree};
 use gpui_kit::{Context, EventEmitter, Result, Task};
 
 use crate::persist::SavedView;
@@ -175,6 +175,8 @@ pub struct AppState {
     query: String,
     /// The kind asked for.
     kind: KindFilter,
+    /// The sort, kept here too so it outlasts a tree with no folder.
+    sort: Sort,
     /// The running filter job. Replacing it drops the previous one.
     filter_task: Option<Task<Result<()>>>,
     /// Whether scans list the files the ignore rules would leave out.
@@ -237,6 +239,7 @@ impl AppState {
             presenting: false,
             query: String::new(),
             kind: KindFilter::All,
+            sort: Sort::default(),
             filter_task: None,
             show_ignored: false,
             scans: 0,

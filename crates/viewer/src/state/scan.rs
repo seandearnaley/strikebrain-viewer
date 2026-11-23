@@ -74,11 +74,13 @@ impl AppState {
         let generation = self.scans;
         // Sizes first when the tree on screen has them, so the Size column
         // never blanks.
+        // An unreadable folder's size of 0 does not count: it has none to
+        // keep.
         let sizes_first = self.folder(key).is_some_and(|folder| {
             let top = self.folder_node(&folder.path);
             let tree = self.explorer.as_ref().map(Explorer::tree);
             top.zip(tree)
-                .is_some_and(|(top, tree)| tree.size(top).is_some())
+                .is_some_and(|(top, tree)| tree.kind(top) == Kind::Dir && tree.size(top).is_some())
         });
         let Some(folder) = self.folder_mut(key) else {
             return;
@@ -340,6 +342,7 @@ impl AppState {
     /// asked for.
     pub(super) fn show_tree(&mut self, tree: Arc<Tree>) {
         let mut explorer = Explorer::new(tree);
+        explorer.set_sort(self.sort);
         if self.filter_asked() {
             // Synchronous: this runs once.
             explorer.set_filter(&self.query, self.kind);

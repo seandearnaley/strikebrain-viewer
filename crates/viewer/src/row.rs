@@ -122,7 +122,8 @@ impl TreeRow {
         }
     }
 
-    /// The row's tooltip: a top-level folder's full path.
+    /// The row's tooltip, which is also its accessible description: a
+    /// top-level folder's full path, and why it could not be read.
     pub(crate) fn tooltip(mut self, tooltip: Option<SharedString>) -> Self {
         self.tooltip = tooltip;
         self
@@ -236,7 +237,8 @@ impl RenderOnce for TreeRow {
                 row.on_hover(move |hovered, window, cx| on_hover(hovered, window, cx))
             })
             .when_some(tooltip, |row, tooltip| {
-                row.tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+                row.aria_description(tooltip.clone())
+                    .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
             })
             .child(
                 div()

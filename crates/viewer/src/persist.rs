@@ -109,10 +109,7 @@ pub fn plan_launch(folders: Vec<PathBuf>, saved: Option<Saved>) -> Plan {
             .map(|folder| folder.path.clone())
             .collect()
     } else {
-        let asked: Vec<PathBuf> = folders
-            .iter()
-            .filter_map(|folder| fs::canonicalize(folder).ok())
-            .collect();
+        let asked: Vec<PathBuf> = folders.iter().map(|folder| resolve(folder)).collect();
         view.folders.retain(|folder| asked.contains(&folder.path));
         folders
     };
@@ -126,6 +123,26 @@ pub fn plan_launch(folders: Vec<PathBuf>, saved: Option<Saved>) -> Plan {
         explorer_width: saved.explorer_width,
         window: saved.window,
     }
+}
+
+/// `path` made absolute and canonical as far as it exists: a folder that is
+/// gone, or on a volume not mounted, keeps the place its nearest existing
+/// parent resolves to, so it still matches the path it was saved under.
+pub(crate) fn resolve(path: &Path) -> PathBuf {
+    if let Ok(found) = fs::canonicalize(path) {
+        return found;
+    }
+    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut rest = Vec::new();
+    let mut at = absolute.as_path();
+    while let (Some(parent), Some(name)) = (at.parent(), at.file_name()) {
+        rest.push(name);
+        if let Ok(found) = fs::canonicalize(parent) {
+            return rest.iter().rev().fold(found, |path, name| path.join(name));
+        }
+        at = parent;
+    }
+    absolute
 }
 
 /// `bounds` moved and, if need be, shrunk to lie inside `area`.

@@ -140,6 +140,7 @@ impl AppState {
         if let Some(explorer) = self.explorer.as_mut() {
             let sort = explorer.sort().clicked(key);
             explorer.set_sort(sort);
+            self.sort = sort;
             self.rows_replaced(cx);
         }
     }

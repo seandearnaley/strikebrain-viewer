@@ -20,6 +20,7 @@ use gpui_kit::{Context, PathPromptOptions, Result, SharedString, Task, TaskExt a
 
 use super::{AppState, ScanStatus};
 use crate::menus::APP_NAME;
+use crate::persist::resolve;
 
 /// One folder asked for: where it is, its latest scan, its watcher, and the
 /// saved view waiting for it.
@@ -148,9 +149,7 @@ impl AppState {
         cx: &mut Context<Self>,
     ) {
         for path in paths {
-            let path = std::fs::canonicalize(&path)
-                .or_else(|_| std::path::absolute(&path))
-                .unwrap_or(path);
+            let path = resolve(&path);
             let saved = waiting
                 .iter()
                 .position(|view| view.path == path)

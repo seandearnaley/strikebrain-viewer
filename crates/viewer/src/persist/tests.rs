@@ -7,7 +7,7 @@ use gpui_kit::{Bounds, WindowBounds, point, px, size};
 
 use super::{
     APP_ID, FolderSnapshot, Saved, SavedView, SavedWindow, Snapshot, SnapshotView, StateStore,
-    decode, encode, fit, plan_launch, split_app_id,
+    decode, encode, fit, plan_launch, resolve, split_app_id,
 };
 use crate::state::Launch;
 
@@ -270,6 +270,28 @@ fn folder_arguments_open_exactly_those_each_with_its_own_saved_view() {
     let plan = plan_launch(vec![root.join("gone")], Some(saved));
     assert_eq!(opened(&plan.launch), [root.join("gone")]);
     assert_eq!(plan.view, None);
+}
+
+#[test]
+fn a_path_resolves_as_far_as_it_exists() {
+    let dir = tempfile::tempdir().unwrap();
+    let real = fs::canonicalize(dir.path()).unwrap();
+    // The temporary folder's own path may go through a link (/var on macOS).
+    assert_eq!(resolve(dir.path()), real);
+    assert_eq!(
+        resolve(&dir.path().join("gone/deeper")),
+        real.join("gone/deeper")
+    );
+    assert!(resolve(Path::new("relative-and-missing")).is_absolute());
+}
+
+#[test]
+fn a_folder_argument_that_is_missing_keeps_its_saved_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let away = fs::canonicalize(dir.path()).unwrap().join("away");
+    let saved = full(&away);
+    let plan = plan_launch(vec![dir.path().join("away")], Some(saved));
+    assert_eq!(restored(plan.view.as_ref()), std::slice::from_ref(&away));
 }
 
 #[test]

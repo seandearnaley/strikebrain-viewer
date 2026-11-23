@@ -439,3 +439,83 @@ fn a_folder_added_while_the_app_runs_is_the_focus_row_on_screen(cx: &mut TestApp
     })
     .unwrap();
 }
+
+#[gpui_kit::test]
+fn a_folder_row_describes_its_path_and_why_it_cannot_be_read(cx: &mut TestAppContext) {
+    let dir = folder(&[("a.txt", "a")]);
+    let missing = dir.path().join("gone");
+    let launch = Launch::Folders(vec![dir.path().to_owned(), missing.clone()]);
+    let (handle, view) = open_app(cx, launch);
+    let (top, gone) = (node_at(cx, &view, dir.path()), node_at_missing(cx, &view));
+    let path = std::fs::canonicalize(dir.path()).unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        // What a screen reader hears after the name: what the tooltip says.
+        assert_eq!(window.find(row(top)).description(), path.to_str());
+        // A folder that is gone is where its parent resolves to.
+        let gone_at = path.join("gone");
+        let expected = format!("{}\nNo such file or directory", gone_at.display());
+        assert_eq!(
+            window.find(row(gone)).description(),
+            Some(expected.as_str())
+        );
+    })
+    .unwrap();
+}
+
+/// The second top-level folder, which cannot be read.
+fn node_at_missing(cx: &mut TestAppContext, view: &Entity<AppView>) -> explorer::NodeId {
+    read(cx, view, |state| {
+        let tree = state.explorer().expect("a tree is on screen").tree();
+        tree.folders().nth(1).expect("two folders")
+    })
+}
+
+#[gpui_kit::test]
+fn the_sort_outlasts_the_last_folder(cx: &mut TestAppContext) {
+    let dir = folder(&[("a.txt", "a")]);
+    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
+    crate::click(cx, handle, "header-size");
+    press(cx, handle, "cmd-backspace");
+    assert!(read(cx, &view, AppState::is_empty));
+    let other = folder(&[("b.txt", "b")]);
+    add(cx, &view, &[other.path()]);
+    let sort = read(cx, &view, |state| state.explorer().unwrap().sort());
+    assert_eq!(sort.key, explorer::SortKey::Size);
+}
+
+#[gpui_kit::test]
+fn a_folder_readable_again_shows_before_its_sizes_are_read(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let late = dir.path().join("late");
+    let (handle, view) = open_app(cx, Launch::Folders(vec![late.clone()]));
+    crate::write(&late, "a.txt", "abc");
+    // The moment its tree is on screen, its sizes are still to be read.
+    let sized_when_shown: std::rc::Rc<std::cell::Cell<Option<bool>>> = std::rc::Rc::default();
+    let seen = std::rc::Rc::clone(&sized_when_shown);
+    let state = crate::state(cx, &view);
+    let _watch = cx.update(|cx| {
+        cx.observe(&state, move |state, cx| {
+            let Some(explorer) = state.read(cx).explorer() else {
+                return;
+            };
+            let tree = explorer.tree();
+            let top = tree.folders().next().expect("one folder");
+            if seen.get().is_none() && tree.kind(top) == explorer::Kind::Dir {
+                seen.set(Some(tree.size(top).is_some()));
+            }
+        })
+    });
+    crate::click(cx, handle, "refresh");
+    assert_eq!(sized_when_shown.get(), Some(false));
+    // And they come.
+    let top = node_at(cx, &view, &late);
+    assert_eq!(
+        read(cx, &view, |state| state
+            .explorer()
+            .unwrap()
+            .tree()
+            .size(top)),
+        Some(3)
+    );
+}
