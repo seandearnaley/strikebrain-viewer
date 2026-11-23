@@ -464,7 +464,8 @@ fn quick_presses_show_only_the_last_file(cx: &mut TestAppContext) {
     cx.update_window(handle, |_, window, cx| window.press("left", cx))
         .unwrap();
     assert_eq!(shown(cx, handle), Some(Shown::Code("f6.rs".into())));
-    assert_eq!(probe(cx, &view).loads(), loads + 3);
+    // f6.rs is still on the stage, unchanged: back on it, nothing is read.
+    assert_eq!(probe(cx, &view).loads(), loads + 2);
 }
 
 #[gpui_kit::test]
@@ -566,6 +567,49 @@ fn a_file_changed_on_disk_is_read_again_on_refresh(cx: &mut TestAppContext) {
         assert_eq!(code_view(window).value(), Some("two, longer"));
     })
     .unwrap();
+}
+
+#[gpui_kit::test]
+fn a_rescan_leaves_focus_scroll_and_the_editor_alone(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "a.rs", numbered(200, "line ", "\n"));
+    write(dir.path(), "other.txt", "x");
+    let (handle, view) = open_checked(cx, dir.path());
+    let editor_focused = |cx: &mut TestAppContext| {
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            code_view(window).focused() == Some(true)
+        })
+        .unwrap()
+    };
+    click(cx, handle, "stage-code");
+    assert!(editor_focused(cx), "a click gives the code view focus");
+    press(cx, handle, "pagedown");
+    let scrolled = probe(cx, &view).scroll();
+    assert!(scrolled > 0.);
+    let loads = probe(cx, &view).loads();
+
+    // Another file changes on disk, and live refresh rescans.
+    write(dir.path(), "other.txt", "changed");
+    let state = cx.update(|cx| view.read(cx).state().clone());
+    state.update(cx, AppState::disk_changed);
+    cx.run_until_parked();
+    assert_eq!(read(cx, &view, AppState::scans), 2);
+    assert!(
+        editor_focused(cx),
+        "a rescan took focus out of the code view"
+    );
+    assert_eq!(probe(cx, &view).scroll(), scrolled);
+    // The file on the stage is unchanged: nothing is read or rebuilt.
+    assert_eq!(probe(cx, &view).loads(), loads);
+
+    // The file on the stage changes: it is read again, and the code view
+    // keeps focus, as the file and its viewer are the same.
+    write(dir.path(), "a.rs", numbered(201, "line ", "\n"));
+    state.update(cx, AppState::disk_changed);
+    cx.run_until_parked();
+    assert_eq!(probe(cx, &view).loads(), loads + 1);
+    assert!(editor_focused(cx));
 }
 
 #[gpui_kit::test]

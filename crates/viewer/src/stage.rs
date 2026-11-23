@@ -57,7 +57,7 @@ use crate::theme::TABULAR_FIGURES;
 
 use cache::Lru;
 use images::StageImages;
-use load::{Loaded, Stamp};
+use load::{Held, Loaded, Stamp};
 use text::{Scroll, TextViews};
 
 /// How much loaded text the stage keeps: 32 MB.
@@ -114,6 +114,32 @@ enum Content {
         name: SharedString,
         size: Option<u64>,
     },
+}
+
+/// Which file the stage shows, in which viewer, as of which version. While
+/// the file and the viewer stay, keyboard focus inside the view stays; while
+/// the version stays too, nothing is read or rebuilt.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Showing {
+    path: Arc<Path>,
+    viewer: Viewer,
+    /// `None` when the file could not be read.
+    stamp: Option<Stamp>,
+}
+
+impl Showing {
+    fn new(file: &File, viewer: Viewer, stamp: Option<Stamp>) -> Self {
+        Self {
+            path: Arc::clone(&file.path),
+            viewer,
+            stamp,
+        }
+    }
+
+    /// Whether `other` is the same file in the same viewer.
+    fn same_view(&self, other: &Self) -> bool {
+        self.path == other.path && self.viewer == other.viewer
+    }
 }
 
 /// A text the stage has read, and the file version it came from.
@@ -180,6 +206,8 @@ pub(crate) struct Stage {
     focus_handle: FocusHandle,
     asked: Asked,
     content: Content,
+    /// What `content` shows, when it shows a file read from disk.
+    showing: Option<Showing>,
     /// The read of the file asked for. Replacing it cancels the one before.
     load: Option<Task<Result<()>>>,
     /// Stamps the gallery neighbours to decode ahead. Replaced likewise.
@@ -221,6 +249,7 @@ impl Stage {
             focus_handle: cx.focus_handle(),
             asked: Asked::default(),
             content: Content::Blank,
+            showing: None,
             load: None,
             preload: None,
             images: cx.new(StageImages::new),
@@ -300,7 +329,7 @@ impl Stage {
         self.load = None;
         self.preload = None;
         let Some(file) = self.asked_file(cx) else {
-            return self.show(Content::Blank, window, cx);
+            return self.show(Content::Blank, None, window, cx);
         };
         if file.in_memory {
             // A tree from paths alone: its files are names, not files.
@@ -308,13 +337,20 @@ impl Stage {
                 name: file.name,
                 size: file.size,
             };
-            return self.show(content, window, cx);
+            return self.show(content, None, window, cx);
         }
-        let cached = self.texts.peek(&file.path).map(|text| text.stamp);
+        let held = Held {
+            shown: self
+                .showing
+                .as_ref()
+                .filter(|showing| showing.path == file.path)
+                .and_then(|showing| showing.stamp),
+            text: self.texts.peek(&file.path).map(|text| text.stamp),
+        };
         let (path, name) = (Arc::clone(&file.path), file.name.clone());
         self.load = Some(cx.spawn_in(window, async move |this, cx| {
             let loaded = cx
-                .background_spawn(async move { load::load(&path, &name, cached) })
+                .background_spawn(async move { load::load(&path, &name, held) })
                 .await;
             this.update_in(cx, |this, window, cx| {
                 this.finish_load(file, loaded, window, cx);
@@ -334,13 +370,24 @@ impl Stage {
             return;
         }
         self.load = None;
-        let content = match loaded {
+        let (content, showing) = match loaded {
+            Loaded::Unchanged => {
+                // The same file as on the stage, unchanged: its view stays
+                // as it is, scrolled, with its selection and focus.
+                if let Content::Image(shown, _) | Content::Markdown(shown) | Content::Code(shown) =
+                    &mut self.content
+                {
+                    shown.staged = file.staged;
+                }
+                return self.preload_neighbours(window, cx);
+            }
             Loaded::Image(stamp) => {
                 let resource = Resource::Path(Arc::clone(&file.path));
                 self.images.update(cx, |images, cx| {
                     images.prepare(&resource, stamp, window, cx);
                 });
-                Content::Image(file, stamp.len())
+                let showing = Showing::new(&file, Viewer::Image, Some(stamp));
+                (Content::Image(file, stamp.len()), showing)
             }
             Loaded::Text {
                 viewer,
@@ -360,32 +407,53 @@ impl Stage {
                     // Gone since the read started: read it whole.
                     return self.start_load(window, cx);
                 };
+                let showing = Showing::new(&file, viewer, Some(stamp));
                 if viewer == Viewer::Markdown {
                     self.text_views.show_markdown(&file.path, stamp, &text, cx);
-                    Content::Markdown(file)
+                    (Content::Markdown(file), showing)
                 } else {
                     self.text_views
                         .show_code(&file.path, stamp, &text, &file.language, window, cx);
-                    Content::Code(file)
+                    (Content::Code(file), showing)
                 }
             }
-            Loaded::Unsupported { len } => Content::Unsupported {
-                name: file.name,
-                size: len.or(file.size),
-            },
+            Loaded::Unsupported { len } => {
+                let showing = Showing::new(&file, Viewer::Unsupported, None);
+                let content = Content::Unsupported {
+                    name: file.name,
+                    size: len.or(file.size),
+                };
+                (content, showing)
+            }
         };
         self.loads += 1;
-        self.show(content, window, cx);
+        self.show(content, Some(showing), window, cx);
         self.preload_neighbours(window, cx);
     }
 
-    /// Puts `content` on the stage. Keyboard focus inside a view that is
-    /// going away moves to the stage itself.
-    fn show(&mut self, content: Content, window: &mut Window, cx: &mut Context<Self>) {
-        if self.focus_handle.contains_focused(window, cx) && !self.focus_handle.is_focused(window) {
+    /// Puts `content`, which shows `showing`, on the stage. Keyboard focus
+    /// inside a view that is going away moves to the stage itself; it stays
+    /// in a view that shows the same file in the same viewer, such as the
+    /// code view after the file changed on disk.
+    fn show(
+        &mut self,
+        content: Content,
+        showing: Option<Showing>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let same_view = match (&self.showing, &showing) {
+            (Some(was), Some(now)) => was.same_view(now),
+            _ => false,
+        };
+        if !same_view
+            && self.focus_handle.contains_focused(window, cx)
+            && !self.focus_handle.is_focused(window)
+        {
             window.focus(&self.focus_handle, cx);
         }
         self.content = content;
+        self.showing = showing;
         cx.notify();
     }
 
@@ -506,9 +574,10 @@ impl Stage {
             .child(
                 img(Arc::clone(&file.path))
                     .image_cache(&self.images)
-                    // An id lets an animated GIF play; each file starts
-                    // from its first frame.
-                    .id(("image", file.staged.1.map_or(0, NodeId::index)))
+                    // An id lets an animated GIF play. Keyed by the file,
+                    // so each file starts from its first frame and a
+                    // rescan, which renumbers the tree, does not restart it.
+                    .id(("image", path_key(&file.path)))
                     .size_full()
                     .object_fit(ObjectFit::ScaleDown)
                     .with_fallback(move || unsupported(fallback_name.clone(), Some(len), muted)),
@@ -537,6 +606,20 @@ impl Stage {
             .text_color(theme.muted_foreground)
             .child(text)
     }
+}
+
+/// A number for a path, to key an element by its file.
+fn path_key(path: &Path) -> usize {
+    use std::hash::{Hash as _, Hasher as _};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    path.hash(&mut hasher);
+    // Only a key: on a 32-bit target, half the bits do as well.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "a key, not a count: losing high bits only makes collisions likelier"
+    )]
+    let key = hasher.finish() as usize;
+    key
 }
 
 /// A file the stage cannot show: its name and size, centred and muted.

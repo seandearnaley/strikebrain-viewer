@@ -61,12 +61,24 @@ pub(crate) enum Loaded {
     /// something that is not a file, a file that cannot be read. `len` is
     /// the file's size when it could be read.
     Unsupported { len: Option<u64> },
+    /// The file is as it was when the stage showed it: the same stamp.
+    /// Nothing was read past its metadata.
+    Unchanged,
 }
 
-/// Reads what the stage needs to show the file at `path`, named `name`.
-/// `cached` is the stamp of a copy of its text the caller already holds.
-pub(crate) fn load(path: &Path, name: &str, cached: Option<Stamp>) -> Loaded {
-    try_load(path, name, cached).unwrap_or(Loaded::Unsupported { len: None })
+/// What the caller holds of a file already.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Held {
+    /// The stamp of the file as the stage shows it now.
+    pub(crate) shown: Option<Stamp>,
+    /// The stamp of a copy of its text in the cache.
+    pub(crate) text: Option<Stamp>,
+}
+
+/// Reads what the stage needs to show the file at `path`, named `name`,
+/// given what the caller already `held`.
+pub(crate) fn load(path: &Path, name: &str, held: Held) -> Loaded {
+    try_load(path, name, held).unwrap_or(Loaded::Unsupported { len: None })
 }
 
 /// The stamp of a regular file, for preloading an image: `None` for
@@ -78,13 +90,17 @@ pub(crate) fn stamp(path: &Path) -> Option<Stamp> {
         .map(|metadata| Stamp::of(&metadata))
 }
 
-fn try_load(path: &Path, name: &str, cached: Option<Stamp>) -> io::Result<Loaded> {
+fn try_load(path: &Path, name: &str, held: Held) -> io::Result<Loaded> {
     // Follows a symlink, so a link to a FIFO is caught before it is opened.
     let metadata = fs::metadata(path)?;
     if !metadata.is_file() {
         return Ok(Loaded::Unsupported { len: None });
     }
     let stamp = Stamp::of(&metadata);
+    if held.shown == Some(stamp) {
+        return Ok(Loaded::Unchanged);
+    }
+    let cached = held.text;
     let mut file = File::open(path)?;
     let mut bytes = Vec::with_capacity(HEAD_LEN);
     file.by_ref()
@@ -158,7 +174,7 @@ mod tests {
         let image = write(dir.path(), "photo.png", b"not really a png");
         let binary = write(dir.path(), "data.txt", b"a\0b");
 
-        let notes = load(&notes, "notes.md", None);
+        let notes = load(&notes, "notes.md", Held::default());
         assert!(matches!(
             notes,
             Loaded::Text {
@@ -167,7 +183,7 @@ mod tests {
             }
         ));
         assert_eq!(text(&notes), Some("# Notes\n"));
-        let code = load(&code, "main.rs", None);
+        let code = load(&code, "main.rs", Held::default());
         assert!(matches!(
             code,
             Loaded::Text {
@@ -176,9 +192,12 @@ mod tests {
             }
         ));
         // An image extension wins; decoding is GPUI's, later.
-        assert!(matches!(load(&image, "photo.png", None), Loaded::Image(_)));
+        assert!(matches!(
+            load(&image, "photo.png", Held::default()),
+            Loaded::Image(_)
+        ));
         assert_eq!(
-            load(&binary, "data.txt", None),
+            load(&binary, "data.txt", Held::default()),
             Loaded::Unsupported { len: Some(3) }
         );
     }
@@ -188,7 +207,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = write(dir.path(), "latin1.txt", b"na\xefve ok\n");
         assert_eq!(
-            text(&load(&path, "latin1.txt", None)),
+            text(&load(&path, "latin1.txt", Held::default())),
             Some("na\u{fffd}ve ok\n")
         );
     }
@@ -205,7 +224,7 @@ mod tests {
             .set_len(TEXT_LIMIT + 1)
             .unwrap();
         assert_eq!(
-            load(&path, "big.log", None),
+            load(&path, "big.log", Held::default()),
             Loaded::Unsupported {
                 len: Some(TEXT_LIMIT + 1)
             }
@@ -217,7 +236,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let line = "0123456789abcdef\n".repeat(2_000);
         let path = write(dir.path(), "long.txt", line.as_bytes());
-        let loaded = load(&path, "long.txt", None);
+        let loaded = load(&path, "long.txt", Held::default());
         assert_eq!(text(&loaded), Some(line.as_str()));
     }
 
@@ -225,11 +244,15 @@ mod tests {
     fn a_cached_copy_with_the_same_stamp_is_not_read_again() {
         let dir = tempfile::tempdir().unwrap();
         let path = write(dir.path(), "a.txt", b"one");
-        let Loaded::Text { stamp, .. } = load(&path, "a.txt", None) else {
+        let Loaded::Text { stamp, .. } = load(&path, "a.txt", Held::default()) else {
             panic!("text");
         };
+        let text_held = Held {
+            text: Some(stamp),
+            ..Held::default()
+        };
         assert_eq!(
-            load(&path, "a.txt", Some(stamp)),
+            load(&path, "a.txt", text_held),
             Loaded::Text {
                 viewer: Viewer::Code,
                 stamp,
@@ -238,7 +261,23 @@ mod tests {
         );
         // A different size is a different stamp: read again.
         fs::write(&path, b"three").unwrap();
-        assert_eq!(text(&load(&path, "a.txt", Some(stamp))), Some("three"));
+        assert_eq!(text(&load(&path, "a.txt", text_held)), Some("three"));
+    }
+
+    #[test]
+    fn a_file_as_the_stage_shows_it_is_not_opened() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(dir.path(), "a.md", b"# one");
+        let Loaded::Text { stamp, .. } = load(&path, "a.md", Held::default()) else {
+            panic!("text");
+        };
+        let shown = Held {
+            shown: Some(stamp),
+            ..Held::default()
+        };
+        assert_eq!(load(&path, "a.md", shown), Loaded::Unchanged);
+        fs::write(&path, b"# two, longer").unwrap();
+        assert_eq!(text(&load(&path, "a.md", shown)), Some("# two, longer"));
     }
 
     #[test]
@@ -249,17 +288,21 @@ mod tests {
         let link = dir.path().join("link.txt");
         std::os::unix::fs::symlink(&folder, &link).unwrap();
         assert_eq!(
-            load(&link, "link.txt", None),
+            load(&link, "link.txt", Held::default()),
             Loaded::Unsupported { len: None }
         );
         assert_eq!(stamp(&link), None);
         // A device: never read, whatever its name says.
         assert_eq!(
-            load(Path::new("/dev/zero"), "zero.png", None),
+            load(Path::new("/dev/zero"), "zero.png", Held::default()),
             Loaded::Unsupported { len: None }
         );
         assert_eq!(
-            load(&dir.path().join("missing.md"), "missing.md", None),
+            load(
+                &dir.path().join("missing.md"),
+                "missing.md",
+                Held::default()
+            ),
             Loaded::Unsupported { len: None }
         );
     }
@@ -277,7 +320,7 @@ mod tests {
         std::os::unix::fs::symlink(&fifo, &link).unwrap();
         // Opening the FIFO for reading would wait for a writer forever.
         assert_eq!(
-            load(&link, "pipe.txt", None),
+            load(&link, "pipe.txt", Held::default()),
             Loaded::Unsupported { len: None }
         );
         assert_eq!(stamp(&link), None);
