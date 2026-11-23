@@ -97,11 +97,21 @@ impl From<TreeError> for ScanError {
 ///
 /// The rules: `.gitignore`, `.ignore`, `.git/info/exclude` and the global
 /// git excludes apply unless [`ScanOptions::show_ignored`] is set, inside a
-/// git repository or not; dotfiles are listed; `.git` and `.DS_Store` are
-/// always skipped; symlinks are leaves and never followed, except that a
-/// root which is itself a symlink is resolved first; a folder that cannot
-/// be read becomes a [`Kind::Unreadable`] leaf. Entries the walker cannot
-/// describe at all are left out. There are no caps.
+/// git repository or not. Which ignore files count depends on where `root`
+/// is:
+///
+/// - Inside a git work tree (`root` or a folder above it holds `.git`):
+///   git's rule. Every `.gitignore` from the repository root down applies,
+///   with that repository's `.git/info/exclude`; `.gitignore` files above
+///   the repository root do not. `ignore` still reads `.ignore` files from
+///   every folder above `root`, as ripgrep does.
+/// - Outside a repository: only ignore files at or below `root`.
+///
+/// Dotfiles are listed; `.git` and `.DS_Store` are always skipped; symlinks
+/// are leaves and never followed, except that a root which is itself a
+/// symlink is resolved first; a folder that cannot be read becomes a
+/// [`Kind::Unreadable`] leaf. Entries the walker cannot describe at all are
+/// left out. There are no caps.
 ///
 /// Setting `cancel` stops the walk at the next entry each thread visits,
 /// so a superseded scan ends early.
@@ -154,16 +164,29 @@ fn walker(root: &Path, options: ScanOptions) -> WalkBuilder {
     let mut builder = WalkBuilder::new(root);
     if options.show_ignored {
         builder.standard_filters(false);
+    } else if inside_git_work_tree(root) {
+        // ignore's git mode (`require_git` and `parents`, both on by
+        // default): `.gitignore` and `.git/info/exclude` files apply from
+        // the repository root down, as in git; those above it do not.
+        builder.hidden(false);
     } else {
-        // Dotfiles show. Git's rules apply outside a repository too, as in
-        // brainstrike.
-        builder.hidden(false).require_git(false);
+        // Outside a repository, git's rules still apply, as in brainstrike,
+        // but only from files at or below the root: nothing above it, where
+        // a folder's ignore files belong to some other project.
+        builder.hidden(false).parents(false).require_git(false);
     }
     builder
         .threads(walk_threads())
         .follow_links(false)
         .filter_entry(|entry| !ALWAYS_SKIPPED.iter().any(|&name| entry.file_name() == name));
     builder
+}
+
+/// Whether `root` or a folder above it holds `.git`, a folder or (for a
+/// worktree or submodule) a file: the test `ignore` makes for a repository.
+fn inside_git_work_tree(root: &Path) -> bool {
+    root.ancestors()
+        .any(|dir| fs::metadata(dir.join(".git")).is_ok())
 }
 
 /// Walker threads: one per core, up to [`MAX_WALK_THREADS`].
@@ -578,6 +601,63 @@ mod tests {
                 "app.log",
                 "keep.txt",
                 "local.tmp"
+            ]
+        );
+    }
+
+    #[test]
+    fn ignore_files_above_a_folder_outside_git_do_not_apply() {
+        let dir = folder(&[
+            ("outer/.gitignore", "*\n"),
+            ("outer/.ignore", "*.md\n"),
+            ("outer/inner/notes.md", "x"),
+            ("outer/inner/src/main.rs", "x"),
+        ]);
+        let inner = dir.path().join("outer/inner");
+        assert_eq!(
+            paths(&scan_default(&inner)),
+            ["src", "src/main.rs", "notes.md"]
+        );
+    }
+
+    #[test]
+    fn ignore_files_above_a_repository_do_not_apply() {
+        let dir = folder(&[
+            ("outer/.gitignore", "*\n"),
+            ("outer/inner/.git/HEAD", "ref"),
+            ("outer/inner/.gitignore", "*.log\n"),
+            ("outer/inner/notes.md", "x"),
+            ("outer/inner/debug.log", "x"),
+            ("outer/inner/src/main.rs", "x"),
+        ]);
+        let inner = dir.path().join("outer/inner");
+        assert_eq!(
+            paths(&scan_default(&inner)),
+            ["src", "src/main.rs", ".gitignore", "notes.md"]
+        );
+    }
+
+    #[test]
+    fn ignore_files_above_a_folder_inside_the_same_repository_apply() {
+        let dir = folder(&[
+            ("repo/.git/HEAD", "ref"),
+            ("repo/.gitignore", "*.log\n/sub/build/\n"),
+            ("repo/sub/a.log", "x"),
+            ("repo/sub/b.txt", "x"),
+            ("repo/sub/build/out.txt", "x"),
+            ("repo/sub/deeper/c.log", "x"),
+        ]);
+        let sub = dir.path().join("repo/sub");
+        assert_eq!(paths(&scan_default(&sub)), ["deeper", "b.txt"]);
+        assert_eq!(
+            paths(&scan_ignored_too(&sub)),
+            [
+                "build",
+                "build/out.txt",
+                "deeper",
+                "deeper/c.log",
+                "a.log",
+                "b.txt"
             ]
         );
     }
