@@ -130,10 +130,7 @@ impl AppView {
             view: session.view,
             kept: session.kept,
             watch: session.watch,
-            quiet: session
-                .store
-                .as_ref()
-                .and_then(|store| store.path().parent().map(PathBuf::from)),
+            quiet: session.store.as_ref().map_or_default(StateStore::own_files),
         };
         let app_state = cx.new(|cx| AppState::with_options(launch, options, cx));
         let explorer = cx.new(|cx| ExplorerPanel::new(app_state.clone(), window, cx));

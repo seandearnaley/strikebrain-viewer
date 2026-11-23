@@ -263,6 +263,18 @@ impl StateStore {
         &self.path
     }
 
+    /// The temporary file a write goes to before it is renamed over the
+    /// state file: beside it, named for this process.
+    fn temporary(&self) -> PathBuf {
+        let folder = self.path.parent().unwrap_or(Path::new("."));
+        folder.join(format!(".state.json.{}.tmp", std::process::id()))
+    }
+
+    /// The files this store writes: the state file and its temporary name.
+    pub(crate) fn own_files(&self) -> Vec<PathBuf> {
+        vec![self.path.clone(), self.temporary()]
+    }
+
     /// The saved state, or `None` if there is none usable: missing,
     /// unreadable, malformed, or of another version.
     #[must_use]
@@ -303,7 +315,7 @@ impl StateStore {
         }
         let folder = self.path.parent().unwrap_or(Path::new("."));
         fs::create_dir_all(folder)?;
-        let temporary = folder.join(format!(".state.json.{}.tmp", std::process::id()));
+        let temporary = self.temporary();
         fs::write(&temporary, &bytes)?;
         fs::rename(&temporary, &self.path)?;
         written.hash = Some(hash);

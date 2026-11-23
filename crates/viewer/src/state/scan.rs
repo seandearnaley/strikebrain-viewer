@@ -76,13 +76,18 @@ impl AppState {
     /// until the new one is ready. Does nothing for a tree with no folder.
     /// With no tree on screen (the first scan runs, or the folder could not
     /// be read) it scans the folder again, and the view waiting for it, or
-    /// the view it had, applies when that scan lands.
+    /// the view it had, applies when that scan lands. A folder that is not
+    /// followed on disk because its watcher could not start is followed
+    /// again.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
         let Some(root) = self.root.clone() else {
             return;
         };
         if self.explorer.is_none() {
             return self.reopen(root, cx);
+        }
+        if self.watch_error.is_some() {
+            self.follow(root.clone(), cx);
         }
         self.start_scan(root, ScanKind::Refresh, cx);
     }

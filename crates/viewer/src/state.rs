@@ -48,9 +48,9 @@ pub struct StateOptions {
     pub kept: Option<SavedFolder>,
     /// Rescan when something under the folder changes on disk.
     pub watch: bool,
-    /// Changes under this folder never cause a rescan: where the app keeps
-    /// its own state, should the open folder hold it.
-    pub quiet: Option<PathBuf>,
+    /// Changes to these files never cause a rescan: the app's own state
+    /// file and its temporary name, should the open folder hold them.
+    pub quiet: Vec<PathBuf>,
 }
 
 /// Where the folder scan stands.
