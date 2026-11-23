@@ -1,22 +1,21 @@
 //! The application state: one entity that both panes observe.
 //!
 //! [`AppState`] owns the explorer engine, the file on the stage
-//! (`current`), the keyboard focus row and the folder scan. Views read it
-//! in `render` and change it only through its methods, each of which
-//! notifies once.
+//! (`current`), the keyboard focus row, the filter asked for and the folder
+//! scan. Views read it in `render` and change it only through its methods,
+//! each of which notifies once.
+//!
+//! Scanning lives in `state/scan.rs` and filtering in `state/filter.rs`.
+
+mod filter;
+mod scan;
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 
-use explorer::{Explorer, NodeId, ScanError, ScanOptions, Tree, read_sizes, scan};
-use gpui_kit::{
-    AppContext as _, Context, PathPromptOptions, Result, SharedString, Task, TaskExt as _,
-};
-
-/// A scan that takes longer than this shows the progress bar.
-const SLOW_SCAN: Duration = Duration::from_millis(200);
+use explorer::{Explorer, KindFilter, NodeId, SortKey, Tree};
+use gpui_kit::{Context, EventEmitter, Result, SharedString, Task};
 
 /// What the app shows when it starts.
 #[derive(Debug)]
@@ -26,7 +25,7 @@ pub enum Launch {
     /// Scan this folder.
     Folder(PathBuf),
     /// Show a tree that is already built, such as a `Tree::from_paths`
-    /// fixture. Nothing touches the disk.
+    /// fixture. Nothing touches the disk; refreshing does nothing.
     Tree(Arc<Tree>),
 }
 
@@ -57,6 +56,15 @@ pub enum Motion {
     Last,
 }
 
+/// What [`AppState`] tells its views besides "something changed".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StateEvent {
+    /// The rows were rebuilt by a command, not by a key on one row: a filter
+    /// landed, folders opened or closed together, the sort or the tree
+    /// changed. The tree keeps the focus row on screen.
+    RowsReplaced,
+}
+
 /// The application state. See the module docs.
 pub struct AppState {
     /// The folder last asked for, as given.
@@ -65,11 +73,23 @@ pub struct AppState {
     status: ScanStatus,
     /// The file on the stage.
     current: Option<NodeId>,
-    /// The keyboard focus row, by node so it survives row changes.
+    /// The keyboard focus row, by node so it survives row changes. Always a
+    /// row on screen, or `None` when there are no rows.
     focus: Option<NodeId>,
     /// Where `focus` was last seen in the rows; checked before use.
     focus_row: usize,
+    /// How many files are checked, kept so a frame need not count them.
+    selected: usize,
     presenting: bool,
+    /// The filter text asked for, as typed. The tree shows it once its
+    /// background job lands.
+    query: String,
+    /// The kind asked for.
+    kind: KindFilter,
+    /// The running filter job. Replacing it drops the previous one.
+    filter_task: Option<Task<Result<()>>>,
+    /// Whether scans list the files the ignore rules would leave out.
+    show_ignored: bool,
     /// Bumped by every scan; a result from an older one is dropped.
     scan_generation: u64,
     /// Stops the running scan's worker threads.
@@ -88,7 +108,11 @@ impl std::fmt::Debug for AppState {
             .field("status", &self.status)
             .field("current", &self.current)
             .field("focus", &self.focus)
+            .field("selected", &self.selected)
             .field("presenting", &self.presenting)
+            .field("query", &self.query)
+            .field("kind", &self.kind)
+            .field("show_ignored", &self.show_ignored)
             .field("scan_generation", &self.scan_generation)
             .finish_non_exhaustive()
     }
@@ -100,6 +124,8 @@ impl Drop for AppState {
     }
 }
 
+impl EventEmitter<StateEvent> for AppState {}
+
 impl AppState {
     /// Creates the state and starts whatever `launch` asks for.
     pub fn new(launch: Launch, cx: &mut Context<Self>) -> Self {
@@ -110,7 +136,12 @@ impl AppState {
             current: None,
             focus: None,
             focus_row: 0,
+            selected: 0,
             presenting: false,
+            query: String::new(),
+            kind: KindFilter::All,
+            filter_task: None,
+            show_ignored: false,
             scan_generation: 0,
             scan_cancel: Arc::new(AtomicBool::new(false)),
             scan_task: None,
@@ -168,6 +199,12 @@ impl AppState {
         }
     }
 
+    /// How many files are checked, hidden ones included. Constant time.
+    #[must_use]
+    pub fn selected_count(&self) -> usize {
+        self.selected
+    }
+
     /// Whether the presentation is showing. Always false until milestone 4.
     #[must_use]
     pub fn is_presenting(&self) -> bool {
@@ -189,130 +226,6 @@ impl AppState {
     #[must_use]
     pub fn name(&self, id: NodeId) -> Option<&str> {
         Some(self.explorer.as_ref()?.tree().name(id))
-    }
-
-    // Opening
-
-    /// Shows the system folder picker and opens the folder chosen.
-    pub fn prompt_for_folder(cx: &mut Context<Self>) {
-        let chosen = cx.prompt_for_paths(PathPromptOptions {
-            files: false,
-            directories: true,
-            multiple: false,
-            prompt: None,
-        });
-        cx.spawn(async move |this, cx| {
-            // A cancelled picker or a dropped channel leaves the current
-            // folder open; a picker that failed to open is logged.
-            let Ok(paths) = chosen.await else {
-                return Ok(());
-            };
-            let Some(root) = paths?.and_then(|paths| paths.into_iter().next()) else {
-                return Ok(());
-            };
-            this.update(cx, |this, cx| this.open_folder(root, cx))
-        })
-        .detach_and_log_err(cx);
-    }
-
-    /// Scans `root` on the background executor and shows its tree. Sizes are
-    /// read afterwards, also in the background. Supersedes any running scan.
-    pub fn open_folder(&mut self, root: PathBuf, cx: &mut Context<Self>) {
-        self.scan_cancel.store(true, Ordering::Relaxed);
-        let cancel = Arc::new(AtomicBool::new(false));
-        self.scan_cancel = Arc::clone(&cancel);
-        self.scan_generation += 1;
-        let generation = self.scan_generation;
-
-        self.root = Some(root.clone());
-        self.explorer = None;
-        self.current = None;
-        self.focus = None;
-        self.status = ScanStatus::Scanning { slow: false };
-
-        // Each task ends early with an error only when the state is gone.
-        let timer = cx.background_executor().timer(SLOW_SCAN);
-        self.slow_task = Some(cx.spawn(async move |this, cx| {
-            timer.await;
-            this.update(cx, |this, cx| this.mark_slow(generation, cx))
-        }));
-        self.scan_task = Some(cx.spawn(async move |this, cx| {
-            let worker_cancel = Arc::clone(&cancel);
-            let scanned = cx
-                .background_spawn(
-                    async move { scan(&root, ScanOptions::default(), &worker_cancel) },
-                )
-                .await;
-            let shown = this.update(cx, |this, cx| this.finish_scan(generation, scanned, cx))?;
-            let Some(tree) = shown else {
-                return Ok(());
-            };
-            // A cancelled read leaves the Size column blank; a newer scan
-            // has replaced this tree by then.
-            let sized = cx
-                .background_spawn(async move { read_sizes(&tree, &cancel) })
-                .await;
-            if sized.is_ok() {
-                this.update(cx, |this, cx| this.finish_sizes(generation, cx))?;
-            }
-            Ok(())
-        }));
-        cx.notify();
-    }
-
-    fn mark_slow(&mut self, generation: u64, cx: &mut Context<Self>) {
-        if generation == self.scan_generation
-            && let ScanStatus::Scanning { slow } = &mut self.status
-        {
-            *slow = true;
-            cx.notify();
-        }
-    }
-
-    /// Shows a finished scan if it is still the latest. Returns the tree so
-    /// the caller can read its sizes.
-    fn finish_scan(
-        &mut self,
-        generation: u64,
-        scanned: Result<Tree, ScanError>,
-        cx: &mut Context<Self>,
-    ) -> Option<Arc<Tree>> {
-        if generation != self.scan_generation {
-            return None;
-        }
-        self.slow_task = None;
-        match scanned {
-            Ok(tree) => {
-                let tree = Arc::new(tree);
-                self.show_tree(Arc::clone(&tree));
-                cx.notify();
-                Some(tree)
-            }
-            Err(ScanError::Cancelled) => None,
-            Err(err) => {
-                self.status = ScanStatus::Failed(err.to_string().into());
-                cx.notify();
-                None
-            }
-        }
-    }
-
-    fn finish_sizes(&mut self, generation: u64, cx: &mut Context<Self>) {
-        if generation == self.scan_generation
-            && let Some(explorer) = &mut self.explorer
-        {
-            explorer.sizes_loaded();
-            cx.notify();
-        }
-    }
-
-    fn show_tree(&mut self, tree: Arc<Tree>) {
-        let explorer = Explorer::new(tree);
-        self.focus = explorer.rows().first().copied();
-        self.focus_row = 0;
-        self.explorer = Some(explorer);
-        self.current = None;
-        self.status = ScanStatus::Idle;
     }
 
     // Rows
@@ -407,6 +320,33 @@ impl AppState {
         cx.notify();
     }
 
+    /// Opens every folder: the toolbar's Expand all.
+    pub fn expand_all(&mut self, cx: &mut Context<Self>) {
+        if let Some(explorer) = self.explorer.as_mut() {
+            explorer.expand_all();
+            self.rows_replaced(cx);
+        }
+    }
+
+    /// Closes every folder: the toolbar's Collapse all. Focus inside a
+    /// folder moves to its top-level folder.
+    pub fn collapse_all(&mut self, cx: &mut Context<Self>) {
+        if let Some(explorer) = self.explorer.as_mut() {
+            explorer.collapse_all();
+            self.rows_replaced(cx);
+        }
+    }
+
+    /// A click on a column header: sorts by `key`, or flips the direction
+    /// when the tree is already sorted by it.
+    pub fn sort_by(&mut self, key: SortKey, cx: &mut Context<Self>) {
+        if let Some(explorer) = self.explorer.as_mut() {
+            let sort = explorer.sort().clicked(key);
+            explorer.set_sort(sort);
+            self.rows_replaced(cx);
+        }
+    }
+
     // Checks and the stage
 
     /// Toggles a checkbox and applies the rules for `current`: checking a
@@ -422,17 +362,32 @@ impl AppState {
 
         if explorer.tree().is_file(id) && explorer.is_selected(id) {
             self.current = Some(id);
-        } else if let Some(current) = self.current
-            && current_was_checked
-            && !explorer.is_selected(current)
-        {
-            self.current = explorer
-                .gallery_next(current)
-                .or_else(|| explorer.gallery_previous(current));
+        } else {
+            self.leave_unchecked_current(current_was_checked);
         }
-        if self.current.is_none() {
-            self.current = explorer.gallery().next();
-        }
+        self.selection_changed();
+        cx.notify();
+    }
+
+    /// Checks every file the filter shows: the toolbar's Select all.
+    pub fn select_all(&mut self, cx: &mut Context<Self>) {
+        let Some(explorer) = self.explorer.as_mut() else {
+            return;
+        };
+        explorer.select_all();
+        self.selection_changed();
+        cx.notify();
+    }
+
+    /// Unchecks every file, hidden ones included: Clear.
+    pub fn clear_selection(&mut self, cx: &mut Context<Self>) {
+        let Some(explorer) = self.explorer.as_mut() else {
+            return;
+        };
+        let current_was_checked = self.current.is_some_and(|c| explorer.is_selected(c));
+        explorer.clear_selection();
+        self.leave_unchecked_current(current_was_checked);
+        self.selection_changed();
         cx.notify();
     }
 
@@ -462,8 +417,83 @@ impl AppState {
         }
     }
 
+    // Shared steps
+
     fn set_focus(&mut self, id: NodeId, row: usize) {
         self.focus = Some(id);
         self.focus_row = row;
+    }
+
+    /// After checks were removed: a `current` that was checked and no
+    /// longer is moves to the next checked file, else the previous one,
+    /// else nothing.
+    fn leave_unchecked_current(&mut self, current_was_checked: bool) {
+        let Some(explorer) = &self.explorer else {
+            return;
+        };
+        if let Some(current) = self.current
+            && current_was_checked
+            && !explorer.is_selected(current)
+        {
+            self.current = explorer
+                .gallery_next(current)
+                .or_else(|| explorer.gallery_previous(current));
+        }
+    }
+
+    /// After any change to the checks: recount, and give an empty stage the
+    /// first checked file.
+    fn selection_changed(&mut self) {
+        let Some(explorer) = &self.explorer else {
+            self.selected = 0;
+            return;
+        };
+        self.selected = explorer.selection().count();
+        if self.current.is_none() {
+            self.current = explorer.gallery().next();
+        }
+    }
+
+    /// After a command rebuilt the rows: keep focus on a row and tell the
+    /// views.
+    fn rows_replaced(&mut self, cx: &mut Context<Self>) {
+        self.settle_focus();
+        cx.emit(StateEvent::RowsReplaced);
+        cx.notify();
+    }
+
+    /// Keeps `focus` on a row on screen after the rows changed. A focus row
+    /// that is gone moves to its deepest folder still on screen, else to
+    /// the first row. One pass over the rows, stopping at the focus row.
+    fn settle_focus(&mut self) {
+        let Some(explorer) = &self.explorer else {
+            return;
+        };
+        let rows = explorer.rows();
+        let Some(focus) = self.focus else {
+            self.focus = rows.first().copied();
+            self.focus_row = 0;
+            return;
+        };
+        if rows.get(self.focus_row) == Some(&focus) {
+            return;
+        }
+        let tree = explorer.tree();
+        let mut nearest = None;
+        for (row, &id) in rows.iter().enumerate() {
+            if id == focus {
+                self.focus_row = row;
+                return;
+            }
+            if tree.subtree(id).contains(&focus.index()) {
+                nearest = Some((row, id));
+            }
+        }
+        if let Some((row, id)) = nearest {
+            self.set_focus(id, row);
+        } else {
+            self.focus = rows.first().copied();
+            self.focus_row = 0;
+        }
     }
 }
