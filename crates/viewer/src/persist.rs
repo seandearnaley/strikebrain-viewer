@@ -9,13 +9,13 @@
 //! whose every file is checked is one entry. The file carries a schema
 //! version; a file that is missing, unreadable, malformed or of another
 //! version is ignored and the app starts fresh. Writes go to a temporary
-//! file that is renamed over the old one, so a reader never sees half a
-//! file.
+//! file, synced to disk, that is renamed over the old one, so a reader
+//! never sees half a file.
 
 use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::hash::{Hash as _, Hasher as _};
-use std::io;
+use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -316,8 +316,14 @@ impl StateStore {
         let folder = self.path.parent().unwrap_or(Path::new("."));
         fs::create_dir_all(folder)?;
         let temporary = self.temporary();
-        fs::write(&temporary, &bytes)?;
-        fs::rename(&temporary, &self.path)?;
+        // On disk before the rename, so a crash leaves the old file or the
+        // new one, never an empty one; on failure, no stray temporary file.
+        let replaced =
+            write_synced(&temporary, &bytes).and_then(|()| fs::rename(&temporary, &self.path));
+        if let Err(err) = replaced {
+            let _removed = fs::remove_file(&temporary);
+            return Err(err);
+        }
         written.hash = Some(hash);
         Ok(true)
     }
@@ -325,6 +331,13 @@ impl StateStore {
     fn lock(&self) -> std::sync::MutexGuard<'_, Written> {
         self.written.lock().unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+/// Writes `bytes` to a new file at `path` and waits until they are on disk.
+fn write_synced(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let mut file = fs::File::create(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()
 }
 
 /// [`APP_ID`] split into the parts `directories` joins again on macOS.

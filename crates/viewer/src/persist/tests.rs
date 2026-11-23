@@ -135,6 +135,21 @@ fn a_store_that_cannot_write_reports_it() {
 }
 
 #[test]
+fn a_write_that_fails_leaves_no_temporary_file() {
+    let dir = tempfile::tempdir().unwrap();
+    // A folder where the state file should be: the rename over it fails
+    // after the temporary file is written.
+    fs::create_dir_all(dir.path().join("state.json/inside")).unwrap();
+    let store = StateStore::at(dir.path().join("state.json"));
+    store.write(store.ticket(), &Saved::default()).unwrap_err();
+    let left: Vec<_> = fs::read_dir(dir.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(left, ["state.json"]);
+}
+
+#[test]
 fn the_state_lives_in_the_config_folder_named_for_the_app() {
     assert_eq!(split_app_id(), ("ai", "brainstrike", "viewer"));
     if std::env::var_os(super::STATE_FILE_VAR).is_none() {
