@@ -12,8 +12,15 @@ ignore = "0.4.35"
 memchr = "2.8.3"
 
 [dev-dependencies]
+# Benchmarks only; no plots, no rayon.
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
 proptest = "1.12.0"
 tempfile = "3.27.0"
+
+# Run with `just bench`; not part of `just check`.
+[[bench]]
+name = "engine"
+harness = false
 
 [lints]
 workspace = true

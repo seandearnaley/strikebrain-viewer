@@ -1714,6 +1714,7 @@ dependencies = [
 name = "explorer"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "fixedbitset",
  "icu_collator",
  "ignore",

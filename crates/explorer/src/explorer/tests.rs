@@ -264,6 +264,18 @@ fn a_stale_filter_result_is_rejected() {
 }
 
 #[test]
+fn a_job_runs_on_another_thread() {
+    let mut explorer = explorer(&SAMPLE);
+    let job = explorer.filter_job("md", KindFilter::All);
+    let result = std::thread::spawn(move || job.run())
+        .join()
+        .unwrap()
+        .unwrap();
+    assert!(explorer.apply_filter(result));
+    assert_eq!(rows(&explorer), ["docs", "docs/a.md", "docs/b.md"]);
+}
+
+#[test]
 fn a_superseded_job_stops_without_a_result() {
     let mut explorer = explorer(&SAMPLE);
     let old = explorer.filter_job("md", KindFilter::All);

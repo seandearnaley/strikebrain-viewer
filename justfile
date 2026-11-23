@@ -26,6 +26,12 @@ lint:
 cov:
     cargo llvm-cov nextest -p explorer --fail-under-lines 90 --show-missing-lines
 
+# Engine benchmarks against the design's budgets; not part of `check`. Pass a
+# filter such as `filter` to run one group. Set EXPLORER_SCAN_ROOT to a large
+# folder (a brainstrike checkout) to bench real scans.
+bench *args:
+    cargo bench -p explorer --bench engine -- {{args}}
+
 # Unused dependencies or source files, then advisories, licenses, bans, sources.
 deps:
     cargo shear --deny-warnings

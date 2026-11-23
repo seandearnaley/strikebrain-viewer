@@ -25,6 +25,7 @@ Design: `docs/superpowers/specs/2026-11-22-strikebrain-viewer-design.md`.
 | Format, spelling and Clippy (the pre-commit hook) | `just lint` |
 | Apply rustfmt and Clippy fixes | `just fix` |
 | Engine coverage; fails under 90% of lines | `just cov` |
+| Engine benchmarks against the budgets; not part of `check` (`EXPLORER_SCAN_ROOT=<large folder>` adds real scans) | `just bench [group]` |
 | Run the app | `just run` |
 | Engine tests | `cargo nextest run -p explorer` |
 | All tests | `cargo nextest run --workspace` |
