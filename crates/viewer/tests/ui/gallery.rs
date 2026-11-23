@@ -442,11 +442,10 @@ fn a_text_tile_shows_the_top_of_its_file(cx: &mut TestAppContext) {
     let text = |cx: &mut TestAppContext, path: &str| {
         let id = node(cx, &view, path);
         cx.update_window(handle, |_, window, _| {
-            window
-                .within(tile(id))
-                .find("tile-text")
-                .value()
-                .map(str::to_owned)
+            let text = window.within(tile(id)).find("tile-text");
+            // A label, so assistive technology reads its value.
+            assert_eq!(text.role(), Some(Role::Label));
+            text.value().map(str::to_owned)
         })
         .unwrap()
     };
@@ -800,4 +799,25 @@ fn a_focused_file_that_goes_gives_its_focus_to_the_file_now_in_its_place(cx: &mu
     // The next key goes on from there.
     press(cx, handle, "right");
     assert_eq!(focused_tile(cx, &view).as_deref(), Some("f072.rs"));
+}
+
+#[gpui_kit::test]
+fn presenting_from_the_gallery_brings_the_files_row_into_view_in_the_tree(cx: &mut TestAppContext) {
+    let dir = files(80);
+    let (handle, view) = gallery_of(cx, dir.path());
+    for _ in 0..70 {
+        press(cx, handle, "right");
+    }
+    let id = node(cx, &view, "f070.rs");
+    let row_shown = |cx: &mut TestAppContext| {
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.try_find(row(id)).is_some_and(|row| row.visible())
+        })
+        .expect("read the tree")
+    };
+    assert!(!row_shown(cx));
+    press(cx, handle, "space");
+    press(cx, handle, "escape");
+    assert!(row_shown(cx), "the presented file's row is in view");
 }

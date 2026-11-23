@@ -107,8 +107,11 @@ impl AppState {
         if self.presenting {
             return;
         }
-        if self.shows_gallery() && self.tile.is_some() {
+        if self.shows_gallery() && self.tile.is_some() && self.tile != self.current {
             self.current = self.tile;
+            // The tree keeps the presented file's row in view, as it does
+            // when the stage's keys move the file.
+            cx.emit(StateEvent::CurrentMoved);
         }
         if self.current.is_some() {
             self.presenting = true;

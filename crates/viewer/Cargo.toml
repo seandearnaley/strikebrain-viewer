@@ -24,8 +24,9 @@ gpui-kit = { workspace = true }
 # The gallery's thumbnails: a picture decoded and scaled down to its tile,
 # as a GPUI image (`RenderImage` holds `image::Frame`s). GPUI's own loader
 # decodes at full size and keeps the result. GPUI already builds this crate
-# with these formats; listing it adds no code. Tests and shots also write
-# PNG, JPEG and GIF files with it.
+# with these formats, so listing it adds no crate; the viewer compiles a few
+# more of its generic functions (scaling, turning, RGBA). Tests and shots
+# also write PNG, JPEG and GIF files with it.
 image = { version = "0.25.10", default-features = false, features = ["bmp", "gif", "ico", "jpeg", "png", "tiff", "webp"] }
 # Live refresh. The 150 ms window runs on GPUI's timer, which tests drive,
 # so neither debouncer crate is used.

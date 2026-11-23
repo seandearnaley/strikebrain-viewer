@@ -119,17 +119,19 @@ fn try_read(
         Viewer::Image if stamp.len() > image_limit(name, &bytes) => unsupported,
         Viewer::Image if stopped() => Read::Stopped,
         Viewer::Image => {
-            read_rest(file, &mut bytes, stamp.len())?;
+            let Some(bytes) = read_picture(file, bytes, stamp.len(), name)? else {
+                return Ok(unsupported);
+            };
             if stopped() {
                 return Ok(Read::Stopped);
             }
             match picture(&bytes, fit, svg) {
-                Some((image, whole)) if bytes.len() as u64 <= IMAGE_LIMIT => Read::Image {
+                Some((image, whole)) => Read::Image {
                     stamp,
                     image,
                     whole,
                 },
-                _ => unsupported,
+                None => unsupported,
             }
         }
         _ if stamp.len() > TEXT_LIMIT => unsupported,
@@ -140,17 +142,24 @@ fn try_read(
     })
 }
 
-/// Reads the rest of a picture of `len` bytes after `bytes`, its head,
-/// into the same buffer, sized for the whole file at once: a buffer grown
-/// by doubling leaves the allocator holding every size it passed through,
-/// some 30 MB a photo on macOS. One byte past the limit tells a file that
-/// grew since.
-fn read_rest(file: File, bytes: &mut Vec<u8>, len: u64) -> io::Result<()> {
+/// Reads the rest of a picture of `len` bytes after `bytes`, its head, into
+/// the same buffer, sized for the whole file at once: a buffer grown by
+/// doubling leaves the allocator holding every size it passed through, some
+/// 30 MB a photo on macOS. `None` when the file, as read, is past the limit
+/// for a picture named `name`: it grew since its size was read, and is not
+/// decoded.
+fn read_picture(
+    file: File,
+    mut bytes: Vec<u8>,
+    len: u64,
+    name: &str,
+) -> io::Result<Option<Vec<u8>>> {
     let len = usize::try_from(len.min(IMAGE_LIMIT)).unwrap_or(usize::MAX);
     bytes.reserve_exact(len.saturating_sub(bytes.len()).saturating_add(1));
+    // One byte past the largest limit tells a file that grew since.
     let rest = (IMAGE_LIMIT + 1).saturating_sub(bytes.len() as u64);
-    file.take(rest).read_to_end(bytes)?;
-    Ok(())
+    file.take(rest).read_to_end(&mut bytes)?;
+    Ok((bytes.len() as u64 <= image_limit(name, &bytes)).then_some(bytes))
 }
 
 /// The top of a text: its first lines, each cut short, tabs as four
@@ -224,39 +233,74 @@ fn raster(bytes: &[u8], format: ImageFormat, fit: (u32, u32)) -> Option<(Arc<Ren
     Some((Arc::new(RenderImage::new(vec![Frame::new(pixels)])), whole))
 }
 
-/// Draws an SVG at its own size, or again at the largest size inside
-/// `fit` when its own is larger.
+/// Draws an SVG at its own size, or at the largest size inside `fit` when
+/// its own is larger. A first drawing at a sixteenth of its size, cheap,
+/// tells its size and proportions; GPUI draws every scale at twice the
+/// pixels, so its own size is sixteen times that drawing whatever the
+/// factor. One too small to draw that way is small enough to draw as it is.
 fn vector(bytes: &[u8], fit: (u32, u32), svg: &SvgRenderer) -> Option<(Arc<RenderImage>, bool)> {
     let parsed = svg.parse_svg(bytes).ok()?;
-    let natural = svg.render_parsed(&parsed, 1.).ok()?;
-    let drawn = natural.size(0);
-    let (width, height) = (
-        u32::try_from(drawn.width.0).ok()?,
-        u32::try_from(drawn.height.0).ok()?,
-    );
-    if width <= fit.0 && height <= fit.1 {
-        return Some((natural, true));
+    let probe = svg
+        .render_parsed(&parsed, 1. / 16.)
+        .ok()
+        .and_then(|image| pixels(&image));
+    let mut proportions = probe;
+    if probe.is_none_or(|(width, height)| width * 16 <= fit.0 && height * 16 <= fit.1) {
+        let natural = svg.render_parsed(&parsed, 1.).ok()?;
+        let (width, height) = pixels(&natural)?;
+        if width <= fit.0 && height <= fit.1 {
+            return Some((natural, true));
+        }
+        proportions = Some((width, height));
     }
-    // Width alone sets the size; the height follows the picture's.
-    let scale = (f64::from(fit.0) / f64::from(width)).min(f64::from(fit.1) / f64::from(height));
-    let fitted = i32::try_from(scaled(width, scale)).ok()?.max(1);
-    let image = svg
-        .render_parsed(
-            &parsed,
-            SvgSize::Size(size(DevicePixels(fitted), DevicePixels(fitted))),
-        )
-        .ok()?;
-    Some((image, false))
+    let (width, height) = proportions?;
+    // Width alone sets the size; the height follows the picture's. The
+    // first drawing's proportions, finer than the probe's, set the second.
+    let mut side = scaled(fit.0, 1.).min(scaled(fit.1, f64::from(width) / f64::from(height)));
+    let mut drawn = None;
+    for _ in 0..3 {
+        let side_px = i32::try_from(side.max(1)).ok()?;
+        let image = svg
+            .render_parsed(
+                &parsed,
+                SvgSize::Size(size(DevicePixels(side_px), DevicePixels(side_px))),
+            )
+            .ok()?;
+        let (drawn_width, drawn_height) = pixels(&image)?;
+        let ratio = f64::from(drawn_width.max(1)) / f64::from(drawn_height.max(1));
+        let best = fit.0.min(scaled(fit.1, ratio)).max(1);
+        let fits = drawn_height <= fit.1;
+        if fits {
+            drawn = Some(image);
+        }
+        if fits && best <= side {
+            break;
+        }
+        side = best;
+    }
+    // Scaled down to its box: not its own size, so not whole.
+    drawn.map(|image| (image, false))
 }
 
-/// `side` times `scale`, which is below 1, rounded down.
+/// A drawn picture's size in device pixels.
+fn pixels(image: &RenderImage) -> Option<(u32, u32)> {
+    let size = image.size(0);
+    Some((
+        u32::try_from(size.width.0).ok()?,
+        u32::try_from(size.height.0).ok()?,
+    ))
+}
+
+/// `side` times `scale`, rounded down, within a `u32`.
 #[expect(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
-    reason = "the product is non-negative and below `side`, a u32"
+    reason = "the product is clamped to a u32's range first"
 )]
 fn scaled(side: u32, scale: f64) -> u32 {
-    (f64::from(side) * scale).floor() as u32
+    (f64::from(side) * scale)
+        .floor()
+        .clamp(0., f64::from(u32::MAX)) as u32
 }
 
 #[cfg(test)]
@@ -462,6 +506,18 @@ mod tests {
         let ((width, height), whole) = picture(&read(&large, "large.svg", None, (256, 192), &svg));
         assert!(!whole);
         assert_eq!((width, height), (256, 128));
+        // Tall: the box's height sets its size.
+        let tall = r#"<svg xmlns="http://www.w3.org/2000/svg" width="300" height="3000"><rect width="300" height="3000" fill="red"/></svg>"#;
+        let tall = write(dir.path(), "tall.svg", tall.as_bytes());
+        let ((width, height), whole) = picture(&read(&tall, "tall.svg", None, (256, 192), &svg));
+        assert!(!whole);
+        assert_eq!((width, height), (19, 190));
+        // Too small for a sixteenth of it to be drawn: its own size.
+        let tiny = r#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4" fill="red"/></svg>"#;
+        let tiny = write(dir.path(), "tiny.svg", tiny.as_bytes());
+        let ((width, height), whole) = picture(&read(&tiny, "tiny.svg", None, (256, 192), &svg));
+        assert!(whole);
+        assert!(width <= 16 && height <= 16, "{width} x {height}");
     }
 
     #[gpui_kit::test]
@@ -485,21 +541,49 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn a_picture_is_read_into_one_buffer_of_its_size() {
+    /// The file at `path` opened, with its first 8 KB read.
+    fn headed(path: &Path) -> (std::fs::File, Vec<u8>) {
         use std::io::Read as _;
-        let dir = tempfile::tempdir().unwrap();
-        let len = 300_000;
-        let path = write(dir.path(), "large.png", &vec![7; len]);
-        let mut file = std::fs::File::open(&path).unwrap();
+        let mut file = std::fs::File::open(path).unwrap();
         let mut bytes = Vec::with_capacity(HEAD_LEN);
         file.by_ref()
             .take(HEAD_LEN as u64)
             .read_to_end(&mut bytes)
             .unwrap();
-        super::read_rest(file, &mut bytes, len as u64).unwrap();
+        (file, bytes)
+    }
+
+    #[test]
+    fn a_picture_is_read_into_one_buffer_of_its_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let len = 300_000;
+        let path = write(dir.path(), "large.png", &vec![7; len]);
+        let (file, head) = headed(&path);
+        let bytes = super::read_picture(file, head, len as u64, "large.png")
+            .unwrap()
+            .expect("within its limit");
         assert_eq!(bytes.len(), len);
         assert!(bytes.capacity() <= len + 1, "{}", bytes.capacity());
+    }
+
+    #[test]
+    fn a_picture_past_its_limit_once_read_is_not_decoded() {
+        // A GIF that grew past an animation's limit since its size was
+        // read: the size it was read at is all the reader knew.
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(dir.path(), "moving.gif", b"GIF89a");
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(crate::stage::load::ANIMATED_IMAGE_LIMIT + 1)
+            .unwrap();
+        let (file, head) = headed(&path);
+        assert!(
+            super::read_picture(file, head, 1000, "moving.gif")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

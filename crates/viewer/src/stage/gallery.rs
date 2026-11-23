@@ -601,6 +601,11 @@ impl Render for Gallery {
             .test_support()
             .role(Role::Grid)
             .aria_label("Gallery")
+            // As last laid out: the list builds only the rows on screen.
+            .when_some(self.grid, |grid, laid_out| {
+                grid.aria_row_count(laid_out.rows)
+                    .aria_column_count(laid_out.columns)
+            })
             .relative()
             .size_full()
             .capture_any_mouse_down(cx.listener(|this, _, _, cx| this.pointer_down(cx)))

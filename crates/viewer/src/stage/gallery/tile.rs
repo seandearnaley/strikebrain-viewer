@@ -3,9 +3,10 @@
 //!
 //! A picture is fitted inside the frame, scaled down and never up. Text is
 //! the monospace font at 9 px on 12 px lines, clipped to the frame at the
-//! last whole line, with no highlighting. A tile shows nothing until its content is read. The tile
-//! of the file on the stage has the accent background; the focused tile
-//! has the focus ring, outside the frame, after a key press.
+//! last whole line, with no highlighting. A tile shows nothing until its
+//! content is read. The tile of the file on the stage has the accent
+//! background; the focused tile has the focus ring, outside the frame,
+//! after a key press.
 
 use std::rc::Rc;
 
@@ -123,6 +124,7 @@ impl Tile {
             Look::Text(head) => div()
                 .id("tile-text")
                 .test_support()
+                .role(Role::Label)
                 .aria_value(head.clone())
                 .absolute()
                 .top(INSET)
