@@ -97,7 +97,7 @@ Neither was added. Rebuild and restart instead.
 
 - The bundle is signed ad hoc (`codesign -s -`), for local use and for tools that find the app by bundle identifier. Distribution needs a Developer ID signature and notarization, which `just bundle` does not do.
 - Live refresh rescans the whole folder a change is in, on any change a scan would show, as the design says; the other folders are left alone. With Show ignored on, a busy folder the tree then shows (a build's `target/`) is rescanned back to back while it changes.
-- Adding a folder inside an open folder opens the tree to its row; when the open folder's scan does not list it (its ignore rules hide it), nothing happens. Adding a folder around open folders removes them; one its ignore rules hide leaves the tree.
+- Folders are told apart by their canonical paths, and `realpath` does not join macOS firmlinks: `/System/Volumes/Data/Users/x` and `/Users/x` stay different, so the same folder added under both is listed twice. The picker and Finder give `/Users/...`.
 - A saved folder that no longer exists at launch is dropped from the saved state, as the design asks, even when it is only on a volume not mounted that day.
 - A change to `.git/info/exclude` or the global git excludes does not trigger a rescan; a `.gitignore` change does.
 - `just shot` draws offscreen. To see the real window, `just bundle`, launch the app, find its window id with `CGWindowListCopyWindowInfo` and run `screencapture -x -o -l <id> out.png`. While the screen is locked `screencapture` captures nothing.
