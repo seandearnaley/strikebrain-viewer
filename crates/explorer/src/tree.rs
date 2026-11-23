@@ -101,7 +101,14 @@ impl std::error::Error for TreeError {}
 ///
 /// Every accessor taking a [`NodeId`] panics if the id is not a node of this
 /// tree.
-#[derive(Clone)]
+///
+/// A tree is not `Clone`: a large one holds hundreds of megabytes, so it is
+/// shared, never copied.
+///
+/// ```compile_fail
+/// fn cloneable<T: Clone>() {}
+/// cloneable::<explorer::Tree>();
+/// ```
 pub struct Tree {
     /// Absolute path of the root folder; empty for [`Tree::from_paths`].
     root_path: PathBuf,
@@ -202,8 +209,7 @@ impl Tree {
     }
 
     /// Every lowercased name in id order, each followed by `'\0'`.
-    #[must_use]
-    pub fn haystack(&self) -> &str {
+    pub(crate) fn haystack(&self) -> &str {
         self.haystack.as_str()
     }
 
@@ -211,20 +217,6 @@ impl Tree {
     /// (or `0..ends[0]`), its `'\0'` included.
     pub(crate) fn haystack_ends(&self) -> &[u32] {
         self.haystack.ends()
-    }
-
-    /// The node whose haystack entry contains byte `offset`.
-    ///
-    /// # Panics
-    ///
-    /// If `offset` is not less than `haystack().len()`.
-    #[must_use]
-    pub fn node_at_haystack(&self, offset: usize) -> NodeId {
-        assert!(
-            offset < self.haystack.byte_len(),
-            "offset {offset} is past the haystack"
-        );
-        NodeId::new(to_u32(self.haystack.entry_at(offset)))
     }
 
     /// The parent folder, or `None` for the root.
@@ -300,14 +292,12 @@ impl Tree {
     /// The node's index into [`Tree::extensions`]. 0 means no extension. A
     /// folder is always 0. Past 65,535 distinct extensions, later ones also
     /// get 0; [`Tree::extension`] still reads them correctly.
-    #[must_use]
-    pub fn ext_id(&self, id: NodeId) -> u16 {
+    pub(crate) fn ext_id(&self, id: NodeId) -> u16 {
         self.ext[id.index()]
     }
 
     /// The interned lowercase extensions; entry 0 is `""`.
-    #[must_use]
-    pub fn extensions(&self) -> &[Box<str>] {
+    pub(crate) fn extensions(&self) -> &[Box<str>] {
         &self.extensions
     }
 

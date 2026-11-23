@@ -61,11 +61,6 @@ impl NameArena {
         &self.ends
     }
 
-    /// The index of the entry whose span contains byte `offset`.
-    pub(crate) fn entry_at(&self, offset: usize) -> usize {
-        self.ends.partition_point(|&end| end as usize <= offset)
-    }
-
     /// The whole buffer.
     pub(crate) fn as_str(&self) -> &str {
         &self.buf
@@ -125,14 +120,14 @@ mod tests {
     }
 
     #[test]
-    fn entry_at_maps_a_byte_offset_to_its_entry() {
+    fn haystack_entries_are_lowercase_and_nul_terminated() {
         let mut arena = NameArena::default();
-        for s in ["ab", "c", "def"] {
+        for s in ["Ab", "c", "DEF"] {
             arena.push_lowercase_terminated(s).unwrap();
         }
         assert_eq!(arena.as_str(), "ab\0c\0def\0");
-        let found: Vec<usize> = (0..arena.byte_len()).map(|o| arena.entry_at(o)).collect();
-        assert_eq!(found, [0, 0, 0, 1, 1, 2, 2, 2, 2]);
+        assert_eq!(arena.ends(), [3, 5, 9]);
+        assert_eq!(arena.get(2), "def\0");
     }
 
     #[test]

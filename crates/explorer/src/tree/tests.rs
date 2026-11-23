@@ -139,16 +139,6 @@ fn the_haystack_holds_lowercase_names_separated_by_nul() {
     let file = id(&tree, "Read Me.TXT");
     assert_eq!(tree.lower_name(file), "read me.txt");
     assert_eq!(tree.name(file), "Read Me.TXT");
-    let at = tree.haystack().find("me.txt").unwrap();
-    assert_eq!(tree.node_at_haystack(at), file);
-    assert_eq!(tree.node_at_haystack(0), NodeId::ROOT);
-}
-
-#[test]
-#[should_panic(expected = "past the haystack")]
-fn an_offset_past_the_haystack_panics() {
-    let tree = Tree::from_paths(&["a"]).unwrap();
-    std::hint::black_box(tree.node_at_haystack(tree.haystack().len()));
 }
 
 #[test]

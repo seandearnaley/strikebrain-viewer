@@ -21,7 +21,14 @@ pub enum Check {
 
 /// The checked files: one bit per node, set only for files and symlinks.
 /// There is no cap on how many.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+///
+/// A selection is sized for its tree, so there is no empty default; make
+/// one with [`Selection::new`].
+///
+/// ```compile_fail
+/// let selection = explorer::Selection::default();
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Selection {
     bits: FixedBitSet,
 }
