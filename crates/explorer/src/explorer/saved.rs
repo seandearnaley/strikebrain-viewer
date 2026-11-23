@@ -1,29 +1,146 @@
 //! Saving and restoring a view by path: the open folders and the checked
 //! files as paths relative to the root, which outlive the tree's ids.
+//!
+//! Two forms. [`Explorer::open_paths`] and [`Explorer::selected_paths`] list
+//! every path. [`Explorer::snapshot`] copies the open folders and the checks
+//! out in constant time per word of bits, so a background thread can name
+//! them; its [`ViewSnapshot::selection`] writes a checked selection
+//! compactly ([`SavedSelection`]): a folder whose every file is checked is
+//! one entry, so "select all" over a million files saves as one path.
 
 use std::collections::HashSet;
+use std::fmt;
+use std::sync::Arc;
 
 use fixedbitset::FixedBitSet;
 
 use super::Explorer;
-use crate::{Kind, NodeId, Selection, Tree};
+use crate::{Check, Kind, NodeId, Selection, Tree, Visibility};
+
+/// Checked files as a saved state holds them: folders whose every file is
+/// checked, then the other checked files. Each is a path relative to the
+/// root with `/` separators; the root itself is `""`. Paths are in id
+/// order, so the same checks always save the same way.
+///
+/// Restoring a folder entry checks every file in that folder at the time
+/// of the restore, which includes files added to it since it was saved.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SavedSelection {
+    /// Folders whose every file was checked. A folder here has none of its
+    /// files or folders listed again.
+    pub folders: Vec<String>,
+    /// The other checked files.
+    pub files: Vec<String>,
+}
+
+impl SavedSelection {
+    /// Whether nothing is checked.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.folders.is_empty() && self.files.is_empty()
+    }
+}
+
+/// The open folders and the checks of an [`Explorer`], copied out so that
+/// naming them, which costs a path per entry, can run off the UI thread.
+/// `Send`; holds the tree.
+#[derive(Clone)]
+pub struct ViewSnapshot {
+    tree: Arc<Tree>,
+    open: FixedBitSet,
+    selection: Selection,
+}
+
+impl fmt::Debug for ViewSnapshot {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ViewSnapshot")
+            .field("open", &self.open.count_ones(..))
+            .field("selected", &self.selection.count())
+            .finish_non_exhaustive()
+    }
+}
+
+impl ViewSnapshot {
+    /// The tree the snapshot was taken of.
+    #[must_use]
+    pub fn tree(&self) -> &Arc<Tree> {
+        &self.tree
+    }
+
+    /// The stored open folders, as [`Explorer::open_paths`] lists them.
+    #[must_use]
+    pub fn open_paths(&self) -> Vec<String> {
+        open_paths(&self.tree, &self.open).collect()
+    }
+
+    /// The checked files, compactly: one entry for a folder whose every
+    /// file is checked, without its contents. Costs one entry per folder
+    /// that is partly checked, plus the entries written.
+    #[must_use]
+    pub fn selection(&self) -> SavedSelection {
+        let tree = &*self.tree;
+        let all = Visibility::all();
+        let check = |id| self.selection.check(tree, &all, id);
+        let mut saved = SavedSelection::default();
+        match check(NodeId::ROOT) {
+            Check::Off => return saved,
+            Check::On => {
+                saved.folders.push(String::new());
+                return saved;
+            }
+            Check::Mixed => {}
+        }
+        // Depth first, children pushed in reverse so the first comes off
+        // first: nodes leave the stack in id order. Only partly checked
+        // folders are opened.
+        let mut stack: Vec<NodeId> = tree.children(NodeId::ROOT).iter().rev().copied().collect();
+        while let Some(id) = stack.pop() {
+            if tree.is_file(id) {
+                if self.selection.is_selected(id) {
+                    saved.files.push(tree.path(id));
+                }
+                continue;
+            }
+            match check(id) {
+                Check::Off => {}
+                Check::On => saved.folders.push(tree.path(id)),
+                Check::Mixed => stack.extend(tree.children(id).iter().rev()),
+            }
+        }
+        saved
+    }
+}
+
+/// The stored open folders among `open`, as relative paths in id order.
+fn open_paths<'a>(tree: &'a Tree, open: &'a FixedBitSet) -> impl Iterator<Item = String> + 'a {
+    open.ones()
+        .map(NodeId::from_index)
+        .filter(move |&id| id != NodeId::ROOT && tree.kind(id) == Kind::Dir)
+        .map(move |id| tree.path(id))
+}
 
 impl Explorer {
     /// The folders the user opened, as paths relative to the root with `/`
     /// separators, in id order. Folders closed for a while under a filter
     /// count as open: that state is temporary and not saved.
     pub fn open_paths(&self) -> impl Iterator<Item = String> + '_ {
-        let tree = &*self.tree;
-        self.expanded
-            .ones()
-            .map(NodeId::from_index)
-            .filter(move |&id| id != NodeId::ROOT && tree.kind(id) == Kind::Dir)
-            .map(move |id| tree.path(id))
+        open_paths(&self.tree, &self.expanded)
     }
 
     /// The checked files, as paths relative to the root, in id order.
     pub fn selected_paths(&self) -> impl Iterator<Item = String> + '_ {
         self.selection.iter().map(|id| self.tree.path(id))
+    }
+
+    /// The open folders and the checks, copied out for saving: two bit sets
+    /// and the tree's `Arc`, so cheap enough for the UI thread at any size.
+    #[must_use]
+    pub fn snapshot(&self) -> ViewSnapshot {
+        ViewSnapshot {
+            tree: Arc::clone(&self.tree),
+            open: self.expanded.clone(),
+            selection: self.selection.clone(),
+        }
     }
 
     /// Opens exactly the folders at `paths`, as [`Explorer::open_paths`]
@@ -51,6 +168,32 @@ impl Explorer {
             checked.insert(id.index());
         }
         self.selection = Selection::from_bits(&self.tree, checked);
+        self.forget_gallery();
+    }
+
+    /// Checks exactly what `saved` holds, as [`ViewSnapshot::selection`]
+    /// wrote it: every file in each of its folders, and each of its files.
+    /// Paths that name nothing in this tree, a file listed as a folder and
+    /// a folder listed as a file are ignored.
+    pub fn restore_saved_selection(&mut self, saved: &SavedSelection) {
+        self.catch_up();
+        let tree = &*self.tree;
+        let mut checked = FixedBitSet::with_capacity(tree.node_count());
+        let folders = saved.folders.iter().map(String::as_str);
+        let mut folder_ids = find_all(tree, folders);
+        if saved.folders.iter().any(String::is_empty) {
+            folder_ids.push(NodeId::ROOT);
+        }
+        for folder in folder_ids {
+            if !tree.is_file(folder) {
+                checked.insert_range(tree.subtree(folder));
+            }
+        }
+        for file in find_all(tree, &saved.files) {
+            checked.insert(file.index());
+        }
+        // Folder bits are dropped here, leaving the files.
+        self.selection = Selection::from_bits(tree, checked);
         self.forget_gallery();
     }
 }

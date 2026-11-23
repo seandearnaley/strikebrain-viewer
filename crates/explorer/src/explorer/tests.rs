@@ -523,6 +523,103 @@ fn saved_paths_restore_open_folders_and_checks() {
 }
 
 #[test]
+fn a_snapshot_saves_fully_checked_folders_as_one_entry() {
+    use crate::SavedSelection;
+
+    let mut view = explorer(&[
+        "a/x.txt",
+        "a/y.txt",
+        "b/deep/1.txt",
+        "b/deep/2.txt",
+        "b/z.txt",
+        "c/empty/",
+        "top.txt",
+    ]);
+    let none = view.snapshot();
+    assert!(none.selection().is_empty());
+    assert!(format!("{none:?}").contains("selected: 0"));
+
+    view.toggle_check(id(&view, "a"));
+    view.toggle_check(id(&view, "b/deep"));
+    view.toggle_check(id(&view, "top.txt"));
+    view.toggle_folder(id(&view, "b"));
+    let snapshot = view.snapshot();
+    assert_eq!(
+        snapshot.selection(),
+        SavedSelection {
+            folders: vec!["a".into(), "b/deep".into()],
+            files: vec!["top.txt".into()],
+        }
+    );
+    assert_eq!(snapshot.open_paths(), ["b"]);
+    assert!(Arc::ptr_eq(snapshot.tree(), view.tree()));
+
+    // A change after the snapshot does not reach it.
+    view.select_all();
+    assert_eq!(snapshot.selection().folders.len(), 2);
+    // Everything checked is the root alone.
+    assert_eq!(
+        view.snapshot().selection(),
+        SavedSelection {
+            folders: vec![String::new()],
+            files: vec![],
+        }
+    );
+}
+
+#[test]
+fn a_compact_selection_restores_the_same_checks() {
+    let paths = [
+        "a/x.txt",
+        "a/y.txt",
+        "b/deep/1.txt",
+        "b/deep/2.txt",
+        "b/z.txt",
+        "top.txt",
+    ];
+    for pick in [
+        &["a"][..],
+        &["b/deep/1.txt", "top.txt"],
+        &["a", "b"],
+        &["b/deep", "b/z.txt", "a/x.txt"],
+    ] {
+        let mut saved = explorer(&paths);
+        for path in pick {
+            saved.toggle_check(id(&saved, path));
+        }
+        let compact = saved.snapshot().selection();
+        let mut restored = explorer(&paths);
+        restored.toggle_check(id(&restored, "a/y.txt"));
+        restored.restore_saved_selection(&compact);
+        assert_eq!(gallery(&restored), gallery(&saved), "{pick:?}");
+    }
+    // Everything, through the root's entry.
+    let mut saved = explorer(&paths);
+    saved.select_all();
+    let mut restored = explorer(&paths);
+    restored.restore_saved_selection(&saved.snapshot().selection());
+    assert_eq!(restored.selection().count(), paths.len());
+}
+
+#[test]
+fn a_saved_folder_checks_what_it_holds_when_restored() {
+    use crate::SavedSelection;
+
+    let mut restored = explorer(&["a/old.txt", "a/new.txt", "a/sub/more.txt", "b.txt", "c/"]);
+    restored.restore_saved_selection(&SavedSelection {
+        // A file named as a folder, a folder named as a file, an empty
+        // folder and paths that are gone are skipped.
+        folders: vec!["a".into(), "b.txt".into(), "c".into(), "gone".into()],
+        files: vec!["c".into(), "gone.txt".into()],
+    });
+    assert_eq!(
+        gallery(&restored),
+        ["a/sub/more.txt", "a/new.txt", "a/old.txt"]
+    );
+    assert!(!restored.is_selected(id(&restored, "b.txt")));
+}
+
+#[test]
 fn open_paths_are_the_stored_open_folders_only() {
     use std::path::PathBuf;
 

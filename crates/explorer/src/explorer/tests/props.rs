@@ -378,6 +378,32 @@ proptest! {
     }
 
     #[test]
+    fn a_snapshot_restores_the_same_view(set in path_sets(), steps in steps()) {
+        let mut explorer = Explorer::new(Arc::new(tree_of(&set)));
+        play(&mut explorer, &steps);
+        let snapshot = explorer.snapshot();
+        let saved = snapshot.selection();
+        let mut restored = Explorer::new(Arc::new(tree_of(&set)));
+        restored.set_sort(explorer.sort());
+        restored.restore_open(snapshot.open_paths());
+        restored.restore_saved_selection(&saved);
+        prop_assert_eq!(restored.selection(), explorer.selection());
+        prop_assert_eq!(snapshot.open_paths(), explorer.open_paths().collect::<Vec<_>>());
+        // Canonical: no entry lies inside a saved folder, and a folder is
+        // listed only when every one of its files is checked.
+        let tree = restored.tree();
+        for folder in &saved.folders {
+            let id = tree.find(folder).unwrap_or(NodeId::ROOT);
+            let range = tree.subtree(id);
+            prop_assert!(range.clone().filter(|&i| tree.files().contains(i)).all(|i| explorer.selection().is_selected(NodeId::new(u32::try_from(i).unwrap()))));
+            for other in saved.folders.iter().chain(&saved.files).filter(|&p| p != folder) {
+                let inner = tree.find(other).unwrap_or(NodeId::ROOT).index();
+                prop_assert!(!(range.start < inner && inner < range.end), "{other} lies inside {folder}");
+            }
+        }
+    }
+
+    #[test]
     fn filter_jobs_and_tree_swaps_interleave_without_stale_results(
         sets in prop::collection::vec(path_sets(), 1..4),
         ops in ops(),

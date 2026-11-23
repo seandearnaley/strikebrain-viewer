@@ -28,6 +28,7 @@ mod tests;
 pub use filtering::{FilterJob, FilterResult};
 pub use gallery::Gallery;
 pub use row::RowView;
+pub use saved::{SavedSelection, ViewSnapshot};
 
 /// A view of one tree: checks, open folders, filter, sort and rows.
 ///
