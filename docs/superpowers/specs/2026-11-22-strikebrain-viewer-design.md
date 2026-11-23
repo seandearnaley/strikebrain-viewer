@@ -1,13 +1,13 @@
 # Strikebrain Viewer design
 
-Status: design approved by Sean on 2026-11-22. Milestones 0 to 5 are built (2026-11-23), with the final review's fixes; where the build settled a question the design left open, the section below says so.
+Status: design approved by Sean on 2026-11-22. Milestones 0 to 5 are built (2026-11-23), with the final review's fixes, and milestone 6, several folders (2026-11-23); where the build settled a question the design left open, the section below says so.
 Companion page: https://claude.ai/artifact/4PaAcuEDiMKYJKyEFCpkD3
 
 ## Purpose
 
 A native desktop viewer for text and image files.
 
-- Left pane: brainstrike's file explorer, ported to Rust. Filter the tree, check files.
+- Left pane: brainstrike's file explorer, ported to Rust, holding any number of folders. Filter the tree, check files.
 - Right pane: a stage showing one file at a time from the checked set. Arrow keys move through the set.
 - Space on the stage starts a fullscreen presentation.
 
@@ -56,18 +56,18 @@ strikebrain-viewer/
 └─ crates/
    ├─ explorer/           library, no GPUI
    │  ├─ src/lib.rs, content.rs, bits.rs, parallel.rs, remap.rs, rows.rs
-   │  ├─ src/tree.rs, tree/{build,names,paths,tests}.rs
+   │  ├─ src/tree.rs, tree/{build,join,names,paths,tests}.rs   join.rs: several scanned folders as one tree
    │  ├─ src/scan.rs, scan/{sizes,changes,tests}.rs   changes.rs: which changes on disk a rescan would show
    │  ├─ src/selection.rs, selection/tests.rs
    │  ├─ src/filter.rs, filter/tests.rs, src/sort.rs, sort/tests.rs
-   │  ├─ src/explorer.rs, explorer/{filtering,gallery,row,saved,tests}.rs, explorer/tests/props.rs
+   │  ├─ src/explorer.rs, explorer/{filtering,folders,gallery,row,saved,tests}.rs, explorer/tests/{props,folders}.rs
    │  ├─ tests/scale.rs
    │  └─ benches/engine.rs
    └─ viewer/             binary `strikebrain-viewer`
       ├─ src/main.rs, lib.rs, app.rs, launch.rs, menus.rs, keys.rs, theme.rs, assets.rs
       ├─ src/explorer_panel.rs, explorer_panel/{toolbar,filter_bar,header,selection_bar}.rs, row.rs, columns.rs
       ├─ src/stage.rs, stage/{loading,render,load,text,images,cache}.rs
-      ├─ src/state.rs, state/{rows,checks,scan,filter,restore,watch}.rs
+      ├─ src/state.rs, state/{folders,rows,checks,scan,filter,restore,watch}.rs
       ├─ src/persist.rs, persist/{format,tests}.rs
       ├─ bundle/          Info.plist template and icon source for `just bundle`
       └─ tests/ui/main.rs and one module per area, tests/shots.rs, tests/icon.rs, tests/fixture/
@@ -87,6 +87,8 @@ Workspace settings:
 
 A scan produces one immutable `Tree`, shared as `Arc<Tree>`. Nodes are numbered in depth-first pre-order. `NodeId` wraps a `u32`. The root folder is id 0.
 
+The explorer shows a joined tree: the scanned folders as its top-level folders, in the order they were added, under a root of its own that is no folder on disk and never a row. Each folder's nodes keep their order and come one folder after another, so ids stay pre-order and a subtree stays one id range; selection, filter, sort and rows work on it unchanged. Joining copies each column in bulk with its ids shifted and sorts nothing again. The tree keeps, for each scanned folder, its top node, its absolute path and its sizes; `abs_path`, `find_abs` and `folder_of` answer by folder. A `Tree::from_paths` fixture is a tree of one folder whose path is empty.
+
 Parallel arrays, one entry per node:
 
 - `names`: a `NameArena`, one `String` buffer plus one offset per node.
@@ -95,7 +97,7 @@ Parallel arrays, one entry per node:
 - `end: Vec<u32>`: the subtree of `id` is the id range `id..end[id]`.
 - `depth: Vec<u16>`
 - `kind: Vec<Kind>`: `Dir`, `File`, `Symlink` or `Unreadable`.
-- `size: Vec<u64>`: a file's byte size; a folder's is the sum of its files.
+- `size`: a file's byte size; a folder's is the sum of its files. Kept per scanned folder and set once, when that folder's sizes are read, so one folder's sizes can arrive after the others'. A joined folder shares its sizes with the scan it came from, so sizes read into either reach both.
 - `ext: Vec<u16>`: index into a small table of interned lowercase extensions.
 - `files: FixedBitSet`: 1 where the node is a file or a symlink.
 - `children`: each folder's child ids as one slice of a shared `Vec<NodeId>`. This list holds the display order.
@@ -104,7 +106,7 @@ Invariants. Each is a property test.
 
 1. `parent[id] < id` for every node except the root.
 2. For a file, `end[id] == id + 1`. For a folder, `id..end[id]` contains exactly its descendants and itself.
-3. Ids follow canonical order: within a folder, folders first, then natural name order ascending.
+3. Ids follow canonical order: within a folder, folders first, then natural name order ascending. The one exception is the root of a joined tree, whose children are its folders in the order joined.
 4. `size[folder]` equals the sum of `size` over the files in its range.
 
 Ids are stable for the life of one `Tree`. Sorting never changes them. A rescan produces a new `Tree` with new ids; state is carried across by path.
@@ -116,11 +118,11 @@ Ids are stable for the life of one `Tree`. Sorting never changes them. A rescan 
 - "Show ignored" rescans with the ignore rules off. `.git` and `.DS_Store` stay skipped.
 - File size comes from the walker's metadata call.
 - A folder that cannot be read becomes a node of kind `Unreadable`. A symlink is a leaf, whatever it points to.
-- Refresh rescans with the current rules.
-- Every scan carries a generation number. A result whose generation is not the latest is dropped.
+- Refresh rescans every folder, each on its own, with the current rules.
+- Every scan carries a generation number. A result whose generation is not the latest for its folder is dropped.
 - No caps on entries per folder, depth or total nodes.
 
-`Tree::from_paths(&[&str])` builds a tree from path strings, so engine tests need no disk.
+`Tree::from_paths(&[&str])` builds a tree from path strings, so engine tests need no disk. `Tree::unreadable(path)` is a folder that could not be read: one node of kind `Unreadable`, so it keeps its place among the folders.
 
 ### Selection
 
@@ -169,17 +171,19 @@ The filter is a pure function `(&Tree, &Query, KindFilter) -> Visibility`. The a
 - Keys: `Name`, `Type`, `Size`. Direction: ascending or descending. Default `Name` ascending.
 - Folders always come before files, in both directions.
 - `Name`: natural order, case-insensitive. `Type`: extension, then name. `Size`: bytes, then name. Direction applies to the primary key only; the name tiebreak is always ascending.
-- A re-sort reorders each folder's slice of `children`. Nothing else changes.
+- A re-sort reorders each folder's slice of `children`. Nothing else changes. The top-level folders of a joined tree keep the order they were added in.
 
 ### Rows
 
-`rows: Vec<NodeId>` is the flattened visible list. It is rebuilt in full after any change to expansion, visibility or sort, by a depth-first walk over `children` that skips closed folders. The root node itself is not a row.
+`rows: Vec<NodeId>` is the flattened visible list. It is rebuilt in full after any change to expansion, visibility or sort, by a depth-first walk over `children` that skips closed folders. The root node itself is not a row; in a joined tree the top-level rows are the folders.
 
 The gallery is every selected file in display order across the whole tree. The filter does not affect it.
 
 ### Facade
 
-`Explorer` owns the `Arc<Tree>`, selection, expansion, visibility, sort and rows. It is a plain struct with no async and no UI types. Its methods cover: read rows, read a node's check state, toggle a check, select all, clear, toggle a folder, expand all, collapse all, set sort, apply a filter result, iterate the gallery, and replace the tree. Replacing the tree carries selection and expansion across by path and returns the old-to-new id mapping, so the app can carry `current`.
+`Explorer` owns the `Arc<Tree>`, selection, expansion, visibility, sort and rows. It is a plain struct with no async and no UI types. Its methods cover: read rows, read a node's check state, toggle a check, select all, clear, toggle a folder, expand all, collapse all, set sort, apply a filter result, iterate the gallery, replace the tree, and add, rescan or remove one folder. Each of those carries selection and expansion across by path and returns the old-to-new id mapping and where `current` goes.
+
+Several folders (milestone 6): `add_folder` joins a scan as a top-level folder, open, at a given place among the folders; top-level folders inside it leave, their checks and open folders carried into it by path. `replace_folder` puts a new scan of one folder in its place and `remove_folder` takes one out with its checks. The folders that stay move whole: their ids shift and nothing is compared. A rescanned folder, or one taken in, merges with the new scan by name, as a refresh does. A folder whose every file was checked keeps every file checked across its rescan; a folder added after Select all comes in unchecked, since each folder counts on its own. `snapshot().folders()` names each folder's open folders and checks relative to it, and `restore_folder` brings one folder's back without touching the others.
 
 ### Content
 
@@ -195,11 +199,12 @@ The gallery is every selected file in display order across the whole tree. The f
 
 One entity, `AppState`, owns:
 
-- `explorer: Explorer`
+- the folders asked for, in the order added: each with its canonical path, its latest scan, its watcher, why it could not be read, and its part of a saved view waiting for its scan
+- `explorer: Explorer`, over the folders on screen
 - `current: Option<NodeId>`: the file on the stage
 - `focus_row: usize`: the keyboard row in the tree
 - `presenting: bool`
-- generation counters for scan and filter, and the latest task of each
+- a generation per folder's scan, and the latest task of each scan and of the filter
 
 Two views observe it: `ExplorerPanel` and `Stage`. The root view lays them out in the Kit's horizontal resizable split. The explorer starts 300 px wide with a 220 px minimum.
 
@@ -213,18 +218,20 @@ Rules for `current`:
 
 ### Launch
 
-- `strikebrain-viewer <folder>` opens that folder. It takes the saved view only if it is the folder saved (compared after canonicalizing).
-- With no argument it reopens the last folder with its saved view; if that folder no longer exists, or there is no usable saved state, it shows the empty state.
+- `strikebrain-viewer <folder>...` opens exactly those folders, in that order, each taking its saved view if it was saved (compared after canonicalizing). The filter, the sort, Show ignored, the file on the stage and the top row come back with any saved folder that opens; folders never saved open fresh.
+- With no argument it reopens the saved folders with their views; a saved folder that no longer exists is dropped. With none left, or no usable saved state, it shows the empty state.
 - The window's bounds and the explorer's width are restored either way.
-- ⌘O opens the system folder picker. A folder given by the system ("Open With", or dropped on the Dock icon; the bundle declares `public.folder`) arrives as a `file://` URL and opens in place of the folder on screen.
-- The window title is the folder's name.
-- The menu bar: the app menu (About, Quit), File (Open Folder…), Edit (Undo, Redo, Cut, Copy, Paste, Select All, for the filter input and the code view), View (Present, Show Ignored with a check, Refresh) and Window (Minimize, Zoom). Present has its own unbound action, because a menu item shows its action's first key as a shortcut and `Present` is Space, which the menu would then take from the filter input. Open Folder is disabled while presenting, as ⌘O is ignored there.
+- Add Folder, one action, adds folders beside those open and never replaces them: ⌘O, the toolbar's button, File → Add Folder…, the empty state's button, a folder given by the system ("Open With", or dropped on the Dock icon; the bundle declares `public.folder`, and it arrives as a `file://` URL), and every folder on the command line. The system picker allows several folders at once.
+- A file is never in the tree twice. Adding a folder already open, or one inside an open folder, scans nothing: the tree opens to its row and makes it the focus row, scrolled into view; keyboard focus stays in the pane that has it. A folder added around open folders takes them in when its scan lands, with their checks and open folders. A folder whose scan lands inside one already on screen is dropped.
+- Each folder scans on its own and lands in its place among the folders, whichever scan lands first.
+- The window title is the folder's name with one folder open, the application's name otherwise.
+- The menu bar: the app menu (About, Quit), File (Add Folder…), Edit (Undo, Redo, Cut, Copy, Paste, Select All, for the filter input and the code view), View (Present, Show Ignored with a check, Refresh) and Window (Minimize, Zoom). Present has its own unbound action, because a menu item shows its action's first key as a shortcut and `Present` is Space, which the menu would then take from the filter input. Add Folder is disabled while presenting, as ⌘O is ignored there.
 
 ### Explorer panel
 
 Top to bottom:
 
-1. **Toolbar**, 36 px. Left: Expand all, Collapse all. Right: Show ignored, Refresh, Select all (which becomes Clear when anything is selected). Icon buttons, 24 px, each with a tooltip and an accessible label.
+1. **Toolbar**, 36 px. Left: Expand all, Collapse all. Right: Add Folder, Show ignored, Refresh, Select all (which becomes Clear when anything is selected). Icon buttons, 24 px, each with a tooltip and an accessible label.
 2. **Filter input**, 32 px, with a search icon and a clear button.
 3. **Kind control**, three equal segments: All, Images, Text.
 4. **Column header**, 28 px, sticky. `Name` always. `Size` when the tree is at least 300 px wide. `Type` when it is at least 420 px wide. Clicking a header sorts by it; clicking again flips direction.
@@ -239,6 +246,8 @@ Row, left to right. These are brainstrike's measurements, except the indent.
 - 6 px gap, 16 px checkbox, 6 px gap, 16 px icon, 6 px gap, name at 14/16 px, truncated. A file's icon says its kind, quietly in the muted colour: a picture, Markdown, other text or code, or anything else (a known binary format), as the Images and Text kinds sort them.
 - `Size` cell: monospace 12 px, tabular figures, one decimal, units B, KB, MB, GB.
 
+Each folder is a top-level row, always, even when it is the only one: a folder row like any other (chevron, checkbox, icon, name, size), named by its last path component, open when added, at the left edge; its contents sit one 12 px step in. Its tooltip is its full path, which tells two folders of one name apart. While hovered, or focused with the focus ring showing, it shows a remove button in place of its size: a 24 px ghost icon button, muted like the chevrons, at the Size cell's right edge (at the row's right edge when the Size column is hidden), tooltip and accessible label "Remove Folder". ⌘⌫ on a focused folder row does the same; keyboard focus moves to the row that takes its place.
+
 Row behaviour:
 
 - Clicking a checkbox toggles it.
@@ -251,12 +260,12 @@ Row behaviour:
 
 States:
 
-- No folder: one "Open Folder" button centred in the pane. The stage is blank.
-- Scanning for more than 200 ms: a thin indeterminate bar under the toolbar.
-- No rows after filtering: the tree area is blank.
-- The folder itself cannot be read: the operating system's error message, one line, in the tree area.
+- No folder: one "Add Folder" button centred in the pane. The stage is blank. Removing the last folder comes back here.
+- Any folder scanning for more than 200 ms: a thin indeterminate bar under the toolbar.
+- No rows after filtering: the tree area is blank. A folder with no match hides like any other folder row.
+- A folder that cannot be read: its row, with the warning icon where the chevron would be; its tooltip gives its path and, on a second line, the operating system's error message. It keeps the checks and open folders it had, saved as they were, and a scan that can read it again (Refresh, or the next launch) brings them back.
 
-Not in version one: column resizing, a column menu, context menus, type-ahead. Multiple root folders arrive in milestone 6.
+Not in version one: column resizing, a column menu, context menus, type-ahead, reordering folders.
 
 ### Stage
 
@@ -312,12 +321,13 @@ Bindings are GPUI actions bound per key context: `Explorer`, `Filter`, `Stage`, 
 | Esc | Clear the filter | Focus the explorer | Leave |
 | Home, End, Page Up, Page Down | Jump | Jump within text | Jump within text |
 | ⌘F | Focus the filter | Focus the filter | |
-| ⌘O | Open folder | Open folder | |
+| ⌘O | Add folders | Add folders | |
+| ⌘⌫ | Remove the focused top-level folder | | |
 | Tab | Next pane | Next pane | |
 
 In the filter input, Esc clears a non-empty query and otherwise moves focus to the tree. Tab order is filter, tree, stage.
 
-Differences from brainstrike: Enter and file clicks show the file on the stage instead of opening a tab; checking a file also shows it; the first arrow press moves focus immediately; Page Up, Page Down, ⌘F and ⌘O are new.
+Differences from brainstrike: Enter and file clicks show the file on the stage instead of opening a tab; checking a file also shows it; the first arrow press moves focus immediately; Page Up, Page Down, ⌘F, ⌘O and ⌘⌫ are new.
 
 ### Theme
 
@@ -330,7 +340,7 @@ Brainstrike's tokens, applied through the Kit's theme system, following the syst
 - border `hsl(30 10% 90%)` / `hsl(30 5% 20%)`
 - info, used for folder icons, `hsl(215 50% 38%)` / `hsl(215 45% 74%)`
 
-Checked and mixed checkboxes use primary with a white check or dash. Unchecked boxes use the background with a primary border. A primary button ("Open Folder") carries white text at 4.5:1 or more: dark mode's primary is too light for that (3.7:1), so dark buttons take light mode's blue, `hsl(215 55% 45%)`, darker on hover and press.
+Checked and mixed checkboxes use primary with a white check or dash. Unchecked boxes use the background with a primary border. A primary button ("Add Folder") carries white text at 4.5:1 or more: dark mode's primary is too light for that (3.7:1), so dark buttons take light mode's blue, `hsl(215 55% 45%)`, darker on hover and press.
 
 ### Accessibility
 
@@ -338,9 +348,9 @@ The tree and its rows carry AccessKit roles, labels and checked state. Tests and
 
 ### Copy
 
-Only these strings appear in the interface: "Filter" as the input placeholder, "All", "Images", "Text", "Name", "Size", "Type", "N selected", "Open Folder", tooltips on icon buttons, and operating system error messages. No taglines, no helper text.
+Only these strings appear in the interface: "Filter" as the input placeholder, "All", "Images", "Text", "Name", "Size", "Type", "N selected", "Add Folder", tooltips on icon buttons ("Remove Folder" on a folder row's), a folder row's path as its tooltip, the application's name as the window title with other than one folder open, and operating system error messages. No taglines, no helper text.
 
-Milestone 5 adds the menu bar's items (named in Launch), the About alert ("Strikebrain Viewer", "Version N", "OK"), and the Refresh tooltip while the folder's changes are not followed: "Refresh. Changes on disk are not followed: " and the error.
+Milestone 5 adds the menu bar's items (named in Launch), the About alert ("Strikebrain Viewer", "Version N", "OK"), and the Refresh tooltip while a folder's changes are not followed: "Refresh. Changes on disk are not followed: " and the error.
 
 ## Milestones 6 and 7: several folders and the gallery
 
@@ -361,6 +371,18 @@ The explorer holds any number of folders, as brainstrike's workspace does.
 - **Window title.** The folder's name with one folder open, the application's name otherwise.
 - **Copy.** "Open Folder" becomes "Add Folder" everywhere; "Remove Folder" is the one new tooltip.
 - **Budgets** hold for the joined tree. New: adding a folder of about 6,000 files to a tree of 1,000,000 entries shows its rows within 100 ms of the scan landing.
+
+Milestone 6 is built (2026-11-23). As built, where the build settled what this section left open or had to differ:
+
+- **One joined tree.** The engine keeps one `Tree` whose root is no folder: each scanned folder's columns are copied in after the last, ids shifted, so pre-order ids and contiguous subtrees hold and nothing outside the tree changed shape (see Engine). A folder change rebuilds the joined tree and carries the view across with an id map: folders that stay move whole by their offset, the rescanned or taken-in folder merges by name. Measured (release, M4 Max): adding 6,000 files to 1,000,000 entries takes 7.7 ms with the folders closed and 12.1 ms with 1,000,000 rows open and every file checked; rescanning or removing that folder beside them 7.6 ms (bench group `folders`). The other budgets hold as before: a filter keystroke on 1 M names 2.1 to 4.6 ms, checking or clearing 1 M files 17 µs, expanding or collapsing 1 M rows 1.6 ms, scanning and showing 6,000 files (now through the join) 8.4 ms, and the 1,650,231-entry reference corpus with ignored files shown 1.85 s.
+- **The top row stays.** The tree view hands the state a probe of the row at the top of its scroll; after a folder is added, rescanned or removed, that row, mapped by path, goes back to the top, so rows that appear or go above it do not move it. A saved view's own top row, while it waits, comes first.
+- **Sizes per folder.** A folder's sizes are its own and shared with its scan, so a folder added late shows its Size cells blank only until its own sizes are read; the other folders keep theirs, and a Size sort is redone as each folder's arrive. A rescan of a folder whose sizes are on screen reads them before it swaps, as before.
+- **A folder that cannot be read** shows as one unreadable row (Explorer panel, States), where the one-folder app showed the message in the tree area. Its view is kept as it was and saved so; Refresh, or a later launch, brings it back once the folder can be read. The file on the stage, if it was in that folder, moves to the nearest checked file as for any file that goes.
+- **"Focused"** for the remove button means the focus row with its ring showing, after a key press; the focus row alone, which a click also sets, does not show it. A folder's row never shows it at launch.
+- **Inside or around.** A folder inside an open folder that the open folder's scan does not list (its ignore rules hide it) has no row to open to: adding it does nothing. A folder added around open folders removes those it takes in even when its ignore rules hide them. A folder that cannot be read takes nothing in.
+- **Saved state** is version 2: a list of folders, each with its canonical path, open folders (its own row as `""`) and checks relative to it; the file on the stage and the top row by their paths on disk. A version 1 file loads as one folder, open. Folders named on the command line replace the saved list when the app next saves; a saved folder not named is not kept.
+- **Live refresh** runs one watcher per folder; a change rescans only its folder, judged against that folder's part of the tree.
+- **A `Tree::from_paths` fixture** shown with `Launch::Tree` keeps its own top-level entries as rows, with no folder rows: it is a test fixture, never what the app opens.
 
 ### Milestone 7: the gallery
 
@@ -400,7 +422,7 @@ From a typical image viewer: zoom and pan, HEIC, AVIF and RAW formats, editing o
 Three tiers.
 
 1. **Engine.** Plain `#[test]` and `proptest` in `explorer`. Property tests compare each fast path with a brute-force version: check state against a recursive count, rows against a naive recursive walk, filter visibility against a per-node check, sort against a full comparison sort. Scan tests use `tempfile`.
-2. **UI integration.** `#[gpui_kit::test]` in `crates/viewer/tests/ui/`: `main.rs` holds the shared helpers and one module per area (rows, checks, filter, header, keyboard, toolbar, stage, presentation, refresh, watch, persist, menus, races, timing probes and others). Each opens a headless window on the real root view over a `Tree::from_paths` fixture or a temporary folder, drives it with clicks and key presses, and asserts on labels, values, focus and model state. `crates/viewer/tests/shots.rs` (`just shot`) renders key states to PNG.
+2. **UI integration.** `#[gpui_kit::test]` in `crates/viewer/tests/ui/`: `main.rs` holds the shared helpers and one module per area (rows, checks, filter, header, keyboard, toolbar, folders, launch, stage, presentation, refresh, watch, persist, menus, races, timing probes and others). Each opens a headless window on the real root view over a `Tree::from_paths` fixture or a temporary folder, drives it with clicks and key presses, and asserts on labels, values, focus and model state. `crates/viewer/tests/shots.rs` (`just shot`) renders key states to PNG.
 3. **Benchmarks.** `criterion` in `explorer/benches`, over a synthetic million-node tree and a real scan.
 
 Behaviour tests ported from brainstrike's suite, by name:
@@ -431,6 +453,7 @@ Targets, not measurements. Milestone 1 ends when the benchmarks meet them or exp
 | Operation | Scale | Budget |
 | --- | --- | --- |
 | Open a folder, tree on screen | 6,000 files | 100 ms |
+| Add a folder beside others, its rows on screen once its scan lands | 6,000 files added to 1 M entries | 100 ms (measured 7.7 ms; milestone 6) |
 | Open a folder with ignored files shown | 1.65 M entries | 3 s, window responsive throughout |
 | Filter keystroke to updated rows | 1 M names | 16 ms |
 | Check or clear a folder | 1 M files | 1 ms |
@@ -449,6 +472,8 @@ Each ends with something that runs and tests that hold it. Each gets its own imp
 | M3 Stage | Image, Markdown and code viewers, left and right, caches, preloading. | Flicking through 1,000 mixed files stays under a fixed memory ceiling recorded in the test. Done: the ceiling is 64 MB of growth over 989 steps; measured 5 to 6 MB (`tests/ui/flick.rs`). |
 | M4 Presentation | Fullscreen, keys, leave. | Entering and leaving keeps the current file and the window's prior fullscreen state. Done: `tests/ui/presentation.rs`. |
 | M5 Finish | Saved state, live refresh, a packaged `.app`. | Quitting and reopening returns the same view. Done: `tests/ui/persist.rs` saves a real folder's view as the app runs and quits, launches a second app over the same state file, and compares every piece. |
+| M6 Several folders | Folders as top-level rows of one joined tree; Add Folder and Remove Folder; per-folder scans, sizes, live refresh and saved views; the old state file still loads. | Several folders come back in order, each with its own view, and adding 6,000 files to a 1 M-entry tree meets its budget. Done: `tests/ui/persist.rs` (`several_folders_come_back_in_order_each_with_its_own_view`), `tests/ui/folders.rs`, `tests/ui/launch.rs`; bench group `folders`, 7.7 ms. |
+| M7 Gallery | A grid of the checked files in front of the stage. | See [Milestone 7](#milestone-7-the-gallery). |
 
 Milestone 0 detail:
 
@@ -456,18 +481,18 @@ Milestone 0 detail:
 
 Milestone 5 detail:
 
-- State is a JSON file in the platform config directory: root path, expanded paths, selected paths, query, kind, sort, first visible row, split width, window bounds. Paths are stored relative to the root.
+- State is a JSON file in the platform config directory: root path, expanded paths, selected paths, query, kind, sort, first visible row, split width, window bounds. Paths are stored relative to the root. (Milestone 6 made it a list of folders: see As built.)
 - Live refresh uses a recursive `notify` watcher with a 150 ms debounce. Any batch of events triggers a full background rescan and a tree swap that carries state across by path.
 
 As built:
 
-- **File.** `~/Library/Application Support/ai.brainstrike.viewer/state.json` on macOS (`directories`' config folder for the bundle identifier). `STRIKEBRAIN_VIEWER_STATE=<file>` points a run elsewhere. Fields: `version` (1), `root` (absolute, canonical), `show_ignored`, `expanded`, `selected` (`folders` and `files`), `current`, `query`, `kind`, `sort` (`key`, `direction`), `first_visible_row`, `explorer_width`, `window` (`state` windowed, maximized or fullscreen; `x`, `y` the frame's top-left corner relative to its display and `width`, `height` the content's size, title bar excluded, which is what a window opens with; the display's UUID). A missing, unreadable, malformed or other-version file is ignored and the app starts fresh; it is replaced at the next save. Unusable values (a relative root, a non-positive size) are dropped.
-- **Checks, compactly.** A folder whose every file is checked is one entry under `folders` (the root is `""`); other checked files are listed under `files`. Select all over any tree saves as one entry. Restoring a folder entry checks every file in it at that time, including files added since. A rescan does the same, so a session and a relaunch agree: a folder whose every file is checked (the whole tree, after Select all) keeps every file checked when files appear in it, by Refresh or live refresh; a file added to a partly checked folder comes in unchecked. Measured (release, M4 Max): 100,000 checked files with no folder fully checked save as 3.96 MB in 22 ms on the background executor (names 12 ms, encoding 5 ms, writing 5 ms) and read back in 4 ms; all 100,000 checked save as 402 bytes. The UI thread copies two bit sets, under a microsecond at this size.
-- **First visible row** is stored by path, not index, so it survives files added above it. Restoring puts that row at the top of the tree and gives it keyboard focus. Under a Size sort it waits for sizes, which reorder the rows.
+- **File.** `~/Library/Application Support/ai.brainstrike.viewer/state.json` on macOS (`directories`' config folder for the bundle identifier). `STRIKEBRAIN_VIEWER_STATE=<file>` points a run elsewhere. Fields (version 2, milestone 6): `version` (2), `folders` (in the order added, each `root`, absolute and canonical, `expanded` and `selected` (`folders` and `files`), paths relative to the folder, `""` the folder itself), `show_ignored`, `current` and `first_visible_row` (paths on disk), `query`, `kind`, `sort` (`key`, `direction`), `explorer_width`, `window` (`state` windowed, maximized or fullscreen; `x`, `y` the frame's top-left corner relative to its display and `width`, `height` the content's size, title bar excluded, which is what a window opens with; the display's UUID). A version 1 file (one `root`, its `expanded`, `selected`, `current` and `first_visible_row` relative to it) loads as one folder, open. A missing, unreadable, malformed or other-version file is ignored and the app starts fresh; it is replaced at the next save. Unusable values (a relative root or path, a non-positive size) are dropped.
+- **Checks, compactly.** A folder whose every file is checked is one entry under its top-level folder's `folders` (the top-level folder itself is `""`); other checked files are listed under `files`. Select all saves as one entry per top-level folder. Restoring a folder entry checks every file in it at that time, including files added since. A rescan does the same, so a session and a relaunch agree: a folder whose every file is checked (each top-level folder, after Select all) keeps every file checked when files appear in it, by Refresh or live refresh; a file added to a partly checked folder comes in unchecked. Measured (release, M4 Max): 100,000 checked files with no folder fully checked save as 3.96 MB in 22 ms on the background executor (names 12 ms, encoding 5 ms, writing 5 ms) and read back in 4 ms; all 100,000 checked save as 402 bytes. The UI thread copies two bit sets, under a microsecond at this size.
+- **First visible row** is stored by its path on disk, not index, so it survives files added above it. Restoring puts that row at the top of the tree and gives it keyboard focus. Under a Size sort it waits for sizes, which reorder the rows.
 - **When it saves.** Half a second after a change, at most once per half second (a change while a save waits rides along), and when the app quits. Closing the window quits, so that save runs with the window still there. A save copies the state on the UI thread and names, encodes and writes it on the background executor; saves land in the order they were taken, an unchanged state is not written again, and the file is written to a temporary name, synced to disk and renamed over the old one; a write that fails removes the temporary file. Scrolling alone does not schedule a save; the next save or the quit records it.
-- **Nothing on screen to save.** Refresh or Show ignored before the first scan lands scan again with the saved view still waiting. A saved folder the launch does not open (its volume not mounted, a folder that is gone, another folder given) is kept and saved again as it was until another folder opens. A folder that vanishes while open (moved, deleted, unmounted) keeps the view it had as the one saved, top row included as of the last save, and Refresh once it is back restores it.
-- **Restoring** happens in two steps: the filter and Show ignored apply before the first scan, so the first tree is already right; sort, open folders, checks, `current` and the top row apply when the scan lands. Window bounds go to the window when it opens, moved and shrunk onto the saved display's visible area, or the primary display's when that display is gone. A fullscreen the presentation made is saved as the window it came from. The explorer's width is fitted to the window: at least 220 px, leaving the stage at least 220 px. A disk change during the first scan does not lose the saved top row: the rescan that follows puts it at the top.
-- **Live refresh.** The watcher (`notify`'s FSEvents backend; creations, removals and modifications, no reads) runs on its own thread and feeds a channel. A GPUI task waits for a change, gathers more for 150 ms on GPUI's timer, then asks `explorer::changes_matter`, off the UI thread, whether a new scan would show any of them: a path the tree lists matters; otherwise the first part of the path the tree lacks matters only if it still exists and the scan's own walker, with the same ignore rules, would list it. Changes inside `.git`, to `.DS_Store`, under ignored folders such as `target/` and `node_modules/`, and to the app's own state file and its temporary name never rescan. Measured: 400 files written under an ignored `target/` and a log ignored at the top, over a second, caused no rescan; one new file in `src/` caused exactly one. Changes that arrive during the folder's first scan wait for its tree and are judged against it. A change while a scan runs asks for one more scan when it lands, never more. A watcher error, or a watcher that lost track with no path to name, rescans once. The watcher is replaced when the folder changes and dropped with the state. One that cannot start (the folder is missing, a watch limit) leaves the folder unfollowed and turns Refresh the warning colour, its tooltip giving the reason; Refresh starts it again. A rescan that finds the file on the stage unchanged (size and modification time) neither reads nor rebuilds its view, so its scroll, selection and keyboard focus stay; a changed file is read again, and focus leaves the view only when the file or its viewer changes. A Markdown link opens only when it is `http`, `https` or `mailto`.
+- **Nothing on screen to save.** Refresh or Show ignored before a folder's first scan lands scan it again with its saved view still waiting, and that view is what is saved meanwhile; a folder added and still scanning saves as open, as it will show. Since milestone 6, a saved folder that no longer exists at launch is dropped, and folders named on the command line are exactly the folders saved next. A folder that vanishes while open (moved, deleted, unmounted) shows as an unreadable row and keeps its open folders and checks as the ones saved; Refresh once it is back restores them.
+- **Restoring** happens in steps: the filter and Show ignored apply before any scan, so the first trees are already right; the sort applies to the first tree; each folder's open folders and checks apply when that folder's first scan lands; `current` and the top row once every folder is on screen. Window bounds go to the window when it opens, moved and shrunk onto the saved display's visible area, or the primary display's when that display is gone. A fullscreen the presentation made is saved as the window it came from. The explorer's width is fitted to the window: at least 220 px, leaving the stage at least 220 px. A disk change during a first scan does not lose the saved top row: the rescan that follows puts it at the top.
+- **Live refresh.** Each folder has its own watcher (`notify`'s FSEvents backend; creations, removals and modifications, no reads), on its own thread, feeding a channel; a change rescans only its folder (milestone 6). A GPUI task waits for a change, gathers more for 150 ms on GPUI's timer, then asks `explorer::changes_matter`, off the UI thread, whether a new scan would show any of them: a path the tree lists matters; otherwise the first part of the path the tree lacks matters only if it still exists and the scan's own walker, with the same ignore rules, would list it. Changes inside `.git`, to `.DS_Store`, under ignored folders such as `target/` and `node_modules/`, and to the app's own state file and its temporary name never rescan. Measured: 400 files written under an ignored `target/` and a log ignored at the top, over a second, caused no rescan; one new file in `src/` caused exactly one. Changes that arrive during a folder's first scan wait for its tree and are judged against it. A change while a folder's scan runs asks for one more scan of it when it lands, never more. A watcher error, or a watcher that lost track with no path to name, rescans its folder once. A watcher is dropped with its folder or the state. One that cannot start (the folder is missing, a watch limit) leaves the folder unfollowed and turns Refresh the warning colour, its tooltip giving the reason; Refresh starts it again. A rescan that finds the file on the stage unchanged (size and modification time) neither reads nor rebuilds its view, so its scroll, selection and keyboard focus stay; a changed file is read again, and focus leaves the view only when the file or its viewer changes. A Markdown link opens only when it is `http`, `https` or `mailto`.
 - **Bundle.** `just bundle` builds the release profile (thin LTO, one codegen unit, debug info stripped, symbol names kept, panics unwind) and assembles `target/release/bundle/osx/Strikebrain Viewer.app` by hand, as the Kit's packaging guide does: the Info.plist template in `crates/viewer/bundle` with the version from Cargo, an `.icns` made with `sips` and `iconutil` from the 1024 px `icon.png` that `just icon` draws, and an ad-hoc signature. Measured on 2026-11-23: binary 26.1 MB (21.4 MB with symbol names stripped as well), bundle 25 MB; launching the bundled binary to its first on-screen window, 0.67 s the first time after a build and 0.20 s after.
 
 ## Functions Sean writes
@@ -495,7 +520,7 @@ Each is set up with its signature, doc comment and failing tests. Sean writes th
 - **The caret's line number.** GPUI Base 0.10.0 draws the line number of the line holding the caret in the theme's foreground and ignores the theme's `editor.active_line_number`, which the app sets to the muted colour. A read-only view still has a caret, at the top when a file opens, so line 1's number stands out until the person clicks elsewhere. Not fixable through the theme in this version.
 - **Window bounds on a real screen.** GPUI reports a window's frame but opens a window at a content size, so the window used to grow by its title bar at each launch (measured on the bundle: 1128, 1160, 1192, 1224 px over four launches); it now saves the content size and stayed at 1096 px over four launches. Those launches ran while the Mac's screen was locked, with no active display, so GPUI placed the window without one; a launch with a display attached, and a window on a second display, have not been seen.
 - **Esc inside the fullscreen animation.** GPUI 0.3.12 makes a window fullscreen asynchronously and keeps AppKit's will-enter and did-enter callbacks to itself; nothing public says a transition is under way. Space then Esc within the half second of the animation can leave the window fullscreen with the presentation ended (the toggle that should undo it may land mid-animation, or before the window reports fullscreen). The green button puts it right. Not handled.
-- **Live refresh on very large folders.** Each change a scan would show rescans the whole folder, as decided. With Show ignored on, a busy folder the tree then shows (a build's `target/`) is rescanned back to back while it changes. On Linux, `notify` uses inotify, which watches every folder separately; a 1.65 M-entry tree would exceed default watch limits. Neither is handled. A change to `.git/info/exclude` or the global excludes does not rescan.
+- **Live refresh on very large folders.** Each change a scan would show rescans the whole folder it is in, as decided; the other folders are left alone. With Show ignored on, a busy folder the tree then shows (a build's `target/`) is rescanned back to back while it changes. On Linux, `notify` uses inotify, which watches every folder separately; a 1.65 M-entry tree would exceed default watch limits. Neither is handled. A change to `.git/info/exclude` or the global excludes does not rescan.
 
 ## References
 

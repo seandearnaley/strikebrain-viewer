@@ -49,6 +49,8 @@ nextest reports a test as slow after 10 s and kills it after 30 s (`.config/next
 - The app saves its state to `~/Library/Application Support/ai.brainstrike.viewer/state.json` (the platform config folder, through `directories`; `crates/viewer/src/persist.rs`). `STRIKEBRAIN_VIEWER_STATE=<file>` points a run elsewhere, for example `STRIKEBRAIN_VIEWER_STATE=/tmp/s.json just run`, so trying a build never touches your own state.
 - Tests never touch it: `AppView::new` saves nothing and follows nothing. Tests that save pass `Session { store: Some(StateStore::at(<temp>/state.json)), .. }` to `AppView::with_session`, or a store to `open_main_window`. The bundle identifier lives in `persist::APP_ID` and in `crates/viewer/bundle/Info.plist`; a unit test keeps them equal.
 - Saves are timed on GPUI's clock: in a test, `cx.executor().advance_clock(SAVE_DELAY)` then `run_until_parked` writes a pending save; `cx.quit()` runs the quit save.
+- The file holds a list of folders (`"version": 2`, `persist/format.rs`); a version 1 file, from before several folders, still loads as one folder. Read it back in a test with `StateStore::at(path).load()` rather than matching its text.
+- Every folder is a top-level row, even alone. UI tests open real folders with `Launch::Folders(vec![...])`; `tests/ui/main.rs` has `node` (a path inside the first folder), `node_at` (a path on disk), `under(dir, rows)` (the rows of one folder, its own row first) and `checked` (checks by path inside their folder). `Launch::Tree` shows a `Tree::from_paths` fixture as it is, with no folder rows.
 - Live refresh (`state/watch.rs`) is off unless `Session::watch` is set. Tests with a real watcher (`tests/ui/watch.rs`) call `cx.executor().allow_parking()`, since its thread wakes the app, and wait in real time with `until`. In such a test every executor timer costs up to 100 ms of real time (the test scheduler parks in 100 ms slices), so wait in few, long steps.
 
 ## Tools
@@ -94,7 +96,9 @@ Neither was added. Rebuild and restart instead.
 ## Known gaps
 
 - The bundle is signed ad hoc (`codesign -s -`), for local use and for tools that find the app by bundle identifier. Distribution needs a Developer ID signature and notarization, which `just bundle` does not do.
-- Live refresh rescans the whole folder on any change a scan would show, as the design says. With Show ignored on, a busy folder the tree then shows (a build's `target/`) is rescanned back to back while it changes.
+- Live refresh rescans the whole folder a change is in, on any change a scan would show, as the design says; the other folders are left alone. With Show ignored on, a busy folder the tree then shows (a build's `target/`) is rescanned back to back while it changes.
+- Adding a folder inside an open folder opens the tree to its row; when the open folder's scan does not list it (its ignore rules hide it), nothing happens. Adding a folder around open folders removes them; one its ignore rules hide leaves the tree.
+- A saved folder that no longer exists at launch is dropped from the saved state, as the design asks, even when it is only on a volume not mounted that day.
 - A change to `.git/info/exclude` or the global git excludes does not trigger a rescan; a `.gitignore` change does.
 - `just shot` draws offscreen. To see the real window, `just bundle`, launch the app, find its window id with `CGWindowListCopyWindowInfo` and run `screencapture -x -o -l <id> out.png`. While the screen is locked `screencapture` captures nothing.
 - Run the bundled binary with `STRIKEBRAIN_VIEWER_STATE=<temp file>` when trying it; without it the run writes your own saved state.
