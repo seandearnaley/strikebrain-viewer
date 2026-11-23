@@ -157,6 +157,7 @@ fn an_unreadable_folder_shows_a_warning_and_never_opens(cx: &mut TestAppContext)
     assert_eq!(focus(cx, &view), Some(locked));
 }
 
+#[cfg(unix)]
 #[gpui_kit::test]
 fn a_symlink_is_a_file_row_that_never_opens(cx: &mut TestAppContext) {
     let dir = folder(&[("real/inside.txt", "x")]);

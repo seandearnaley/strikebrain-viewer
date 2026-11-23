@@ -94,9 +94,7 @@ impl Locked {
     }
 
     fn with_mode(path: &Path, mode: u32) -> Option<Self> {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
-            .expect("lock the folder");
+        set_mode(path, mode);
         let locked = Self(path.to_path_buf());
         std::fs::read_dir(path).is_err().then_some(locked)
     }
@@ -104,11 +102,21 @@ impl Locked {
 
 impl Drop for Locked {
     fn drop(&mut self) {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755))
-            .expect("unlock the folder");
+        set_mode(&self.0, 0o755);
     }
 }
+
+#[cfg(unix)]
+fn set_mode(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+        .expect("set the folder's permissions");
+}
+
+/// Windows has no permission bits: the folder stays readable, so
+/// [`Locked::new`] gives `None` and its tests end early.
+#[cfg(not(unix))]
+fn set_mode(_path: &Path, _mode: u32) {}
 
 /// Writes `bytes` to `root/path`, making its folders.
 fn write(root: &Path, path: &str, bytes: impl AsRef<[u8]>) {
