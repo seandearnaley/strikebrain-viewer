@@ -16,5 +16,13 @@ gpui-kit = { workspace = true }
 [dev-dependencies]
 gpui-kit = { workspace = true, features = ["test-support"] }
 
+# `just shot`: renders key states offscreen to target/shots/*.png. Not a test
+# suite, so `cargo test` and nextest skip it.
+[[test]]
+name = "shots"
+path = "tests/shots.rs"
+harness = false
+test = false
+
 [lints]
 workspace = true

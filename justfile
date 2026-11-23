@@ -46,6 +46,11 @@ fix:
 run:
     cargo run -p viewer
 
+# Render key states of the app offscreen (GPUI's Metal renderer, no window)
+# to target/shots/*.png.
+shot:
+    cargo test -p viewer --test shots
+
 # Install the pinned tools and the pre-commit hook. Needs cargo-binstall.
 setup:
     cargo binstall --no-confirm --locked just@1.59.0 typos-cli@1.52.2 cargo-nextest@0.9.152 cargo-llvm-cov@0.9.2 cargo-deny@0.22.0 cargo-shear@1.14.1 bacon@3.26.0

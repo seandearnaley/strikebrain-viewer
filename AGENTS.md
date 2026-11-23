@@ -27,6 +27,7 @@ Design: `docs/superpowers/specs/2026-11-22-strikebrain-viewer-design.md`.
 | Engine coverage; fails under 90% of lines | `just cov` |
 | Engine benchmarks against the budgets; not part of `check` (`EXPLORER_SCAN_ROOT=<large folder>` adds real scans) | `just bench [group]` |
 | Run the app | `just run` |
+| See the app without a window: key states as PNG images in `target/shots/` | `just shot` |
 | Engine tests | `cargo nextest run -p explorer` |
 | All tests | `cargo nextest run --workspace` |
 | One UI test | `cargo nextest run -p viewer --test ui <name>` |
