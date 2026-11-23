@@ -18,6 +18,7 @@ use icu_collator::preferences::CollationNumericOrdering;
 use icu_collator::{CollatorBorrowed, CollatorPreferences};
 
 use crate::NodeId;
+use crate::bits::Ranks;
 
 mod build;
 mod names;
@@ -130,6 +131,8 @@ pub struct Tree {
     extensions: Vec<Box<str>>,
     /// Set where the node is a file or a symlink.
     files: FixedBitSet,
+    /// Running counts of `files`, so a folder's file count costs no pass.
+    file_ranks: Ranks,
     /// Children of `id` are `child_ids[child_start[id]..child_start[id + 1]]`.
     child_start: Vec<u32>,
     /// Every folder's children, in canonical order.
@@ -340,6 +343,12 @@ impl Tree {
     #[must_use]
     pub fn files(&self) -> &FixedBitSet {
         &self.files
+    }
+
+    /// Files and symlinks among the ids in `range`, in constant time.
+    pub(crate) fn file_count(&self, range: Range<usize>) -> usize {
+        let words = self.files.as_slice();
+        self.file_ranks.count(|w| words[w], range)
     }
 
     /// The node's path relative to the root, with `/` separators. The root's

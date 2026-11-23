@@ -252,6 +252,22 @@ fn a_term_holding_a_nul_matches_nothing() {
 }
 
 #[test]
+fn visible_file_counts_cover_any_id_range() {
+    let (tree, visibility) = run(&["a/x.md", "a/y.rs", "b.md", "c.rs"], "md", KindFilter::All);
+    let a = id(&tree, "a");
+    assert_eq!(visibility.file_count(&tree, tree.subtree(a)), 1);
+    assert_eq!(visibility.file_count(&tree, tree.subtree(NodeId::ROOT)), 2);
+    let all = Visibility::all();
+    assert_eq!(all.file_count(&tree, tree.subtree(NodeId::ROOT)), 4);
+    assert_eq!(all.stamp(), 0);
+    assert_ne!(visibility.stamp(), 0);
+    let again = filter(&tree, &Query::parse("md"), KindFilter::All);
+    // Equal contents, but each run is its own universe.
+    assert_eq!(again, visibility);
+    assert_ne!(again.stamp(), visibility.stamp());
+}
+
+#[test]
 fn a_universe_is_the_visible_set() {
     let (tree, visibility) = run(&["a.txt", "b.txt"], "a", KindFilter::All);
     let universe = visibility.universe().unwrap();

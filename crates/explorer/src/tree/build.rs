@@ -14,6 +14,7 @@ use fixedbitset::FixedBitSet;
 use super::names::{NameArena, extension_of};
 use super::{Kind, Tree, TreeError, canonical_order, to_u32};
 use crate::NodeId;
+use crate::bits::Ranks;
 use crate::parallel::sort_each;
 
 /// The parent of the root, and of nodes the tree should drop.
@@ -226,6 +227,7 @@ impl RawTree {
             sizes: OnceLock::new(),
             ext,
             extensions: extensions.list,
+            file_ranks: Ranks::new(files.as_slice().iter().copied()),
             files,
             child_start,
             child_ids,

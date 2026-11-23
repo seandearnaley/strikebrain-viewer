@@ -197,8 +197,7 @@ impl Explorer {
     /// filter shows.
     #[must_use]
     pub fn check(&self, id: NodeId) -> Check {
-        self.selection
-            .check(&self.tree, self.visibility.universe(), id)
+        self.selection.check(&self.tree, &self.visibility, id)
     }
 
     /// Whether the file `id` is checked.
@@ -218,15 +217,13 @@ impl Explorer {
     /// filter shows.
     pub fn toggle_check(&mut self, id: NodeId) {
         self.catch_up();
-        self.selection
-            .toggle(&self.tree, self.visibility.universe(), id);
+        self.selection.toggle(&self.tree, &self.visibility, id);
     }
 
     /// Checks every file the filter shows. Checked files stay checked.
     pub fn select_all(&mut self) {
         self.catch_up();
-        self.selection
-            .select_all(&self.tree, self.visibility.universe());
+        self.selection.select_all(&self.tree, &self.visibility);
     }
 
     /// Unchecks everything.

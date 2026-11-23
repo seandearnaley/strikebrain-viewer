@@ -100,6 +100,16 @@ fn folder_sizes_sum_their_files() {
 }
 
 #[test]
+fn file_counts_cover_any_id_range() {
+    let tree = Tree::from_paths(&["a/x", "a/y", "b/", "c"]).unwrap();
+    let a = id(&tree, "a");
+    assert_eq!(tree.file_count(tree.subtree(a)), 2);
+    assert_eq!(tree.file_count(tree.subtree(NodeId::ROOT)), 3);
+    assert_eq!(tree.file_count(tree.subtree(id(&tree, "b"))), 0);
+    assert_eq!(tree.file_count(3..3), 0);
+}
+
+#[test]
 fn files_bitset_marks_files_only() {
     let tree = Tree::from_paths(&["d/f", "g"]).unwrap();
     let files: Vec<usize> = tree.files().ones().collect();

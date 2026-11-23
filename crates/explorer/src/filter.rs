@@ -8,10 +8,14 @@
 //! folder is not a row, so the filter never tests its name.
 
 use std::convert::Infallible;
+use std::fmt;
+use std::ops::Range;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use fixedbitset::FixedBitSet;
 use memchr::memmem::Finder;
 
+use crate::bits::Ranks;
 use crate::tree::push_lowercase;
 use crate::{NodeId, Tree, bits, is_binary_extension, is_image_extension};
 
@@ -93,23 +97,87 @@ impl KindFilter {
 /// Which nodes a filter lets through. Inactive (the default) shows
 /// everything; active, it holds one visible bit per node and one bit per
 /// folder that the filter shows open.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+///
+/// Two visibilities are equal when they show the same nodes. Each active
+/// one is also its own selection universe, with a stamp of its own, so
+/// counts made for one are never used for another.
+#[derive(Clone, Default)]
 pub struct Visibility {
     sets: Option<Sets>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone)]
 struct Sets {
     visible: FixedBitSet,
     /// Folders with a visible descendant.
     open: FixedBitSet,
+    /// Visible files and symlinks: the selection universe.
+    visible_files: FixedBitSet,
+    /// Running counts of `visible_files`.
+    file_ranks: Ranks,
+    /// Unique to this run of the filter; never 0.
+    stamp: u64,
 }
+
+impl PartialEq for Visibility {
+    fn eq(&self, other: &Self) -> bool {
+        match (&self.sets, &other.sets) {
+            (None, None) => true,
+            (Some(a), Some(b)) => a.visible == b.visible && a.open == b.open,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for Visibility {}
+
+impl fmt::Debug for Visibility {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut out = f.debug_struct("Visibility");
+        if let Some(sets) = &self.sets {
+            out.field("visible", &sets.visible.ones().collect::<Vec<_>>())
+                .field("open", &sets.open.ones().collect::<Vec<_>>())
+                .field("stamp", &sets.stamp);
+        } else {
+            out.field("active", &false);
+        }
+        out.finish()
+    }
+}
+
+/// The stamp of the next active [`Visibility`].
+static NEXT_STAMP: AtomicU64 = AtomicU64::new(1);
 
 impl Visibility {
     /// The inactive filter: every node visible, no folder opened.
     #[must_use]
     pub fn all() -> Self {
         Self::default()
+    }
+
+    /// An active visibility showing `visible`, which opens every folder
+    /// with a visible descendant.
+    fn active(tree: &Tree, visible: FixedBitSet, open: FixedBitSet) -> Self {
+        let mut visible_files = visible.clone();
+        visible_files.intersect_with(tree.files());
+        let file_ranks = Ranks::new(visible_files.as_slice().iter().copied());
+        Self {
+            sets: Some(Sets {
+                visible,
+                open,
+                visible_files,
+                file_ranks,
+                stamp: NEXT_STAMP.fetch_add(1, Ordering::Relaxed),
+            }),
+        }
+    }
+
+    /// An active visibility for tests that pick the visible set at random.
+    /// It opens no folder.
+    #[cfg(test)]
+    pub(crate) fn from_universe(tree: &Tree, visible: FixedBitSet) -> Self {
+        let open = FixedBitSet::with_capacity(tree.node_count());
+        Self::active(tree, visible, open)
     }
 
     /// Whether a query or a kind other than [`KindFilter::All`] is in force.
@@ -140,6 +208,31 @@ impl Visibility {
     #[must_use]
     pub fn universe(&self) -> Option<&FixedBitSet> {
         self.sets.as_ref().map(|sets| &sets.visible)
+    }
+
+    /// The files a folder's checkbox counts: the visible ones, or every
+    /// file of `tree` when inactive.
+    pub(crate) fn universe_files<'a>(&'a self, tree: &'a Tree) -> &'a FixedBitSet {
+        self.sets
+            .as_ref()
+            .map_or(tree.files(), |sets| &sets.visible_files)
+    }
+
+    /// The files of the universe among the ids in `range`, in constant time.
+    pub(crate) fn file_count(&self, tree: &Tree, range: Range<usize>) -> usize {
+        match &self.sets {
+            None => tree.file_count(range),
+            Some(sets) => {
+                let words = sets.visible_files.as_slice();
+                sets.file_ranks.count(|w| words[w], range)
+            }
+        }
+    }
+
+    /// Which universe this is: 0 for the inactive filter (every file of
+    /// whatever tree), otherwise unique to one run of the filter.
+    pub(crate) fn stamp(&self) -> u64 {
+        self.sets.as_ref().map_or(0, |sets| sets.stamp)
     }
 }
 
@@ -249,9 +342,7 @@ fn run<E>(
         open.insert(parent.index());
         cursor = id;
     }
-    Ok(Visibility {
-        sets: Some(Sets { visible, open }),
-    })
+    Ok(Visibility::active(tree, visible, open))
 }
 
 /// A later include term checks the names already matched one by one, rather
