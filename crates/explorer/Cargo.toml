@@ -3,6 +3,9 @@ name = "explorer"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The file tree engine behind Strikebrain Viewer: scan, filter, sort and select."
 publish.workspace = true
 
 [dependencies]
