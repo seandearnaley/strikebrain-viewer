@@ -3,16 +3,17 @@
 //! The steps, each linear apart from the sibling sorts: group children by
 //! parent, sort each folder's children, number nodes in depth-first
 //! pre-order with an explicit stack, copy every column into id order, then
-//! one backwards pass for subtree ends and folder sizes.
+//! one backwards pass for subtree ends (and folder sizes, when known).
 
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use fixedbitset::FixedBitSet;
 
 use super::names::{NameArena, extension_of};
-use super::{Kind, Tree, TreeError, sibling_order, to_u32};
+use super::{Kind, Tree, TreeError, canonical_order, to_u32};
 use crate::NodeId;
 
 /// Children to sort before a second thread is worth starting.
@@ -29,30 +30,28 @@ pub(crate) struct RawTree {
     names: NameArena,
     parent: Vec<u32>,
     kind: Vec<Kind>,
-    size: Vec<u64>,
+    /// One size per node when the sizes are known up front; `None` leaves
+    /// the built tree without sizes.
+    size: Option<Vec<u64>>,
 }
 
 impl RawTree {
-    /// A raw tree holding only the root folder.
-    pub(crate) fn new(root_name: &str) -> Result<Self, TreeError> {
+    /// A raw tree holding only the root folder. With `sized`, each file's
+    /// size is recorded with [`RawTree::set_size`] and the tree is built
+    /// with sizes; without, the tree has none until they are read.
+    pub(crate) fn new(root_name: &str, sized: bool) -> Result<Self, TreeError> {
         let mut raw = Self {
             names: NameArena::default(),
             parent: Vec::new(),
             kind: Vec::new(),
-            size: Vec::new(),
+            size: sized.then(Vec::new),
         };
-        raw.push(NO_PARENT, root_name, Kind::Dir, 0)?;
+        raw.push(NO_PARENT, root_name, Kind::Dir)?;
         Ok(raw)
     }
 
-    /// Adds a node and returns its raw index.
-    pub(crate) fn push(
-        &mut self,
-        parent: u32,
-        name: &str,
-        kind: Kind,
-        size: u64,
-    ) -> Result<u32, TreeError> {
+    /// Adds a node and returns its raw index. Its size starts at 0.
+    pub(crate) fn push(&mut self, parent: u32, name: &str, kind: Kind) -> Result<u32, TreeError> {
         // NodeId::MAX stays free so `end` can hold `node_count`.
         let raw = u32::try_from(self.parent.len())
             .ok()
@@ -61,8 +60,17 @@ impl RawTree {
         self.names.push(name)?;
         self.parent.push(parent);
         self.kind.push(kind);
-        self.size.push(size);
+        if let Some(size) = &mut self.size {
+            size.push(0);
+        }
         Ok(raw)
+    }
+
+    /// Records a file's size. Ignored when the tree was made without sizes.
+    pub(crate) fn set_size(&mut self, raw: u32, bytes: u64) {
+        if let Some(size) = &mut self.size {
+            size[raw as usize] = bytes;
+        }
     }
 
     /// The node's kind.
@@ -143,7 +151,7 @@ impl RawTree {
     fn sort_runs(&self, folders: Vec<&mut [u32]>) {
         for siblings in folders {
             siblings.sort_unstable_by(|&a, &b| {
-                sibling_order(
+                canonical_order(
                     self.kind[a as usize],
                     self.names.get(a as usize),
                     self.kind[b as usize],
@@ -194,7 +202,7 @@ impl RawTree {
         let mut haystack = NameArena::with_capacity(n, bytes + n);
         let mut parent = Vec::with_capacity(n);
         let mut kind = Vec::with_capacity(n);
-        let mut size = Vec::with_capacity(n);
+        let mut size = self.size.as_ref().map(|_| Vec::with_capacity(n));
         let mut ext = Vec::with_capacity(n);
         let mut extensions = Extensions::default();
         let mut files = FixedBitSet::with_capacity(n);
@@ -210,15 +218,16 @@ impl RawTree {
                 0 => 0,
                 _ => id_of_raw[self.parent[raw] as usize],
             }));
+            if let (Some(size), Some(raw_size)) = (&mut size, &self.size) {
+                size.push(raw_size[raw]);
+            }
             if k.is_file() {
                 files.insert(id);
-                size.push(self.size[raw]);
                 let lower = haystack.get(id);
                 ext.push(
                     extensions.intern(extension_of(lower.strip_suffix('\0').unwrap_or(lower))),
                 );
             } else {
-                size.push(0);
                 ext.push(0);
             }
         }
@@ -229,11 +238,10 @@ impl RawTree {
         for id in (1..n).rev() {
             let p = parent[id].index();
             end[p] = end[p].max(end[id]);
-            size[p] = size[p].saturating_add(size[id]);
         }
 
         let (child_start, child_ids) = children_by_id(&parent);
-        Ok(Tree {
+        let tree = Tree {
             root_path,
             names,
             haystack,
@@ -241,13 +249,17 @@ impl RawTree {
             end,
             depth,
             kind,
-            size,
+            sizes: OnceLock::new(),
             ext,
             extensions: extensions.list,
             files,
             child_start,
             child_ids,
-        })
+        };
+        if let Some(size) = size {
+            tree.set_sizes(size);
+        }
+        Ok(tree)
     }
 }
 
@@ -311,38 +323,43 @@ mod tests {
 
     #[test]
     fn a_node_under_a_file_or_without_a_parent_is_dropped() {
-        let mut raw = RawTree::new("root").unwrap();
-        let file = raw.push(0, "file", Kind::File, 3).unwrap();
-        raw.push(file, "under-file", Kind::File, 5).unwrap();
-        raw.push(NO_PARENT, "orphan", Kind::File, 7).unwrap();
+        let mut raw = RawTree::new("root", true).unwrap();
+        let file = raw.push(0, "file", Kind::File).unwrap();
+        raw.set_size(file, 3);
+        let under = raw.push(file, "under-file", Kind::File).unwrap();
+        raw.set_size(under, 5);
+        let orphan = raw.push(NO_PARENT, "orphan", Kind::File).unwrap();
+        raw.set_size(orphan, 7);
         let tree = raw.build("/r".into()).unwrap();
         assert_eq!(tree.node_count(), 2);
         assert_eq!(tree.name(NodeId::ROOT), "root");
-        assert_eq!(tree.size(NodeId::ROOT), 3);
+        assert_eq!(tree.size(NodeId::ROOT), Some(3));
     }
 
     #[test]
     fn an_unreadable_folder_is_a_leaf() {
-        let mut raw = RawTree::new("root").unwrap();
-        let dir = raw.push(0, "locked", Kind::Dir, 0).unwrap();
-        raw.push(dir, "inside", Kind::File, 1).unwrap();
+        let mut raw = RawTree::new("root", false).unwrap();
+        let dir = raw.push(0, "locked", Kind::Dir).unwrap();
+        raw.push(dir, "inside", Kind::File).unwrap();
         raw.set_kind(dir, Kind::Unreadable);
         assert_eq!(raw.kind(dir), Kind::Unreadable);
         let tree = raw.build(std::path::PathBuf::new()).unwrap();
         assert_eq!(tree.node_count(), 2);
+        assert!(!tree.has_sizes());
+        assert_eq!(tree.size(NodeId::ROOT), None);
         assert_eq!(tree.kind(NodeId::new(1)), Kind::Unreadable);
         assert_eq!(tree.subtree(NodeId::new(1)), 1..2);
     }
 
     #[test]
     fn a_tree_big_enough_to_sort_on_threads_keeps_canonical_order() {
-        let mut raw = RawTree::new("").unwrap();
+        let mut raw = RawTree::new("", false).unwrap();
         // Two folders, each past the threshold, filled in reverse order.
         let size = super::PARALLEL_SORT_MIN + 10;
         for folder in ["b", "a"] {
-            let dir = raw.push(0, folder, Kind::Dir, 0).unwrap();
+            let dir = raw.push(0, folder, Kind::Dir).unwrap();
             for i in (0..size).rev() {
-                raw.push(dir, &format!("f{i}"), Kind::File, 1).unwrap();
+                raw.push(dir, &format!("f{i}"), Kind::File).unwrap();
             }
         }
         let tree = raw.build(std::path::PathBuf::new()).unwrap();

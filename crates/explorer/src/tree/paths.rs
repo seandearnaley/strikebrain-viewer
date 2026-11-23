@@ -9,7 +9,7 @@ use super::{Kind, RawTree, Tree, TreeError};
 pub(super) fn build<'a>(
     paths: impl IntoIterator<Item = (&'a str, u64)>,
 ) -> Result<Tree, TreeError> {
-    let mut raw = RawTree::new("")?;
+    let mut raw = RawTree::new("", true)?;
     // Every node so far by its path without the trailing slash; "" is the root.
     let mut nodes: HashMap<&'a str, u32> = HashMap::from([("", 0)]);
     for (path, size) in paths {
@@ -32,7 +32,8 @@ pub(super) fn build<'a>(
         } else {
             (Kind::File, size)
         };
-        let node = raw.push(parent, name_of(body), kind, size)?;
+        let node = raw.push(parent, name_of(body), kind)?;
+        raw.set_size(node, size);
         nodes.insert(body, node);
     }
     raw.build(PathBuf::new())
@@ -59,7 +60,7 @@ fn folder<'a>(
         return Err(TreeError::Conflict(given.to_owned()));
     }
     for &prefix in missing.iter().rev() {
-        parent = raw.push(parent, name_of(prefix), Kind::Dir, 0)?;
+        parent = raw.push(parent, name_of(prefix), Kind::Dir)?;
         nodes.insert(prefix, parent);
     }
     Ok(parent)

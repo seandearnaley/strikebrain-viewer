@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use proptest::prelude::*;
 
-use super::{Kind, Tree, TreeError, compare_names, sibling_order};
+use super::{Kind, Tree, TreeError, canonical_order, compare_names};
 use crate::NodeId;
 
 const NO_NODES: &[NodeId] = &[];
@@ -61,9 +61,9 @@ fn name_order_ignores_case_and_accents_then_breaks_ties_by_bytes() {
 
 #[test]
 fn folders_come_first_whatever_their_names() {
-    let order = sibling_order(Kind::File, "a", Kind::Dir, "z");
+    let order = canonical_order(Kind::File, "a", Kind::Dir, "z");
     assert_eq!(order, Ordering::Greater);
-    let order = sibling_order(Kind::Unreadable, "z", Kind::Symlink, "a");
+    let order = canonical_order(Kind::Unreadable, "z", Kind::Symlink, "a");
     assert_eq!(order, Ordering::Less);
 }
 
@@ -89,10 +89,14 @@ fn a_trailing_slash_makes_a_folder_and_may_repeat() {
 fn folder_sizes_sum_their_files() {
     let tree =
         Tree::from_paths_with_sizes(&[("a/x", 3), ("a/b/y", 4), ("z", 10), ("a/", 99)]).unwrap();
-    assert_eq!(tree.size(id(&tree, "a/x")), 3);
-    assert_eq!(tree.size(id(&tree, "a/b")), 4);
-    assert_eq!(tree.size(id(&tree, "a")), 7);
-    assert_eq!(tree.size(NodeId::ROOT), 17);
+    assert!(tree.has_sizes());
+    assert_eq!(tree.size(id(&tree, "a/x")), Some(3));
+    assert_eq!(tree.size(id(&tree, "a/b")), Some(4));
+    assert_eq!(tree.size(id(&tree, "a")), Some(7));
+    assert_eq!(tree.size(NodeId::ROOT), Some(17));
+    // Sizes are set once; a second set changes nothing.
+    assert!(!tree.set_sizes(vec![1; tree.node_count()]));
+    assert_eq!(tree.size(NodeId::ROOT), Some(17));
 }
 
 #[test]
@@ -231,24 +235,6 @@ fn children_hold_canonical_order() {
 }
 
 #[test]
-fn sort_children_by_reorders_only_children() {
-    let mut tree = Tree::from_paths(&["a", "b", "c/d", "c/e"]).unwrap();
-    let before = paths(&tree);
-    tree.sort_children_by(|_, a, b| b.cmp(&a));
-    let names: Vec<&str> = tree
-        .children(NodeId::ROOT)
-        .iter()
-        .map(|&c| tree.name(c))
-        .collect();
-    assert_eq!(names, ["b", "a", "c"]);
-    let c = id(&tree, "c");
-    let inner: Vec<&str> = tree.children(c).iter().map(|&n| tree.name(n)).collect();
-    assert_eq!(inner, ["e", "d"]);
-    assert_eq!(paths(&tree), before);
-    assert_eq!(tree.find("c/e"), Some(NodeId::new(3)));
-}
-
-#[test]
 fn debug_output_summarises_the_tree() {
     let tree = Tree::from_paths(&["a/b"]).unwrap();
     let text = format!("{tree:?}");
@@ -371,7 +357,7 @@ proptest! {
             let expected: Vec<NodeId> = tree.ids().filter(|&c| tree.parent(c) == Some(node)).collect();
             prop_assert_eq!(tree.children(node), &expected[..]);
             for pair in expected.windows(2) {
-                let order = sibling_order(tree.kind(pair[0]), tree.name(pair[0]), tree.kind(pair[1]), tree.name(pair[1]));
+                let order = canonical_order(tree.kind(pair[0]), tree.name(pair[0]), tree.kind(pair[1]), tree.name(pair[1]));
                 prop_assert_eq!(order, Ordering::Less);
             }
         }
@@ -381,10 +367,10 @@ proptest! {
     fn a_folder_size_is_the_sum_of_its_files(set in path_sets()) {
         let tree = tree_of(&set);
         for node in tree.ids() {
-            let sum: u64 = tree.subtree(node).filter(|&i| tree.files().contains(i)).map(|i| tree.size(NodeId::new(u32::try_from(i).unwrap()))).sum();
-            prop_assert_eq!(tree.size(node), sum);
+            let sum: u64 = tree.subtree(node).filter(|&i| tree.files().contains(i)).map(|i| tree.size(NodeId::new(u32::try_from(i).unwrap())).unwrap()).sum();
+            prop_assert_eq!(tree.size(node), Some(sum));
             if tree.kind(node).is_file() {
-                prop_assert_eq!(Some(&tree.size(node)), set.get(&tree.path(node)));
+                prop_assert_eq!(tree.size(node), set.get(&tree.path(node)).copied());
             }
         }
     }

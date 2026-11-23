@@ -1,11 +1,19 @@
-//! Building a [`Tree`] from disk with `ignore`'s parallel walker.
+//! Building a [`Tree`] from disk in two steps: [`scan`] lists names and
+//! kinds with `ignore`'s parallel walker, then [`read_sizes`] measures every
+//! file.
+//!
+//! The split exists for speed. Listing reads each folder once; a size needs
+//! one `lstat` per file, and on macOS those calls contend in the kernel. On
+//! the 1.7 million entries of the reference checkout the listing takes about
+//! 2 s and the sizes about 5 s more, so the tree reaches the screen first
+//! and the Size column fills in after.
 //!
 //! Each walker thread records what it sees in its own [`Batch`]: a name, a
-//! kind, a size and the key of the parent folder. Folder keys come from one
-//! shared map from absolute folder path to key; each thread remembers the
-//! last parent it looked up, so the map's lock is taken about once per
-//! folder rather than once per entry. When the walk ends the batches are
-//! joined into a [`RawTree`], which sorts itself into canonical order.
+//! kind and the key of the parent folder. Folder keys come from one shared
+//! map from absolute folder path to key; each thread remembers the last
+//! parent it looked up, so the map's lock is taken about once per folder
+//! rather than once per entry. When the walk ends the batches are joined
+//! into a [`RawTree`], which sorts itself into canonical order.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -20,12 +28,17 @@ use ignore::{DirEntry, ParallelVisitor, ParallelVisitorBuilder, WalkBuilder, Wal
 use crate::tree::{NO_PARENT, RawTree};
 use crate::{Kind, Tree, TreeError};
 
+mod sizes;
+
+pub use sizes::read_sizes;
+
 /// Names skipped in every scan, whatever the ignore rules say.
 const ALWAYS_SKIPPED: [&str; 2] = [".git", ".DS_Store"];
 
-/// The most walker threads worth starting. On macOS, listing and `lstat`
-/// contend in the kernel: on a 16-core M4 Max, scanning 1.7 million entries
-/// took 6.1 s on 6 or 8 threads and 11.6 s on 12, the `ignore` default.
+/// The most walker threads worth starting. On macOS, listing contends in
+/// the kernel: on a 16-core M4 Max, listing 1.7 million entries took 2.0 s
+/// on 5 or 6 threads, 2.5 s on 8 and 3.4 s on 10. (With a stat per file, as
+/// before sizes moved to [`read_sizes`], 12 threads took 11.6 s.)
 const MAX_WALK_THREADS: usize = 6;
 
 /// The root folder's key in the shared folder map.
@@ -78,17 +91,17 @@ impl From<TreeError> for ScanError {
     }
 }
 
-/// Scans the folder at `root` into a tree, walking on up to six threads.
-/// Call it off the UI thread.
+/// Scans the folder at `root` into a tree of names and kinds, walking on up
+/// to six threads. Call it off the UI thread. The tree has no sizes; run
+/// [`read_sizes`] on it next.
 ///
 /// The rules: `.gitignore`, `.ignore`, `.git/info/exclude` and the global
 /// git excludes apply unless [`ScanOptions::show_ignored`] is set, inside a
 /// git repository or not; dotfiles are listed; `.git` and `.DS_Store` are
 /// always skipped; symlinks are leaves and never followed, except that a
 /// root which is itself a symlink is resolved first; a folder that cannot
-/// be read becomes a [`Kind::Unreadable`] leaf; sizes come from the
-/// walker's metadata. Entries the walker cannot describe at all are left
-/// out. There are no caps.
+/// be read becomes a [`Kind::Unreadable`] leaf. Entries the walker cannot
+/// describe at all are left out. There are no caps.
 ///
 /// Setting `cancel` stops the walk at the next entry each thread visits,
 /// so a superseded scan ends early.
@@ -190,7 +203,6 @@ struct Batch {
     name_ends: Vec<usize>,
     parent_key: Vec<usize>,
     kind: Vec<Kind>,
-    size: Vec<u64>,
     /// `(entry, key)` for each folder entry.
     folders: Vec<(usize, usize)>,
     /// Errors the walker reported to this thread.
@@ -251,14 +263,11 @@ impl Collector<'_> {
             return;
         };
         let parent = self.parent_key(parent);
+        // The type comes from the folder listing; nothing here stats the file.
         let kind = match entry.file_type() {
             Some(t) if t.is_symlink() => Kind::Symlink,
             Some(t) if t.is_dir() => Kind::Dir,
             _ => Kind::File,
-        };
-        let size = match kind {
-            Kind::File | Kind::Symlink => entry.metadata().map_or(0, |meta| meta.len()),
-            Kind::Dir | Kind::Unreadable => 0,
         };
         let batch = &mut self.batch;
         let index = batch.len();
@@ -266,7 +275,6 @@ impl Collector<'_> {
         batch.name_ends.push(batch.names.len());
         batch.parent_key.push(parent);
         batch.kind.push(kind);
-        batch.size.push(size);
         if kind == Kind::Dir {
             batch
                 .folders
@@ -338,16 +346,11 @@ fn assemble(root: &Path, shared: Shared<'_>) -> Result<Tree, ScanError> {
         .file_name()
         .unwrap_or(root.as_os_str())
         .to_string_lossy();
-    let mut raw = RawTree::new(&root_name)?;
+    let mut raw = RawTree::new(&root_name, false)?;
     for batch in &batches {
         for entry in 0..batch.len() {
             let parent = folder_raw[batch.parent_key[entry]];
-            raw.push(
-                parent,
-                batch.name(entry),
-                batch.kind[entry],
-                batch.size[entry],
-            )?;
+            raw.push(parent, batch.name(entry), batch.kind[entry])?;
         }
     }
     for key in unreadable {
@@ -397,7 +400,7 @@ mod tests {
     use ignore::{ParallelVisitorBuilder, WalkState};
     use tempfile::TempDir;
 
-    use super::{Collectors, ScanError, ScanOptions, Shared, scan};
+    use super::{Collectors, ScanError, ScanOptions, Shared, read_sizes, scan};
     use crate::{Kind, NodeId, Tree, TreeError};
 
     /// A temporary folder holding `files` (path, contents); a path ending
@@ -467,9 +470,12 @@ mod tests {
         );
         assert_eq!(tree.kind(id(&tree, "A/two")), Kind::Dir);
         assert_eq!(tree.kind(id(&tree, "b.txt")), Kind::File);
-        assert_eq!(tree.size(id(&tree, "A/two/file10.rs")), 10);
-        assert_eq!(tree.size(id(&tree, "A")), 13);
-        assert_eq!(tree.size(NodeId::ROOT), 18);
+        assert!(!tree.has_sizes());
+        assert_eq!(tree.size(NodeId::ROOT), None);
+        read_sizes(&tree, &AtomicBool::new(false)).unwrap();
+        assert_eq!(tree.size(id(&tree, "A/two/file10.rs")), Some(10));
+        assert_eq!(tree.size(id(&tree, "A")), Some(13));
+        assert_eq!(tree.size(NodeId::ROOT), Some(18));
         assert_eq!(
             tree.abs_path(id(&tree, "A/one.md")),
             dir.path().join("A").join("one.md")
@@ -490,6 +496,7 @@ mod tests {
             .collect();
         let dir = folder(&listing);
         let scanned = scan_default(dir.path());
+        read_sizes(&scanned, &AtomicBool::new(false)).unwrap();
         let sized: Vec<(&str, u64)> = files
             .iter()
             .map(|(p, c)| (p.as_str(), c.len() as u64))
@@ -665,7 +672,7 @@ mod tests {
         use std::sync::atomic::AtomicBool;
 
         use super::{folder, id, paths, scan_default};
-        use crate::scan::{ScanError, ScanOptions, scan};
+        use crate::scan::{ScanError, ScanOptions, read_sizes, scan};
         use crate::{Kind, NodeId};
 
         /// Removes all permissions from a folder and restores them on drop,
@@ -724,7 +731,8 @@ mod tests {
             let locked = id(&tree, "locked");
             assert_eq!(tree.kind(locked), Kind::Unreadable);
             assert!(tree.kind(locked).is_folder());
-            assert_eq!(tree.size(locked), 0);
+            read_sizes(&tree, &AtomicBool::new(false)).unwrap();
+            assert_eq!(tree.size(locked), Some(0));
         }
 
         #[test]

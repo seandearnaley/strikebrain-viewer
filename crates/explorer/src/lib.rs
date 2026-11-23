@@ -7,7 +7,7 @@ mod selection;
 mod tree;
 
 pub use fixedbitset::FixedBitSet;
-pub use scan::{ScanError, ScanOptions, scan};
+pub use scan::{ScanError, ScanOptions, read_sizes, scan};
 pub use selection::{Check, Selection};
 pub use tree::{Kind, Tree, TreeError, compare_names};
 

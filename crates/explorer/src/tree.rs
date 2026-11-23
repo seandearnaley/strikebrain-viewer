@@ -10,7 +10,7 @@ use std::cmp::Ordering;
 use std::fmt;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
+use std::sync::{LazyLock, OnceLock};
 
 use fixedbitset::FixedBitSet;
 use icu_collator::options::{CollatorOptions, Strength};
@@ -89,8 +89,14 @@ impl fmt::Display for TreeError {
 
 impl std::error::Error for TreeError {}
 
-/// One scanned folder. Immutable apart from the display order of
-/// [`Tree::children`]; share it as `Arc<Tree>`.
+/// One scanned folder. Immutable once its sizes are known; share it as
+/// `Arc<Tree>`.
+///
+/// A scan lists names and kinds first, so a large folder reaches the screen
+/// before every file has been measured. [`crate::read_sizes`] then fills the
+/// sizes, exactly once, on whatever thread runs it; until then
+/// [`Tree::size`] is `None`. [`Tree::children`] is always canonical order;
+/// a sorted view keeps its own order beside the tree.
 ///
 /// Every accessor taking a [`NodeId`] panics if the id is not a node of this
 /// tree.
@@ -108,7 +114,9 @@ pub struct Tree {
     depth: Vec<u16>,
     kind: Vec<Kind>,
     /// A file's bytes; a folder's is the sum over the files in its subtree.
-    size: Vec<u64>,
+    /// Set once: at build for [`Tree::from_paths_with_sizes`], or later by
+    /// [`crate::read_sizes`] for a scanned tree.
+    sizes: OnceLock<Box<[u64]>>,
     /// Index into `extensions`; 0 is "no extension".
     ext: Vec<u16>,
     extensions: Vec<Box<str>>,
@@ -116,7 +124,7 @@ pub struct Tree {
     files: FixedBitSet,
     /// Children of `id` are `child_ids[child_start[id]..child_start[id + 1]]`.
     child_start: Vec<u32>,
-    /// Every folder's children, in display order.
+    /// Every folder's children, in canonical order.
     child_ids: Vec<NodeId>,
 }
 
@@ -126,6 +134,7 @@ impl fmt::Debug for Tree {
             .field("root_path", &self.root_path)
             .field("nodes", &self.node_count())
             .field("files", &self.files.count_ones(..))
+            .field("sizes", &self.has_sizes())
             .finish_non_exhaustive()
     }
 }
@@ -235,10 +244,45 @@ impl Tree {
         self.files.contains(id.index())
     }
 
-    /// A file's size in bytes; a folder's is the sum over its files.
+    /// A file's size in bytes; a folder's is the sum over its files. `None`
+    /// until the sizes are known: a scanned tree has none until
+    /// [`crate::read_sizes`] runs.
     #[must_use]
-    pub fn size(&self, id: NodeId) -> u64 {
-        self.size[id.index()]
+    pub fn size(&self, id: NodeId) -> Option<u64> {
+        let sizes = self.sizes.get()?;
+        Some(sizes[id.index()])
+    }
+
+    /// Whether [`Tree::size`] has values.
+    #[must_use]
+    pub fn has_sizes(&self) -> bool {
+        self.sizes.get().is_some()
+    }
+
+    /// Stores sizes given for files (folders' entries are ignored) and sums
+    /// each folder. Returns `false`, changing nothing, if sizes were already
+    /// set.
+    ///
+    /// # Panics
+    ///
+    /// If `sizes` does not hold one entry per node.
+    pub(crate) fn set_sizes(&self, mut sizes: Vec<u64>) -> bool {
+        assert_eq!(sizes.len(), self.node_count(), "one size per node");
+        if self.has_sizes() {
+            return false;
+        }
+        for (id, size) in sizes.iter_mut().enumerate() {
+            if !self.files.contains(id) {
+                *size = 0;
+            }
+        }
+        // Children have larger ids than their parent, so one backwards pass
+        // completes every subtree before it reaches the parent.
+        for id in (1..sizes.len()).rev() {
+            let parent = self.parent[id].index();
+            sizes[parent] = sizes[parent].saturating_add(sizes[id]);
+        }
+        self.sizes.set(sizes.into_boxed_slice()).is_ok()
     }
 
     /// The node's index into [`Tree::extensions`]. 0 means no extension. A
@@ -266,11 +310,16 @@ impl Tree {
         }
     }
 
-    /// The folder's children in display order; empty for a file.
+    /// The folder's children in canonical order; empty for a file.
     #[must_use]
     pub fn children(&self, id: NodeId) -> &[NodeId] {
+        &self.child_ids[self.child_range(id)]
+    }
+
+    /// Where the node's children sit in the shared children list.
+    fn child_range(&self, id: NodeId) -> Range<usize> {
         let i = id.index();
-        &self.child_ids[self.child_start[i] as usize..self.child_start[i + 1] as usize]
+        self.child_start[i] as usize..self.child_start[i + 1] as usize
     }
 
     /// The ids of the node and all its descendants, as array indices.
@@ -322,19 +371,6 @@ impl Tree {
         Some(node)
     }
 
-    /// Reorders each folder's [`Tree::children`] by `compare`. Ids and every
-    /// other array stay as they are.
-    pub fn sort_children_by(&mut self, mut compare: impl FnMut(&Self, NodeId, NodeId) -> Ordering) {
-        let mut ids = std::mem::take(&mut self.child_ids);
-        for window in self.child_start.windows(2) {
-            let siblings = &mut ids[window[0] as usize..window[1] as usize];
-            if siblings.len() > 1 {
-                siblings.sort_by(|&a, &b| compare(self, a, b));
-            }
-        }
-        self.child_ids = ids;
-    }
-
     /// The node and its ancestors up to, but not including, the root.
     fn ancestry(&self, id: NodeId) -> Vec<NodeId> {
         let mut chain = Vec::with_capacity(usize::from(self.depth(id)));
@@ -347,7 +383,7 @@ impl Tree {
     }
 
     /// The child of `folder` named exactly `name`, walking siblings in id
-    /// order so that a re-sorted children list does not matter.
+    /// order.
     fn child_named(&self, folder: NodeId, name: &str) -> Option<NodeId> {
         let stop = self.end[folder.index()];
         let mut child = folder.index() + 1;
@@ -373,7 +409,8 @@ pub fn compare_names(a: &str, b: &str) -> Ordering {
 }
 
 /// The canonical order of two siblings: folders first, then [`compare_names`].
-pub(crate) fn sibling_order(a_kind: Kind, a_name: &str, b_kind: Kind, b_name: &str) -> Ordering {
+/// Tree ids follow it; a Name sort ascending reproduces it.
+pub(crate) fn canonical_order(a_kind: Kind, a_name: &str, b_kind: Kind, b_name: &str) -> Ordering {
     b_kind
         .is_folder()
         .cmp(&a_kind.is_folder())

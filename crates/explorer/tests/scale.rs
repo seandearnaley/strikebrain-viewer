@@ -12,7 +12,7 @@ use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
-use explorer::{Check, FixedBitSet, NodeId, ScanOptions, Selection, Tree, scan};
+use explorer::{Check, FixedBitSet, NodeId, ScanOptions, Selection, Tree, read_sizes, scan};
 
 /// 10 top folders, 100 folders in each, 1,000 files in each of those:
 /// 1,001,011 nodes.
@@ -82,10 +82,13 @@ fn a_real_folder_scans_with_and_without_ignored_entries() {
             &AtomicBool::new(false),
         )
         .unwrap();
-        let elapsed = start.elapsed();
+        let listed = start.elapsed();
+        let start = Instant::now();
+        read_sizes(&tree, &AtomicBool::new(false)).unwrap();
+        let measured = start.elapsed();
         let files = tree.files().count_ones(..);
         eprintln!(
-            "scan show_ignored={show_ignored}: {} nodes, {files} files in {elapsed:?}",
+            "scan show_ignored={show_ignored}: {} nodes, {files} files listed in {listed:?}, sizes in {measured:?}",
             tree.node_count()
         );
     }
