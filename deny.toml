@@ -1,7 +1,38 @@
+# cargo-deny 0.22: https://embarkstudios.github.io/cargo-deny/
+# Run with `cargo deny check`. Advisories fetch the RustSec database.
+
 [advisories]
+# Defaults kept: any vulnerability fails; unmaintained or unsound fails for direct dependencies.
+yanked = "deny"
 
 [bans]
+# The GPUI graph carries several duplicate versions we cannot remove.
 multiple-versions = "allow"
+# Version requirements must be explicit; workspace path dependencies are exempt.
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[licenses]
+# The smallest set the graph needed on 2026-11-23; anything else is denied.
+# MPL-2.0 is file-level copyleft (option-ext, dwrote, cbindgen under GPUI):
+# fine for unmodified dependencies. Add a license only after reading it.
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Zlib",
+]
+unused-allowed-license = "deny"
+
+[licenses.private]
+# Our crates are unpublished and carry no license field.
+ignore = true
 
 [sources]
 unknown-registry = "deny"

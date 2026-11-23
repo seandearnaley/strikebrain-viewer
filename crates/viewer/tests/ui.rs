@@ -40,7 +40,7 @@ fn drag_divider(cx: &mut TestAppContext, handle: AnyWindowHandle, to_x: f32) {
         );
         window.render_frame(cx);
     })
-    .unwrap();
+    .expect("drag the divider in the test window");
 }
 
 #[gpui_kit::test]

@@ -1,0 +1,13 @@
+# Clippy configuration: https://doc.rust-lang.org/clippy/lint_configuration.html
+# Lint levels live in Cargo.toml under [workspace.lints].
+
+# A failing test should panic, so tests may unwrap and panic.
+allow-unwrap-in-tests = true
+allow-panic-in-tests = true
+
+# Nothing here is published, so let Clippy suggest changes to public signatures.
+avoid-breaking-exported-api = false
+
+disallowed-methods = [
+    { path = "std::thread::sleep", reason = "a real sleep slows tests and hides races; wait on an executor timer or advance the test clock" },
+]

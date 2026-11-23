@@ -1,0 +1,5 @@
+# rustfmt, stable options only: https://rust-lang.github.io/rustfmt/
+# `cargo fmt` reads the edition from Cargo.toml; stating it here makes a bare
+# `rustfmt` call (editors, scripts) parse and format the same way.
+edition = "2024"
+style_edition = "2024"

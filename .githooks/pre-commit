@@ -1,0 +1,4 @@
+#!/bin/sh
+# Enabled by `just setup` (git config core.hooksPath .githooks).
+# The fast gates: format, spelling, Clippy. Run `just check` for the rest.
+exec just lint

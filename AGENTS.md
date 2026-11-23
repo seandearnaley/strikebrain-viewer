@@ -13,22 +13,47 @@ Design: `docs/superpowers/specs/2026-11-22-strikebrain-viewer-design.md`.
 - The toolchain and gpui-kit are pinned exactly; upgrading either is its own change. Other crates use caret requirements, with Cargo.lock committed.
 - No taglines or helper text in the interface. If a screen needs them, fix the layout.
 - Prefer the framework's primitive over a custom one. Add a crate only when the standard library and current dependencies do not cover the need.
+- `just check` must pass before every commit. The pre-commit hook runs `just lint`; never bypass it with `--no-verify`.
+- Never weaken a lint, a `deny.toml` policy, a test timeout or the coverage threshold to make a check pass. Fix the code.
+- Silence a lint only with `#[expect(lint, reason = "...")]` on the narrowest item. Clippy rejects `#[allow]` and a missing reason, and an `expect` that no longer fires is an error.
 
 ## Commands
 
 | Task | Command |
 | --- | --- |
-| Run the app | `cargo run -p viewer` |
+| Every gate; run before each commit | `just check` |
+| Format, spelling and Clippy (the pre-commit hook) | `just lint` |
+| Apply rustfmt and Clippy fixes | `just fix` |
+| Engine coverage; fails under 90% of lines | `just cov` |
+| Run the app | `just run` |
 | Engine tests | `cargo nextest run -p explorer` |
 | All tests | `cargo nextest run --workspace` |
 | One UI test | `cargo nextest run -p viewer --test ui <name>` |
-| Watch | `bacon` |
-| Lint | `cargo clippy --workspace --all-targets -- -D warnings` |
-| Lint production build | `cargo clippy -p viewer --lib --bins -- -D warnings` |
-| Format | `cargo fmt --all` |
-| Dependency policy | `cargo deny check advisories bans sources` |
+| Watch: Clippy on save; `n` nextest, ctrl-j other jobs | `bacon` |
+| Tools and git hook in a fresh clone | `just setup` |
 
 Iterate on the narrowest check. Engine work needs only the engine tests.
+
+`just check` stops at the first failure. In order: `cargo fmt --check`, `typos`, Clippy on all targets, Clippy on the production feature set (`-p viewer --lib --bins`, without test-support), nextest with the `ci` profile, doc-tests (nextest skips them), `cargo doc` (broken doc links), engine coverage, `cargo shear` (unused dependencies and source files no module includes), `cargo deny check` (advisories, licenses, bans, sources; fetches the RustSec database). It sets `CARGO_BUILD_WARNINGS=deny`, so any warning fails it; plain `cargo` commands only warn, so you can iterate.
+
+Lints live in the root `Cargo.toml` (`[workspace.lints]`, one comment per non-obvious choice) and `clippy.toml`. Tests may `unwrap` and `panic`; elsewhere return errors or use `expect("why it cannot fail")`. `std::thread::sleep` is banned: in tests, drive time with the GPUI executor's timer and clock.
+
+nextest reports a test as slow after 10 s and kills it after 30 s (`.config/nextest.toml`). A test that needs longer is a defect.
+
+## Tools
+
+Pinned like the toolchain; upgrading one is its own change. `just setup` installs these with `cargo-binstall` (1.28.0; `brew install cargo-binstall`, then `cargo binstall just@1.59.0`) and points `core.hooksPath` at `.githooks`.
+
+| Tool | Version | Config |
+| --- | --- | --- |
+| Rust with rustfmt, Clippy, llvm-tools | 1.100.0 | `rust-toolchain.toml`, `rustfmt.toml`, `clippy.toml`, `[workspace.lints]` |
+| just | 1.59.0 | `justfile` |
+| typos-cli | 1.52.2 | `_typos.toml` |
+| cargo-nextest | 0.9.152 | `.config/nextest.toml` |
+| cargo-llvm-cov | 0.9.2 | `justfile` (`cov`) |
+| cargo-shear | 1.14.1 | none |
+| cargo-deny | 0.22.0 | `deny.toml` |
+| bacon | 3.26.0 | `bacon.toml` |
 
 ## Build times
 
@@ -39,6 +64,9 @@ Measured on 2026-11-23, Apple M4 Max (16 cores), Rust 1.100.0.
 | Cold `cargo build -p viewer` | 64 s |
 | Warm rebuild after touching `crates/viewer/src/app.rs` | 0.7 s |
 | Engine test cycle after touching `crates/explorer/src/lib.rs` | 0.5 s |
+| `just check`, warm, nothing changed | 3.4 s |
+| `just check` after touching both crates | 5.3 s |
+| `just lint` (the pre-commit hook), warm | 0.4 s |
 
 On this machine, a step that takes several times longer than these is a defect. Stop and report it.
 

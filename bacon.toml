@@ -1,0 +1,17 @@
+# bacon: https://dystroy.org/bacon/config/
+# `bacon` runs Clippy on every save. Keys: c clippy, n nextest, ctrl-j any job.
+# These jobs cover the whole workspace; bacon's other built-in jobs stay available.
+default_job = "clippy"
+
+[jobs.check]
+command = ["cargo", "check", "--workspace", "--all-targets"]
+need_stdout = false
+
+[jobs.clippy]
+command = ["cargo", "clippy", "--workspace", "--all-targets"]
+need_stdout = false
+
+[jobs.nextest]
+command = ["cargo", "nextest", "run", "--workspace", "--hide-progress-bar", "--failure-output", "final"]
+need_stdout = true
+analyzer = "nextest"

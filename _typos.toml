@@ -1,0 +1,14 @@
+# typos: https://github.com/crate-ci/typos/blob/master/docs/reference.md
+[files]
+# Check dotfiles such as .config/ and .githooks/ too.
+ignore-hidden = false
+extend-exclude = [
+    ".git/",
+    ".claude/skills/",
+    "Cargo.lock",
+    "skills-lock.json",
+]
+
+[default.extend-identifiers]
+# "Filter terms are ANDed" in the design spec.
+ANDed = "ANDed"

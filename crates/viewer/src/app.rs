@@ -8,6 +8,7 @@ pub const EXPLORER_WIDTH: f32 = 300.0;
 pub const EXPLORER_MIN_WIDTH: f32 = 220.0;
 
 /// The root view: explorer on the left, stage on the right.
+#[derive(Debug)]
 pub struct AppView;
 
 impl AppView {

@@ -11,11 +11,55 @@ publish = false
 [workspace.dependencies]
 gpui-kit = { version = "=0.10.0", features = ["syntect"] }
 
+# Lints warn while you iterate; `just check` makes every warning an error
+# (CARGO_BUILD_WARNINGS=deny). Suppress one only with
+# `#[expect(lint, reason = "...")]`; see AGENTS.md.
 [workspace.lints.rust]
 unsafe_code = "forbid"
+# Public types must print in assertion failures and logs.
+missing_debug_implementations = "warn"
+# A `pub` item the crate never exports misstates the API.
+unreachable_pub = "warn"
+unused_lifetimes = "warn"
+unused_qualifications = "warn"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# Restriction and nursery lints, chosen one by one; clippy.toml lets tests unwrap
+# and panic. A suppression needs a reason and must be `#[expect]`, which fails
+# once it is stale.
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+# `assert!(r.is_ok())` hides the error; `r.unwrap()` prints it.
+assertions_on_result_states = "warn"
+# Debug output and stubs must not land.
+dbg_macro = "warn"
+print_stderr = "warn"
+print_stdout = "warn"
+todo = "warn"
+unimplemented = "warn"
+# Errors are returned, not panicked or dropped. `let _ =` on a GPUI Task or
+# Subscription also cancels it.
+let_underscore_must_use = "warn"
+panic = "warn"
+unused_result_ok = "warn"
+unwrap_in_result = "warn"
+# `expect("why it cannot fail")` stays allowed: it states the invariant.
+unwrap_used = "warn"
+# Byte-index slicing of a `str` panics inside a multi-byte character.
+string_slice = "warn"
+# Nursery: each flags a real defect and has no false positive here.
+debug_assert_with_mut_call = "warn"
+fallible_impl_from = "warn"
+# `"{x}"` outside a formatting macro is a forgotten `format!`.
+literal_string_with_formatting_args = "warn"
+# Pushing an absolute path replaces the whole `PathBuf`.
+path_buf_push_overwrite = "warn"
+
+# Cargo's own lints, stable since 1.100. The defaults already include
+# unused_dependencies; pedantic adds manifest style checks.
+[workspace.lints.cargo]
 pedantic = { level = "warn", priority = -1 }
 
 [profile.dev]
