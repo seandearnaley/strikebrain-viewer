@@ -6,6 +6,12 @@
 //! cannot be read) the explorer's body holds focus in the tree's place, in
 //! [`EXPLORER_BODY`]. Tab moves between the panes from each of them.
 //! Opening a folder and quitting bind everywhere.
+//!
+//! The stage's code view is the Kit's editor, which takes focus on a click
+//! so its text can be selected and copied. It declares the Kit's `Input`
+//! context, whose arrows move a caret; [`STAGE_EDITOR`] binds the stage's
+//! keys over them. Both match at the same depth, and these bindings are
+//! added after the Kit's, so they win.
 
 use gpui_kit::{KeyBinding, actions};
 
@@ -20,6 +26,9 @@ pub(crate) const STAGE: &str = "Stage";
 
 /// The key context of the explorer's body while no tree is on screen.
 pub(crate) const EXPLORER_BODY: &str = "ExplorerBody";
+
+/// The Kit's editor on the stage, while it holds focus.
+pub(crate) const STAGE_EDITOR: &str = "Stage > Input";
 
 actions!(
     explorer,
@@ -70,6 +79,30 @@ actions!(
     ]
 );
 
+actions!(
+    stage,
+    [
+        /// Shows the next file in the gallery.
+        NextFile,
+        /// Shows the previous file in the gallery.
+        PreviousFile,
+        /// Scrolls the text on the stage up a step.
+        ScrollUp,
+        /// Scrolls the text on the stage down a step.
+        ScrollDown,
+        /// Scrolls the text on the stage up a screen.
+        ScrollPageUp,
+        /// Scrolls the text on the stage down a screen.
+        ScrollPageDown,
+        /// Scrolls the text on the stage to its start.
+        ScrollToTop,
+        /// Scrolls the text on the stage to its end.
+        ScrollToBottom,
+        /// Starts the presentation. Milestone 4 gives it behaviour.
+        Present,
+    ]
+);
+
 /// Every key binding of the application.
 ///
 /// Learning exercise: Sean may rewrite this body; the tests below define it.
@@ -77,7 +110,7 @@ actions!(
 pub(crate) fn bindings() -> Vec<KeyBinding> {
     let (explorer, filter, stage) = (Some(EXPLORER), Some(FILTER), Some(STAGE));
     let body = Some(EXPLORER_BODY);
-    vec![
+    let mut bindings = vec![
         KeyBinding::new("up", FocusPrevious, explorer),
         KeyBinding::new("down", FocusNext, explorer),
         KeyBinding::new("home", FocusFirst, explorer),
@@ -95,16 +128,32 @@ pub(crate) fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("escape", CancelFilter, filter),
         KeyBinding::new("tab", NextPane, filter),
         KeyBinding::new("shift-tab", PreviousPane, filter),
-        KeyBinding::new("escape", FocusExplorer, stage),
-        KeyBinding::new("cmd-f", FocusFilter, stage),
-        KeyBinding::new("tab", NextPane, stage),
-        KeyBinding::new("shift-tab", PreviousPane, stage),
         KeyBinding::new("cmd-f", FocusFilter, body),
         KeyBinding::new("tab", NextPane, body),
         KeyBinding::new("shift-tab", PreviousPane, body),
         KeyBinding::new("cmd-o", OpenFolder, None),
         KeyBinding::new("cmd-q", Quit, None),
-    ]
+    ];
+    // The stage's keys, on the stage and over the editor inside it.
+    for stage in [stage, Some(STAGE_EDITOR)] {
+        bindings.extend([
+            KeyBinding::new("right", NextFile, stage),
+            KeyBinding::new("left", PreviousFile, stage),
+            KeyBinding::new("up", ScrollUp, stage),
+            KeyBinding::new("down", ScrollDown, stage),
+            KeyBinding::new("pageup", ScrollPageUp, stage),
+            KeyBinding::new("pagedown", ScrollPageDown, stage),
+            KeyBinding::new("home", ScrollToTop, stage),
+            KeyBinding::new("end", ScrollToBottom, stage),
+            KeyBinding::new("space", Present, stage),
+            KeyBinding::new("enter", Present, stage),
+            KeyBinding::new("escape", FocusExplorer, stage),
+            KeyBinding::new("cmd-f", FocusFilter, stage),
+            KeyBinding::new("tab", NextPane, stage),
+            KeyBinding::new("shift-tab", PreviousPane, stage),
+        ]);
+    }
+    bindings
 }
 
 #[cfg(test)]
@@ -166,8 +215,26 @@ mod tests {
     }
 
     #[test]
+    fn the_stage_moves_between_files_scrolls_and_presents_over_its_editor_too() {
+        for context in [STAGE, STAGE_EDITOR] {
+            assert_bound("right", Some(context), &NextFile);
+            assert_bound("left", Some(context), &PreviousFile);
+            assert_bound("up", Some(context), &ScrollUp);
+            assert_bound("down", Some(context), &ScrollDown);
+            assert_bound("pageup", Some(context), &ScrollPageUp);
+            assert_bound("pagedown", Some(context), &ScrollPageDown);
+            assert_bound("home", Some(context), &ScrollToTop);
+            assert_bound("end", Some(context), &ScrollToBottom);
+            assert_bound("space", Some(context), &Present);
+            assert_bound("enter", Some(context), &Present);
+            assert_bound("escape", Some(context), &FocusExplorer);
+            assert_bound("cmd-f", Some(context), &FocusFilter);
+        }
+    }
+
+    #[test]
     fn tab_and_shift_tab_move_between_panes_from_each_pane() {
-        for context in [EXPLORER, FILTER, STAGE, EXPLORER_BODY] {
+        for context in [EXPLORER, FILTER, STAGE, STAGE_EDITOR, EXPLORER_BODY] {
             assert_bound("tab", Some(context), &NextPane);
             assert_bound("shift-tab", Some(context), &PreviousPane);
         }

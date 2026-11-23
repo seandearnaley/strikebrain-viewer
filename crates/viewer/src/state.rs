@@ -87,6 +87,9 @@ pub(crate) enum StateEvent {
     /// landed, folders opened or closed together, the sort or the tree
     /// changed. The tree keeps the focus row on screen.
     RowsReplaced,
+    /// The stage moved to another file by its own keys. The tree scrolls
+    /// that file's row into view if it is a row, and opens no folder.
+    CurrentMoved,
 }
 
 /// The application state. See the module docs.
@@ -214,6 +217,16 @@ impl AppState {
     /// the same, so does what the stage shows.
     pub(crate) fn staged(&self) -> (u64, Option<NodeId>) {
         (self.tree_generation, self.current)
+    }
+
+    /// Where the file on the stage sits in the gallery, counting from 1,
+    /// and how many files the gallery holds: "2 / 3". `None` when the file
+    /// is not checked. Cheap enough for every change to the state.
+    #[must_use]
+    pub fn position(&self) -> Option<(usize, usize)> {
+        let explorer = self.explorer.as_ref()?;
+        let at = explorer.gallery_position(self.current?)?;
+        Some((at + 1, explorer.gallery_len()))
     }
 
     /// The keyboard focus row's node.
@@ -453,6 +466,35 @@ impl AppState {
         };
         if explorer.tree().is_file(id) {
             self.current = Some(id);
+            cx.notify();
+        }
+    }
+
+    /// → on the stage: the next gallery file. From a file that is not
+    /// checked, the first gallery file after it in display order. Stays
+    /// put at the end of the gallery, and with nothing on the stage.
+    pub fn show_next(&mut self, cx: &mut Context<Self>) {
+        self.step(true, cx);
+    }
+
+    /// ← on the stage: the previous gallery file. From a file that is not
+    /// checked, the last gallery file before it in display order.
+    pub fn show_previous(&mut self, cx: &mut Context<Self>) {
+        self.step(false, cx);
+    }
+
+    fn step(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let (Some(explorer), Some(current)) = (&self.explorer, self.current) else {
+            return;
+        };
+        let to = if forward {
+            explorer.gallery_next(current)
+        } else {
+            explorer.gallery_previous(current)
+        };
+        if let Some(to) = to {
+            self.current = Some(to);
+            cx.emit(StateEvent::CurrentMoved);
             cx.notify();
         }
     }

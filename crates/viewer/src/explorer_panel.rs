@@ -84,6 +84,7 @@ impl ExplorerPanel {
             cx.observe(&state, |_, _, cx| cx.notify()),
             cx.subscribe(&state, |this, _, event: &StateEvent, cx| match event {
                 StateEvent::RowsReplaced => this.reveal_focus(cx),
+                StateEvent::CurrentMoved => this.reveal_current(cx),
             }),
             cx.subscribe(&filter, |this, input, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Change) {
@@ -225,6 +226,20 @@ impl ExplorerPanel {
     /// Keeps the focus row on screen after the rows were rebuilt.
     fn reveal_focus(&mut self, cx: &mut Context<Self>) {
         if let Some(row) = self.state.read(cx).focus_index() {
+            self.scroll.scroll_to_item(row, ScrollStrategy::Nearest);
+        }
+    }
+
+    /// Keeps the stage's file on screen while the stage's keys move it: the
+    /// row scrolls into view if it is a row. A file inside a closed folder
+    /// or hidden by the filter stays out of sight; nothing opens.
+    fn reveal_current(&mut self, cx: &mut Context<Self>) {
+        let state = self.state.read(cx);
+        let row = state
+            .explorer()
+            .zip(state.current())
+            .and_then(|(explorer, current)| explorer.row_of(current));
+        if let Some(row) = row {
             self.scroll.scroll_to_item(row, ScrollStrategy::Nearest);
         }
     }
