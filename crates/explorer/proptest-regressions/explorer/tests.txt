@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 447c9c05055d3e577f6db502bcbd60d738b0a06848c9e352c3829c96f2e9f742 # shrinks to set = {"A.TXT": 0, "Src/a.txt": 0, "a.txt": 0, "src/": 0}, steps = [Sort(Type, Ascending), AskGallery(0), Check(4)]

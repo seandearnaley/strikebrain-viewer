@@ -8,8 +8,8 @@
 //! gives it for that.
 
 use std::fmt;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 
 use fixedbitset::FixedBitSet;
 
@@ -49,6 +49,10 @@ pub struct Explorer {
     sort: Sort,
     order: DisplayOrder,
     rows: Vec<NodeId>,
+    /// The checked files in display order under a sort other than the
+    /// tree's own; made on first use, dropped on any change to the checks,
+    /// the order or the tree.
+    gallery: OnceLock<Box<[NodeId]>>,
 }
 
 impl fmt::Debug for Explorer {
@@ -80,6 +84,7 @@ impl Explorer {
             sort: Sort::default(),
             order: DisplayOrder::default(),
             rows: Vec::new(),
+            gallery: OnceLock::new(),
             tree,
         };
         explorer.rebuild_rows();
@@ -218,18 +223,21 @@ impl Explorer {
     pub fn toggle_check(&mut self, id: NodeId) {
         self.catch_up();
         self.selection.toggle(&self.tree, &self.visibility, id);
+        self.forget_gallery();
     }
 
     /// Checks every file the filter shows. Checked files stay checked.
     pub fn select_all(&mut self) {
         self.catch_up();
         self.selection.select_all(&self.tree, &self.visibility);
+        self.forget_gallery();
     }
 
     /// Unchecks everything.
     pub fn clear_selection(&mut self) {
         self.catch_up();
         self.selection.clear();
+        self.forget_gallery();
     }
 
     /// The current sort.
@@ -244,6 +252,7 @@ impl Explorer {
         if sort != self.sort {
             self.sort = sort;
             self.order = DisplayOrder::new(&self.tree, sort);
+            self.forget_gallery();
             self.rebuild_rows();
         }
     }
@@ -278,6 +287,7 @@ impl Explorer {
         let (text, kind) = &self.requested;
         let visibility = filter(&tree, &Query::parse(text), *kind);
         self.order = DisplayOrder::new(&tree, self.sort);
+        self.forget_gallery();
         self.tree = tree;
         let (text, kind) = self.requested.clone();
         self.install(text, kind, visibility);
@@ -301,6 +311,7 @@ impl Explorer {
     fn catch_up(&mut self) {
         if self.order.is_stale(&self.tree) {
             self.order = DisplayOrder::new(&self.tree, self.sort);
+            self.forget_gallery();
             self.rebuild_rows();
         }
     }

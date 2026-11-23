@@ -12,7 +12,7 @@
 //! | `filter` | keystroke to updated rows on 1 M names in 16 ms |
 //! | `check` | check or clear a folder of 1 M files in 1 ms |
 //! | `rows` | expand or collapse with 1 M visible rows in 16 ms |
-//! | `other` | none: sort, tree replacement, gallery questions |
+//! | `other` | none: sort, tree replacement, gallery questions (each first one after a change remakes the gallery list) |
 
 use std::hint::black_box;
 use std::path::{Path, PathBuf};
@@ -247,6 +247,14 @@ fn other(c: &mut Criterion) {
             b.iter(|| explorer.gallery_position(black_box(last)));
         });
     }
+    // The first question after a click remakes the gallery list.
+    explorer.select_all();
+    group.bench_function("click, then gallery position, 1M checked, type sort", |b| {
+        b.iter(|| {
+            explorer.toggle_check(black_box(first));
+            explorer.gallery_position(black_box(last))
+        });
+    });
     group.finish();
 }
 

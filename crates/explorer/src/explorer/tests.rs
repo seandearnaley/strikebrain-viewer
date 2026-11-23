@@ -485,6 +485,9 @@ enum Step {
     CollapseAll,
     SelectAll,
     Reveal(usize),
+    /// Asks the gallery questions the stage asks on every render, so any
+    /// cached answer is made mid-sequence and must not go stale.
+    AskGallery(usize),
 }
 
 fn steps() -> impl Strategy<Value = Vec<Step>> {
@@ -501,6 +504,7 @@ fn steps() -> impl Strategy<Value = Vec<Step>> {
         1 => Just(Step::CollapseAll),
         1 => Just(Step::SelectAll),
         1 => (0_usize..80).prop_map(Step::Reveal),
+        2 => (0_usize..80).prop_map(Step::AskGallery),
     ];
     prop::collection::vec(step, 0..12)
 }
@@ -524,6 +528,15 @@ fn play(explorer: &mut Explorer, steps: &[Step]) {
                 if let Some(row) = explorer.reveal(target) {
                     assert_eq!(explorer.rows()[row], target);
                 }
+            }
+            Step::AskGallery(i) => {
+                let target = node(explorer, i);
+                std::hint::black_box((
+                    explorer.gallery_position(target),
+                    explorer.gallery_next(target),
+                    explorer.gallery_previous(target),
+                    explorer.gallery().count(),
+                ));
             }
         }
     }
