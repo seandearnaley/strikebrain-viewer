@@ -43,6 +43,7 @@ pub fn open_main_window(
         explorer_width: plan.explorer_width,
         store,
         watch,
+        opened_at: window_bounds.map(|bounds| bounds.get_bounds()),
     };
     let launch = plan.launch;
     let opened = gpui_kit::open_window(

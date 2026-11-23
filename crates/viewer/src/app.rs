@@ -20,9 +20,9 @@ use std::time::Duration;
 
 use gpui_kit::component::{ResizablePanelEvent, ResizableState, h_resizable, resizable_panel};
 use gpui_kit::{
-    App, AppContext as _, Context, Entity, Focusable as _, IntoElement, ParentElement as _, Pixels,
-    Render, SharedString, StyleRefinement, Styled as _, Subscription, Task, TestSupportExt as _,
-    Window, WindowBounds, div, prelude::*, px,
+    App, AppContext as _, Bounds, Context, Entity, Focusable as _, IntoElement, ParentElement as _,
+    Pixels, Render, SharedString, StyleRefinement, Styled as _, Subscription, Task,
+    TestSupportExt as _, Window, WindowBounds, div, prelude::*, px,
 };
 
 use crate::explorer_panel::{ExplorerFocus, ExplorerPanel};
@@ -61,6 +61,9 @@ pub struct Session {
     pub store: Option<StateStore>,
     /// Rescan when the folder changes on disk.
     pub watch: bool,
+    /// The bounds the window opened with, as [`SavedWindow`] holds them:
+    /// what a fullscreen window is saved with until it has been windowed.
+    pub opened_at: Option<Bounds<Pixels>>,
 }
 
 /// A pane that takes keyboard focus, in Tab order.
@@ -93,6 +96,10 @@ pub struct AppView {
     entered_fullscreen: bool,
     /// Where the window is, as last reported.
     window: Option<SavedWindow>,
+    /// The window's place while windowed, as a window opens with it: the
+    /// top-left corner of its frame and the size of its content. Kept
+    /// while fullscreen, which is saved as the window to return to.
+    windowed: Option<Bounds<Pixels>>,
     /// Where the state is saved, if anywhere.
     store: Option<StateStore>,
     /// The save waiting for its delay. While it waits, changes add nothing.
@@ -175,6 +182,7 @@ impl AppView {
             presenting: false,
             entered_fullscreen: false,
             window: None,
+            windowed: session.opened_at,
             store: session.store,
             save_task: None,
             menu_shows_ignored: false,
@@ -278,14 +286,30 @@ impl AppView {
 
     // Saving
 
-    /// Where the window is, to restore. A fullscreen the presentation made
-    /// is saved as the window it came from.
-    fn place(&self, window: &Window, cx: &App) -> SavedWindow {
-        let bounds = match window.window_bounds() {
-            WindowBounds::Fullscreen(bounds) if self.entered_fullscreen => {
-                WindowBounds::Windowed(bounds)
+    /// Where the window is, to restore, as a window opens with it: the
+    /// top-left corner of its frame and the size of its content. (GPUI
+    /// reports a window's frame, title bar included, but opens a window at
+    /// the content size it is given, so saving the frame grew the window
+    /// by its title bar at each launch.) Fullscreen is saved with the
+    /// window it returns to; a fullscreen the presentation made is saved as
+    /// that window.
+    fn place(&mut self, window: &Window, cx: &App) -> SavedWindow {
+        let bounds = if window.is_fullscreen() {
+            let windowed = self
+                .windowed
+                .unwrap_or_else(|| window.window_bounds().get_bounds());
+            if self.entered_fullscreen {
+                WindowBounds::Windowed(windowed)
+            } else {
+                WindowBounds::Fullscreen(windowed)
             }
-            bounds => bounds,
+        } else {
+            let content = Bounds::new(window.bounds().origin, window.viewport_size());
+            self.windowed = Some(content);
+            match window.window_bounds() {
+                WindowBounds::Maximized(_) => WindowBounds::Maximized(content),
+                _ => WindowBounds::Windowed(content),
+            }
         };
         let display = window
             .display(cx)

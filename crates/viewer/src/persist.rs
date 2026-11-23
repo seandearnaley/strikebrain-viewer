@@ -57,8 +57,10 @@ pub struct FolderView {
     pub top_row: Option<String>,
 }
 
-/// Where the window was: its bounds as GPUI gives them, relative to the
-/// display it was on, and that display's persistent identifier.
+/// Where the window was, relative to the display it was on, and that
+/// display's persistent identifier. Its bounds are what a window opens
+/// with: the top-left corner of the frame and the size of the content,
+/// title bar excluded.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SavedWindow {
     /// Windowed, maximized or fullscreen, with the bounds to restore to.
