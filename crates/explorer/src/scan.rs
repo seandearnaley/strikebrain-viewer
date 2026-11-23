@@ -28,8 +28,10 @@ use ignore::{DirEntry, ParallelVisitor, ParallelVisitorBuilder, WalkBuilder, Wal
 use crate::tree::{NO_PARENT, RawTree};
 use crate::{Kind, Tree, TreeError};
 
+mod changes;
 mod sizes;
 
+pub use changes::changes_matter;
 pub use sizes::read_sizes;
 
 /// Names skipped in every scan, whatever the ignore rules say.
@@ -161,8 +163,22 @@ fn resolve_root(root: &Path) -> Result<PathBuf, ScanError> {
     fs::canonicalize(root).map_err(ScanError::Root)
 }
 
-/// The walker with this app's rules.
+/// The walker with this app's rules, on up to [`MAX_WALK_THREADS`].
 fn walker(root: &Path, options: ScanOptions) -> WalkBuilder {
+    let mut builder = rules(root, options);
+    builder
+        .threads(walk_threads())
+        .filter_entry(|entry| !always_skipped(entry));
+    builder
+}
+
+/// Whether the scan leaves `entry` out whatever the ignore rules say.
+fn always_skipped(entry: &DirEntry) -> bool {
+    ALWAYS_SKIPPED.iter().any(|&name| entry.file_name() == name)
+}
+
+/// A walker over `root` with this app's ignore rules and no other filter.
+fn rules(root: &Path, options: ScanOptions) -> WalkBuilder {
     let mut builder = WalkBuilder::new(root);
     if options.show_ignored {
         builder.standard_filters(false);
@@ -177,10 +193,7 @@ fn walker(root: &Path, options: ScanOptions) -> WalkBuilder {
         // a folder's ignore files belong to some other project.
         builder.hidden(false).parents(false).require_git(false);
     }
-    builder
-        .threads(walk_threads())
-        .follow_links(false)
-        .filter_entry(|entry| !ALWAYS_SKIPPED.iter().any(|&name| entry.file_name() == name));
+    builder.follow_links(false);
     builder
 }
 
