@@ -13,7 +13,14 @@ path = "src/main.rs"
 # The platform's config folder for the saved state.
 directories = "6.0.0"
 explorer = { path = "../explorer" }
+# The channel that carries the file watcher's events from its thread into a
+# GPUI task: GPUI exposes no async channel of its own, and GPUI already
+# builds this crate, so it adds no code.
+futures = { version = "0.3.34", default-features = false, features = ["std"] }
 gpui-kit = { workspace = true }
+# Live refresh. The 150 ms window runs on GPUI's timer, which tests drive,
+# so neither debouncer crate is used.
+notify = "9.0.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 

@@ -15,6 +15,7 @@
 //! save copies the state out on the UI thread, cheaply, and names, encodes
 //! and writes it on the background executor.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui_kit::component::{ResizablePanelEvent, ResizableState, h_resizable, resizable_panel};
@@ -41,8 +42,8 @@ pub const EXPLORER_MIN_WIDTH: f32 = 220.0;
 /// along with it.
 pub const SAVE_DELAY: Duration = Duration::from_millis(500);
 
-/// What a window brings back from a saved state, and where it saves. The
-/// default does neither.
+/// What a window brings back from a saved state, where it saves, and
+/// whether it follows its folder on disk. The default does none of these.
 #[derive(Debug, Default)]
 pub struct Session {
     /// The saved view of the folder being opened.
@@ -51,6 +52,8 @@ pub struct Session {
     pub explorer_width: Option<f32>,
     /// Where to save. `None` saves nothing.
     pub store: Option<StateStore>,
+    /// Rescan when the folder changes on disk.
+    pub watch: bool,
 }
 
 /// A pane that takes keyboard focus, in Tab order.
@@ -100,20 +103,28 @@ impl std::fmt::Debug for AppView {
 
 impl AppView {
     /// Builds the window's content and starts what `launch` asks for. The
-    /// tree takes keyboard focus. Nothing is restored or saved.
+    /// tree takes keyboard focus. Nothing is restored or saved, and the
+    /// folder is not followed on disk.
     pub fn new(launch: Launch, window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self::with_session(launch, Session::default(), window, cx)
     }
 
-    /// Builds the window's content as [`AppView::new`] does, restoring and
-    /// saving as `session` says.
+    /// Builds the window's content as [`AppView::new`] does, restoring,
+    /// saving and following the folder as `session` says.
     pub fn with_session(
         launch: Launch,
         session: Session,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let options = StateOptions { view: session.view };
+        let options = StateOptions {
+            view: session.view,
+            watch: session.watch,
+            quiet: session
+                .store
+                .as_ref()
+                .and_then(|store| store.path().parent().map(PathBuf::from)),
+        };
         let app_state = cx.new(|cx| AppState::with_options(launch, options, cx));
         let explorer = cx.new(|cx| ExplorerPanel::new(app_state.clone(), window, cx));
         let stage = cx.new(|cx| Stage::new(app_state.clone(), window, cx));

@@ -5,12 +5,14 @@
 //! scan. Views read it in `render` and change it only through its methods,
 //! each of which notifies once.
 //!
-//! Scanning lives in `state/scan.rs`, filtering in `state/filter.rs`, and
-//! restoring a saved view in `state/restore.rs`.
+//! Scanning lives in `state/scan.rs`, filtering in `state/filter.rs`,
+//! following the folder on disk in `state/watch.rs`, and restoring a saved
+//! view in `state/restore.rs`.
 
 mod filter;
 mod restore;
 mod scan;
+mod watch;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -20,6 +22,7 @@ use explorer::{Explorer, KindFilter, NodeId, SortKey, Tree};
 use gpui_kit::{Context, EventEmitter, Result, SharedString, Task};
 
 use crate::persist::FolderView;
+use watch::Watching;
 
 /// What the app shows when it starts.
 #[derive(Debug)]
@@ -33,12 +36,18 @@ pub enum Launch {
     Tree(Arc<Tree>),
 }
 
-/// What an [`AppState`] brings back from a saved state.
+/// What an [`AppState`] brings back from a saved state, and whether it
+/// follows its folder on disk.
 #[derive(Clone, Debug, Default)]
 pub struct StateOptions {
     /// A saved view of the folder `launch` opens, applied when its first
     /// scan lands. Its filter and Show ignored apply from the start.
     pub view: Option<FolderView>,
+    /// Rescan when something under the folder changes on disk.
+    pub watch: bool,
+    /// Changes under this folder never cause a rescan: where the app keeps
+    /// its own state, should the open folder hold it.
+    pub quiet: Option<PathBuf>,
 }
 
 /// Where the folder scan stands.
@@ -147,6 +156,16 @@ pub struct AppState {
     restore: Option<FolderView>,
     /// The saved top row, waiting for sizes before a Size sort settles.
     restore_top: Option<String>,
+    /// How to follow the folder on disk; `None` does not.
+    watching: Option<Watching>,
+    /// Follows the folder: its watcher and the task batching its events.
+    /// Replacing it stops the watcher.
+    watch_task: Option<Task<Result<()>>>,
+    /// Why the folder is not followed, when its watcher failed to start.
+    watch_error: Option<SharedString>,
+    /// Something changed on disk while a scan was running: rescan once it
+    /// lands.
+    rescan_pending: bool,
 }
 
 impl std::fmt::Debug for AppState {
@@ -177,13 +196,13 @@ impl EventEmitter<StateEvent> for AppState {}
 
 impl AppState {
     /// Creates the state and starts whatever `launch` asks for. Nothing is
-    /// restored.
+    /// restored and the folder is not followed on disk.
     pub fn new(launch: Launch, cx: &mut Context<Self>) -> Self {
         Self::with_options(launch, StateOptions::default(), cx)
     }
 
-    /// Creates the state, restoring what `options` holds, and starts
-    /// whatever `launch` asks for.
+    /// Creates the state, restoring and following as `options` say, and
+    /// starts whatever `launch` asks for.
     pub fn with_options(launch: Launch, options: StateOptions, cx: &mut Context<Self>) -> Self {
         let mut state = Self {
             root: None,
@@ -205,6 +224,12 @@ impl AppState {
             slow_task: None,
             restore: None,
             restore_top: None,
+            watching: options.watch.then_some(Watching {
+                quiet: options.quiet,
+            }),
+            watch_task: None,
+            watch_error: None,
+            rescan_pending: false,
         };
         let view = options.view;
         match launch {
@@ -293,6 +318,13 @@ impl AppState {
     #[must_use]
     pub fn selected_count(&self) -> usize {
         self.selected
+    }
+
+    /// How many scans have started, the first included: a probe for tests
+    /// of live refresh.
+    #[must_use]
+    pub fn scans(&self) -> u64 {
+        self.scan_generation
     }
 
     /// Whether the presentation is showing: the stage alone, fullscreen.

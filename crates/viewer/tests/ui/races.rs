@@ -50,7 +50,7 @@ fn log_rows(
 /// inside the update that swaps it and before any frame is drawn: the click
 /// reaches the listeners the last frame drew for the old tree, as a click
 /// does that the platform delivers between a swap and the next frame.
-fn click_when_the_tree_swaps(
+pub(crate) fn click_when_the_tree_swaps(
     cx: &mut TestAppContext,
     handle: AnyWindowHandle,
     view: &Entity<AppView>,

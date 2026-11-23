@@ -1,13 +1,16 @@
 //! The toolbar, 36 px: Expand all and Collapse all on the left; Show
 //! ignored, Refresh and Select all (Clear while anything is checked) on the
 //! right. Icon buttons, 24 px, each with a tooltip and an accessible name.
-//! The scan's progress bar runs along its bottom edge.
+//! The scan's progress bar runs along its bottom edge. Refresh shows in the
+//! warning colour while the folder's changes are not followed.
 
 use gpui_kit::assets::IconName as AllIcons;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::toolbar::Toolbar;
-use gpui_kit::component::{Disableable as _, Icon, IconName, Selectable as _, Sizable as _};
+use gpui_kit::component::{
+    ActiveTheme as _, Disableable as _, Icon, IconName, Selectable as _, Sizable as _,
+};
 use gpui_kit::{Context, IntoElement, ParentElement as _, Styled as _, div, prelude::*};
 
 use super::ExplorerPanel;
@@ -42,6 +45,18 @@ impl ExplorerPanel {
                 }))
         };
 
+        // Refresh turns the warning colour while the folder is not followed
+        // on disk, and its tooltip says why.
+        let refresh = match state.watch_error() {
+            None => command("refresh", IconName::RefreshCw, "Refresh"),
+            Some(message) => Button::new("refresh")
+                .icon(Icon::new(IconName::RefreshCw).text_color(cx.theme().warning))
+                .tooltip(format!(
+                    "Refresh. Changes on disk are not followed: {message}"
+                ))
+                .accessibility_label("Refresh"),
+        };
+
         let toolbar = Toolbar::new("toolbar")
             .h_9()
             .px_2()
@@ -69,13 +84,9 @@ impl ExplorerPanel {
                         this.state.update(cx, AppState::toggle_show_ignored);
                     })),
             )
-            .child(
-                command("refresh", IconName::RefreshCw, "Refresh").on_click(cx.listener(
-                    |this, _, _, cx| {
-                        this.state.update(cx, AppState::refresh);
-                    },
-                )),
-            )
+            .child(refresh.on_click(cx.listener(|this, _, _, cx| {
+                this.state.update(cx, AppState::refresh);
+            })))
             .child(selection);
 
         div()

@@ -21,6 +21,7 @@ mod scale;
 mod stage;
 mod timing;
 mod toolbar;
+mod watch;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

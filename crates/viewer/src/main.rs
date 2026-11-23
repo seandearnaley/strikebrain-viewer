@@ -21,7 +21,7 @@ fn main() {
             })
             .detach();
 
-            open_main_window(folder, store, cx).expect("open the main window");
+            open_main_window(folder, store, true, cx).expect("open the main window");
             // Come to the front when launched from a terminal too. An
             // occluded window does not draw.
             cx.activate(true);

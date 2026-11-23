@@ -13,8 +13,9 @@ use crate::persist::{SavedWindow, StateStore, fit, plan_launch};
 
 /// Opens the main window. `folder` is the command line's; the saved state
 /// comes from `store`, which then also receives the window's state as it
-/// changes. Closing the window quits, so the state is saved by the quit
-/// with the window still there.
+/// changes. With `watch` the folder is followed on disk, as the app does;
+/// tests that need determinism leave it off. Closing the window quits, so
+/// the state is saved by the quit with the window still there.
 ///
 /// # Errors
 ///
@@ -22,6 +23,7 @@ use crate::persist::{SavedWindow, StateStore, fit, plan_launch};
 pub fn open_main_window(
     folder: Option<PathBuf>,
     store: Option<StateStore>,
+    watch: bool,
     cx: &mut App,
 ) -> Result<(AnyWindowHandle, Entity<AppView>)> {
     let plan = plan_launch(folder, store.as_ref().and_then(StateStore::load));
@@ -36,6 +38,7 @@ pub fn open_main_window(
         view: plan.view,
         explorer_width: plan.explorer_width,
         store,
+        watch,
     };
     let launch = plan.launch;
     let opened = gpui_kit::open_window(

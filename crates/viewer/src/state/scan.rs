@@ -65,6 +65,7 @@ impl AppState {
         self.selected = 0;
         self.restore = None;
         self.restore_top = None;
+        self.follow(root.clone(), cx);
         self.start_scan(root, ScanKind::Open, cx);
     }
 
@@ -93,6 +94,8 @@ impl AppState {
     }
 
     fn start_scan(&mut self, root: PathBuf, kind: ScanKind, cx: &mut Context<Self>) {
+        // This scan sees every change made before it starts.
+        self.rescan_pending = false;
         self.scan_cancel.store(true, Ordering::Relaxed);
         let cancel = Arc::new(AtomicBool::new(false));
         self.scan_cancel = Arc::clone(&cancel);
@@ -167,19 +170,21 @@ impl AppState {
             return None;
         }
         self.slow_task = None;
-        match scanned {
+        let shown = match scanned {
             Ok(tree) => {
                 self.show_tree(Arc::clone(&tree));
                 self.restore_view(cx);
                 cx.notify();
                 Some(tree)
             }
-            Err(ScanError::Cancelled) => None,
+            Err(ScanError::Cancelled) => return None,
             Err(err) => {
                 self.fail(&err, cx);
                 None
             }
-        }
+        };
+        self.scan_settled(cx);
+        shown
     }
 
     /// The sizes of the tree on screen are in. Under a Size sort they
@@ -219,11 +224,15 @@ impl AppState {
         let tree = match scanned {
             Ok(tree) => tree,
             Err(ScanError::Cancelled) => return,
-            Err(err) => return self.fail(&err, cx),
+            Err(err) => {
+                self.fail(&err, cx);
+                return self.scan_settled(cx);
+            }
         };
         let Some(explorer) = self.explorer.as_mut() else {
             self.show_tree(tree);
-            return cx.notify();
+            cx.notify();
+            return self.scan_settled(cx);
         };
         let map = match self.current {
             Some(current) => {
@@ -238,6 +247,15 @@ impl AppState {
         self.status = ScanStatus::Idle;
         self.selection_changed();
         self.rows_replaced(cx);
+        self.scan_settled(cx);
+    }
+
+    /// A scan landed or failed and no newer one runs: if the disk changed
+    /// meanwhile, rescan once.
+    fn scan_settled(&mut self, cx: &mut Context<Self>) {
+        if std::mem::take(&mut self.rescan_pending) {
+            self.refresh(cx);
+        }
     }
 
     /// The folder itself could not be read: show the system's message.
@@ -270,7 +288,7 @@ impl AppState {
 
 /// The operating system's message alone: Rust's `io::Error` ends it with
 /// " (os error N)", which the interface does not show.
-fn os_message(text: &str) -> &str {
+pub(super) fn os_message(text: &str) -> &str {
     text.rsplit_once(" (os error ")
         .filter(|(_, code)| {
             code.strip_suffix(')')

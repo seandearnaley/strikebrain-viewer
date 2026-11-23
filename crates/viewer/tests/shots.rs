@@ -15,7 +15,7 @@ use gpui_kit::{
     AnyWindowHandle, AppContext as _, Bounds, ElementId, Entity, HeadlessAppContext, Pixels,
     ScrollDelta, Size, WindowBounds, WindowOptions, point, px, size,
 };
-use viewer::{AppAssets, AppView, Launch, ScanStatus};
+use viewer::{AppAssets, AppView, Launch, ScanStatus, Session};
 
 /// A small project with nested folders, sizes and a long name.
 const FIXTURE: &[(&str, u64)] = &[
@@ -702,6 +702,43 @@ fn main() {
             mode,
             &dir,
             &format!("unreadable-{suffix}"),
+        ));
+
+        // The same folder followed on disk: its watcher cannot start, so
+        // Refresh takes the warning colour.
+        let mut cx = context();
+        let missing = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/no-such-folder");
+        let opened = cx
+            .update(|cx| {
+                gpui_kit::open_window(
+                    WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(Bounds {
+                            origin: Default::default(),
+                            size: size(px(900.), px(560.)),
+                        })),
+                        focus: true,
+                        show: false,
+                        ..Default::default()
+                    },
+                    cx,
+                    |window, cx| {
+                        let session = Session {
+                            watch: true,
+                            ..Session::default()
+                        };
+                        cx.new(|cx| {
+                            AppView::with_session(Launch::Folder(missing), session, window, cx)
+                        })
+                    },
+                )
+            })
+            .expect("open the window");
+        written.push(save(
+            &mut cx,
+            opened.0,
+            mode,
+            &dir,
+            &format!("unwatched-{suffix}"),
         ));
     }
 

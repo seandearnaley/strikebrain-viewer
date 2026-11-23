@@ -14,7 +14,7 @@ use viewer::{AppState, AppView, Launch, SAVE_DELAY, StateStore, open_main_window
 
 use crate::{click, drag_divider, filter_value, folder, labels, node, read, row, rows_now, write};
 
-/// Launches the app as the binary does.
+/// Launches the app as the binary does, without following the disk.
 fn launch(
     cx: &mut TestAppContext,
     folder: Option<&Path>,
@@ -25,7 +25,7 @@ fn launch(
         viewer::init(cx);
     });
     let opened = cx.update(|cx| {
-        open_main_window(folder.map(Path::to_owned), Some(store.clone()), cx)
+        open_main_window(folder.map(Path::to_owned), Some(store.clone()), false, cx)
             .expect("open the main window")
     });
     cx.run_until_parked();
