@@ -75,11 +75,10 @@ Measured on 2026-11-23, Apple M4 Max (16 cores), Rust 1.100.0.
 | Cold `cargo build -p viewer` | 64 s |
 | Warm rebuild after touching `crates/viewer/src/app.rs` | 0.7 s |
 | Engine test cycle after touching `crates/explorer/src/lib.rs` | 0.5 s |
-| `just check`, warm, nothing changed | 3.4 s |
-| `just check` after touching both crates | 5.3 s |
-| `just lint` (the pre-commit hook), warm | 0.4 s |
+| `just check`, warm, nothing changed (after the final fixes; the live-refresh tests wait on real events) | 14 s |
+| `just lint` (the pre-commit hook), warm | 0.5 s |
 | `just bundle` after a debug build (thin LTO, one codegen unit) | 73 s |
-| `just check`, warm, nothing changed (2026-11-23, after milestone 5) | 13 s |
+| `just bundle` again after a small change | 25 s |
 
 On this machine, a step that takes several times longer than these is a defect. Stop and report it.
 
@@ -98,4 +97,7 @@ Neither was added. Rebuild and restart instead.
 - Live refresh rescans the whole folder on any change a scan would show, as the design says. With Show ignored on, a busy folder the tree then shows (a build's `target/`) is rescanned back to back while it changes.
 - A change to `.git/info/exclude` or the global git excludes does not trigger a rescan; a `.gitignore` change does.
 - `just shot` draws offscreen. To see the real window, `just bundle`, launch the app, find its window id with `CGWindowListCopyWindowInfo` and run `screencapture -x -o -l <id> out.png`. While the screen is locked `screencapture` captures nothing.
+- Run the bundled binary with `STRIKEBRAIN_VIEWER_STATE=<temp file>` when trying it; without it the run writes your own saved state.
+- GPUI Base 0.10.0 draws the code view's caret line number in the foreground colour whatever the theme says; line 1 stands out when a file opens.
+- Space then Esc within the fullscreen animation can leave the window fullscreen: GPUI exposes no transition state.
 - The live-refresh tests wait on real file-system events, about 2 to 5 s each; they are the slowest in the suite.

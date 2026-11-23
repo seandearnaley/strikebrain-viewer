@@ -1,6 +1,6 @@
 # Strikebrain Viewer design
 
-Status: design approved by Sean on 2026-11-22. Milestones 0 to 5 are built (2026-11-23); where the build settled a question the design left open, the section below says so.
+Status: design approved by Sean on 2026-11-22. Milestones 0 to 5 are built (2026-11-23), with the final review's fixes; where the build settled a question the design left open, the section below says so.
 Companion page: https://claude.ai/artifact/4PaAcuEDiMKYJKyEFCpkD3
 
 ## Purpose
@@ -49,19 +49,28 @@ Rules for every dependency:
 ```
 strikebrain-viewer/
 ├─ Cargo.toml             workspace: pinned versions, lints, dev and release profiles
-├─ rust-toolchain.toml
+├─ rust-toolchain.toml, rustfmt.toml, clippy.toml, deny.toml, _typos.toml, bacon.toml
+├─ justfile, .config/nextest.toml, .githooks/
 ├─ AGENTS.md, README.md
 ├─ docs/superpowers/specs/
 └─ crates/
    ├─ explorer/           library, no GPUI
-   │  ├─ src/{tree,scan,selection,filter,sort,rows,content}.rs
-   │  ├─ src/scan/changes.rs   which changes on disk a rescan would show
-   │  └─ benches/
+   │  ├─ src/lib.rs, content.rs, bits.rs, parallel.rs, remap.rs, rows.rs
+   │  ├─ src/tree.rs, tree/{build,names,paths,tests}.rs
+   │  ├─ src/scan.rs, scan/{sizes,changes,tests}.rs   changes.rs: which changes on disk a rescan would show
+   │  ├─ src/selection.rs, selection/tests.rs
+   │  ├─ src/filter.rs, filter/tests.rs, src/sort.rs, sort/tests.rs
+   │  ├─ src/explorer.rs, explorer/{filtering,gallery,row,saved,tests}.rs, explorer/tests/props.rs
+   │  ├─ tests/scale.rs
+   │  └─ benches/engine.rs
    └─ viewer/             binary `strikebrain-viewer`
-      ├─ src/{main,app,explorer_panel,stage,keys,theme}.rs
-      ├─ src/{persist,launch,menus}.rs, src/state/{scan,filter,restore,watch}.rs
+      ├─ src/main.rs, lib.rs, app.rs, launch.rs, menus.rs, keys.rs, theme.rs, assets.rs
+      ├─ src/explorer_panel.rs, explorer_panel/{toolbar,filter_bar,header,selection_bar}.rs, row.rs, columns.rs
+      ├─ src/stage.rs, stage/{loading,render,load,text,images,cache}.rs
+      ├─ src/state.rs, state/{rows,checks,scan,filter,restore,watch}.rs
+      ├─ src/persist.rs, persist/{format,tests}.rs
       ├─ bundle/          Info.plist template and icon source for `just bundle`
-      └─ tests/ui/*.rs, tests/shots.rs, tests/icon.rs
+      └─ tests/ui/main.rs and one module per area, tests/shots.rs, tests/icon.rs, tests/fixture/
 ```
 
 `explorer` never depends on `gpui-kit`. Its tests must compile and run without building the UI stack.
@@ -227,7 +236,7 @@ Row, left to right. These are brainstrike's measurements.
 - Height 28 px plus a 1 px bottom rule.
 - Indent 20 px per level.
 - Chevron in a 24 px target, folders only. Files get a 24 px spacer.
-- 6 px gap, 16 px checkbox, 6 px gap, 16 px icon, 6 px gap, name at 14/16 px, truncated.
+- 6 px gap, 16 px checkbox, 6 px gap, 16 px icon, 6 px gap, name at 14/16 px, truncated. A file's icon says its kind, quietly in the muted colour: a picture, Markdown, other text or code, or anything else (a known binary format), as the Images and Text kinds sort them.
 - `Size` cell: monospace 12 px, tabular figures, one decimal, units B, KB, MB, GB.
 
 Row behaviour:
@@ -253,7 +262,7 @@ Not in version one: column resizing, a column menu, context menus, multiple root
 
 - `Image`: GPUI's `img()` from the file path, scaled down to fit and never enlarged.
 - `Markdown`: the Kit's `TextView`, scrollable, in a centred column 720 px wide at most.
-- `Code`: the Kit's editor, read-only, with line numbers and `syntect` highlighting chosen by extension.
+- `Code`: the Kit's editor, read-only, with line numbers and `syntect` highlighting chosen by extension. Plain prose (`.txt`, `.text`, `.log`, and names with no extension such as `LICENSE`, but not `Makefile`, `Dockerfile` and the other build files highlighted by name, nor `CMakeLists.txt`) is soft-wrapped with no line numbers.
 - `Unsupported`: the file's name and size, centred and muted.
 - When `current` is in the gallery, a position such as "2 / 3" sits at the bottom centre.
 - A blank stage draws nothing.
@@ -282,7 +291,7 @@ Limits and caches:
 Milestone 4 settled the rest:
 
 - The presentation is the same stage entity, laid out alone: its file, caches, loaded text and scroll positions carry across both ways. The root view owns the split's sizes, so the explorer comes back at the width it had. `current` is unchanged by entering or leaving.
-- Background is the stage surface. An image uses the whole window, scaled down to fit and never enlarged; Markdown and code look as on the stage. Nothing else is drawn: no explorer, divider or position. The pointer stays visible.
+- An image is presented on black in both appearances, as a photo viewer does, using the whole window, scaled down to fit and never enlarged; Markdown and code keep the stage surface and look as on the stage. In the split the stage keeps its surface for images too. Nothing else is drawn: no explorer, divider or position. The pointer stays visible.
 - A file outside the gallery is presented alone when the gallery is empty; with a gallery, → and ← go to the nearest gallery file as on the stage.
 - Keys the Presentation column leaves blank (Enter, ⌘F, ⌘O, Tab) do nothing while presenting: they are bound to `NoAction` there. ⌘O is ignored rather than leaving first, so a stray key never ends a presentation. ⌘Q quits.
 - Leaving fullscreen through the window (the green button or the system gesture) keeps presenting, windowed; Esc then leaves without touching fullscreen. A fullscreen the person makes again meanwhile is theirs: Esc leaves it as it is.
@@ -321,7 +330,7 @@ Brainstrike's tokens, applied through the Kit's theme system, following the syst
 - border `hsl(30 10% 90%)` / `hsl(30 5% 20%)`
 - info, used for folder icons, `hsl(215 50% 38%)` / `hsl(215 45% 74%)`
 
-Checked and mixed checkboxes use primary with a white check or dash. Unchecked boxes use the background with a primary border.
+Checked and mixed checkboxes use primary with a white check or dash. Unchecked boxes use the background with a primary border. A primary button ("Open Folder") carries white text at 4.5:1 or more: dark mode's primary is too light for that (3.7:1), so dark buttons take light mode's blue, `hsl(215 55% 45%)`, darker on hover and press.
 
 ### Accessibility
 
@@ -344,7 +353,7 @@ From a typical image viewer: zoom and pan, a tile grid, HEIC, AVIF and RAW forma
 Three tiers.
 
 1. **Engine.** Plain `#[test]` and `proptest` in `explorer`. Property tests compare each fast path with a brute-force version: check state against a recursive count, rows against a naive recursive walk, filter visibility against a per-node check, sort against a full comparison sort. Scan tests use `tempfile`.
-2. **UI integration.** `#[gpui_kit::test]` in `crates/viewer/tests/ui.rs`. Each opens a headless window on the real root view over a `Tree::from_paths` fixture, drives it with clicks and key presses, and asserts on labels, values, focus and model state.
+2. **UI integration.** `#[gpui_kit::test]` in `crates/viewer/tests/ui/`: `main.rs` holds the shared helpers and one module per area (rows, checks, filter, header, keyboard, toolbar, stage, presentation, refresh, watch, persist, menus, races, timing probes and others). Each opens a headless window on the real root view over a `Tree::from_paths` fixture or a temporary folder, drives it with clicks and key presses, and asserts on labels, values, focus and model state. `crates/viewer/tests/shots.rs` (`just shot`) renders key states to PNG.
 3. **Benchmarks.** `criterion` in `explorer/benches`, over a synthetic million-node tree and a real scan.
 
 Behaviour tests ported from brainstrike's suite, by name:
@@ -405,12 +414,13 @@ Milestone 5 detail:
 
 As built:
 
-- **File.** `~/Library/Application Support/ai.brainstrike.viewer/state.json` on macOS (`directories`' config folder for the bundle identifier). `STRIKEBRAIN_VIEWER_STATE=<file>` points a run elsewhere. Fields: `version` (1), `root` (absolute, canonical), `show_ignored`, `expanded`, `selected` (`folders` and `files`), `current`, `query`, `kind`, `sort` (`key`, `direction`), `first_visible_row`, `explorer_width`, `window` (`state` windowed, maximized or fullscreen; `x`, `y`, `width`, `height` relative to its display; the display's UUID). A missing, unreadable, malformed or other-version file is ignored and the app starts fresh; it is replaced at the next save. Unusable values (a relative root, a non-positive size) are dropped.
+- **File.** `~/Library/Application Support/ai.brainstrike.viewer/state.json` on macOS (`directories`' config folder for the bundle identifier). `STRIKEBRAIN_VIEWER_STATE=<file>` points a run elsewhere. Fields: `version` (1), `root` (absolute, canonical), `show_ignored`, `expanded`, `selected` (`folders` and `files`), `current`, `query`, `kind`, `sort` (`key`, `direction`), `first_visible_row`, `explorer_width`, `window` (`state` windowed, maximized or fullscreen; `x`, `y` the frame's top-left corner relative to its display and `width`, `height` the content's size, title bar excluded, which is what a window opens with; the display's UUID). A missing, unreadable, malformed or other-version file is ignored and the app starts fresh; it is replaced at the next save. Unusable values (a relative root, a non-positive size) are dropped.
 - **Checks, compactly.** A folder whose every file is checked is one entry under `folders` (the root is `""`); other checked files are listed under `files`. Select all over any tree saves as one entry. Restoring a folder entry checks every file in it at that time, including files added since. A rescan does the same, so a session and a relaunch agree: a folder whose every file is checked (the whole tree, after Select all) keeps every file checked when files appear in it, by Refresh or live refresh; a file added to a partly checked folder comes in unchecked. Measured (release, M4 Max): 100,000 checked files with no folder fully checked save as 3.96 MB in 22 ms on the background executor (names 12 ms, encoding 5 ms, writing 5 ms) and read back in 4 ms; all 100,000 checked save as 402 bytes. The UI thread copies two bit sets, under a microsecond at this size.
 - **First visible row** is stored by path, not index, so it survives files added above it. Restoring puts that row at the top of the tree and gives it keyboard focus. Under a Size sort it waits for sizes, which reorder the rows.
-- **When it saves.** Half a second after a change, at most once per half second (a change while a save waits rides along), and when the app quits. Closing the window quits, so that save runs with the window still there. A save copies the state on the UI thread and names, encodes and writes it on the background executor; saves land in the order they were taken, an unchanged state is not written again, and the file is written to a temporary name and renamed over the old one. Scrolling alone does not schedule a save; the next save or the quit records it.
-- **Restoring** happens in two steps: the filter and Show ignored apply before the first scan, so the first tree is already right; sort, open folders, checks, `current` and the top row apply when the scan lands. Window bounds go to the window when it opens, moved and shrunk onto the saved display's visible area, or the primary display's when that display is gone. A fullscreen the presentation made is saved as the window it came from.
-- **Live refresh.** The watcher (`notify`'s FSEvents backend; creations, removals and modifications, no reads) runs on its own thread and feeds a channel. A GPUI task waits for a change, gathers more for 150 ms on GPUI's timer, then asks `explorer::changes_matter`, off the UI thread, whether a new scan would show any of them: a path the tree lists matters; otherwise the first part of the path the tree lacks matters only if it still exists and the scan's own walker, with the same ignore rules, would list it. Changes inside `.git`, to `.DS_Store`, under ignored folders such as `target/` and `node_modules/`, and under the app's own state folder never rescan. Measured: 400 files written under an ignored `target/` and a log ignored at the top, over a second, caused no rescan; one new file in `src/` caused exactly one. A change while a scan runs asks for one more scan when it lands, never more. A watcher error, or a watcher that lost track with no path to name, rescans once. The watcher is replaced when the folder changes and dropped with the state. One that cannot start (the folder is missing, a watch limit) leaves the folder unfollowed and turns Refresh the warning colour, its tooltip giving the reason.
+- **When it saves.** Half a second after a change, at most once per half second (a change while a save waits rides along), and when the app quits. Closing the window quits, so that save runs with the window still there. A save copies the state on the UI thread and names, encodes and writes it on the background executor; saves land in the order they were taken, an unchanged state is not written again, and the file is written to a temporary name, synced to disk and renamed over the old one; a write that fails removes the temporary file. Scrolling alone does not schedule a save; the next save or the quit records it.
+- **Nothing on screen to save.** Refresh or Show ignored before the first scan lands scan again with the saved view still waiting. A saved folder the launch does not open (its volume not mounted, a folder that is gone, another folder given) is kept and saved again as it was until another folder opens. A folder that vanishes while open (moved, deleted, unmounted) keeps the view it had as the one saved, top row included as of the last save, and Refresh once it is back restores it.
+- **Restoring** happens in two steps: the filter and Show ignored apply before the first scan, so the first tree is already right; sort, open folders, checks, `current` and the top row apply when the scan lands. Window bounds go to the window when it opens, moved and shrunk onto the saved display's visible area, or the primary display's when that display is gone. A fullscreen the presentation made is saved as the window it came from. The explorer's width is fitted to the window: at least 220 px, leaving the stage at least 220 px. A disk change during the first scan does not lose the saved top row: the rescan that follows puts it at the top.
+- **Live refresh.** The watcher (`notify`'s FSEvents backend; creations, removals and modifications, no reads) runs on its own thread and feeds a channel. A GPUI task waits for a change, gathers more for 150 ms on GPUI's timer, then asks `explorer::changes_matter`, off the UI thread, whether a new scan would show any of them: a path the tree lists matters; otherwise the first part of the path the tree lacks matters only if it still exists and the scan's own walker, with the same ignore rules, would list it. Changes inside `.git`, to `.DS_Store`, under ignored folders such as `target/` and `node_modules/`, and to the app's own state file and its temporary name never rescan. Measured: 400 files written under an ignored `target/` and a log ignored at the top, over a second, caused no rescan; one new file in `src/` caused exactly one. Changes that arrive during the folder's first scan wait for its tree and are judged against it. A change while a scan runs asks for one more scan when it lands, never more. A watcher error, or a watcher that lost track with no path to name, rescans once. The watcher is replaced when the folder changes and dropped with the state. One that cannot start (the folder is missing, a watch limit) leaves the folder unfollowed and turns Refresh the warning colour, its tooltip giving the reason; Refresh starts it again. A rescan that finds the file on the stage unchanged (size and modification time) neither reads nor rebuilds its view, so its scroll, selection and keyboard focus stay; a changed file is read again, and focus leaves the view only when the file or its viewer changes. A Markdown link opens only when it is `http`, `https` or `mailto`.
 - **Bundle.** `just bundle` builds the release profile (thin LTO, one codegen unit, debug info stripped, symbol names kept, panics unwind) and assembles `target/release/bundle/osx/Strikebrain Viewer.app` by hand, as the Kit's packaging guide does: the Info.plist template in `crates/viewer/bundle` with the version from Cargo, an `.icns` made with `sips` and `iconutil` from the 1024 px `icon.png` that `just icon` draws, and an ad-hoc signature. Measured on 2026-11-23: binary 26.1 MB (21.4 MB with symbol names stripped as well), bundle 25 MB; launching the bundled binary to its first on-screen window, 0.67 s the first time after a build and 0.20 s after.
 
 ## Functions Sean writes
@@ -435,6 +445,8 @@ Each is set up with its signature, doc comment and failing tests. Sean writes th
 - **Markdown on large files.** The text view lays out only the blocks on screen: 0.25 ms a frame at 4 KB to 345 KB. It measures every block once when a document opens: 28 ms at 4 KB, 41 ms at 86 KB, 0.21 s at 345 KB. Opening a document whose text shares no prefix with the one before costs more, growing with the square of the size (release, M4 Max, click to first frame, two kinds of generated document): 0.07 to 0.12 s at 128 KB, 0.18 to 0.21 s at 256 KB, 0.32 to 0.34 s at 384 KB, 0.47 to 0.53 s at 512 KB, 0.93 to 0.97 s at 768 KB, 1.5 to 1.6 s at 1 MB, 5.1 to 5.3 s at 2 MB. So Markdown over 256 KB, the largest size measured under 0.3 s, opens in the code view: 10 ms at 256 to 512 KB, 17 ms at 1 MB, 29 ms at 2 MB. Probes: `timing_the_markdown_view_on_large_documents`, `timing_markdown_around_its_size_limit`.
 - **Small scroll steps far down a very long list.** GPUI keeps a list's scroll offset in an `f32`: `uniform_list`, the Kit's `VirtualList`, and `list()`, whose `ListState` anchors on a row but adds each wheel delta to an absolute `f32` top. At 29 px a row, a delta under half the `f32` step is lost: from row 289,262 (2^23 px, step 1 px) sub-pixel deltas go; from row 578,525 (2^24 px, step 2 px) a 1 px delta goes and 3 px moves 4; from row 1,157,049 (2^25 px, step 4 px) everything under 2 px goes. Measured on the 1,650,231-row reference corpus as one flat list (M2, release, M4 Max): at the middle, 0.5 and 1 px moved nothing and 3 px moved 4; at the end, 0.5 and 1 px moved nothing, 3 px moved 4 and 10 px moved 8. Frame cost is not the problem: a scrolling frame took 0.66 to 0.69 ms median and at most 1.1 ms at the top, the middle and the end (frame build without GPU raster). So past about row 578,000 a slow trackpad scroll sticks while flicks, the wheel, the scrollbar and the keys still move. The fix is scroll state of our own (a row plus an offset inside it, or `f64`) with our own wheel handling and a scrollbar adapter, not a framework list; it is left out of M2. Probe: `cargo test --release -p viewer --test ui -- --ignored --nocapture timing_scrolling`.
 - **Cold build time** is unknown until milestone 0.
+- **The caret's line number.** GPUI Base 0.10.0 draws the line number of the line holding the caret in the theme's foreground and ignores the theme's `editor.active_line_number`, which the app sets to the muted colour. A read-only view still has a caret, at the top when a file opens, so line 1's number stands out until the person clicks elsewhere. Not fixable through the theme in this version.
+- **Window bounds on a real screen.** GPUI reports a window's frame but opens a window at a content size, so the window used to grow by its title bar at each launch (measured on the bundle: 1128, 1160, 1192, 1224 px over four launches); it now saves the content size and stayed at 1096 px over four launches. Those launches ran while the Mac's screen was locked, with no active display, so GPUI placed the window without one; a launch with a display attached, and a window on a second display, have not been seen.
 - **Esc inside the fullscreen animation.** GPUI 0.3.12 makes a window fullscreen asynchronously and keeps AppKit's will-enter and did-enter callbacks to itself; nothing public says a transition is under way. Space then Esc within the half second of the animation can leave the window fullscreen with the presentation ended (the toggle that should undo it may land mid-animation, or before the window reports fullscreen). The green button puts it right. Not handled.
 - **Live refresh on very large folders.** Each change a scan would show rescans the whole folder, as decided. With Show ignored on, a busy folder the tree then shows (a build's `target/`) is rescanned back to back while it changes. On Linux, `notify` uses inotify, which watches every folder separately; a 1.65 M-entry tree would exceed default watch limits. Neither is handled. A change to `.git/info/exclude` or the global excludes does not rescan.
 
