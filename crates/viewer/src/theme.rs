@@ -35,7 +35,7 @@ const POPOVER: Pair = ((0., 0., 100.), (30., 6., 14.));
 
 /// Installs brainstrike's light and dark themes and applies the one that
 /// matches the system appearance. Call once, after `gpui_kit::init`.
-pub fn install(cx: &mut App) {
+pub(crate) fn install(cx: &mut App) {
     Theme::update(cx, |theme| {
         theme.light_theme = Rc::new(config(ThemeMode::Light));
         theme.dark_theme = Rc::new(config(ThemeMode::Dark));
@@ -44,7 +44,7 @@ pub fn install(cx: &mut App) {
 }
 
 /// Switches to the theme for the window's current appearance.
-pub fn follow_system(window: &mut Window, cx: &mut App) {
+pub(crate) fn follow_system(window: &mut Window, cx: &mut App) {
     Theme::sync_system_appearance(Some(window), cx);
 }
 

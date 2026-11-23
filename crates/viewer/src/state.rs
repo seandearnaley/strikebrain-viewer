@@ -45,7 +45,7 @@ pub enum ScanStatus {
 
 /// A keyboard movement over the rows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Motion {
+pub(crate) enum Motion {
     /// This many rows up, stopping at the first.
     Up(usize),
     /// This many rows down, stopping at the last.
@@ -82,7 +82,7 @@ pub(crate) enum RowAction {
 
 /// What [`AppState`] tells its views besides "something changed".
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum StateEvent {
+pub(crate) enum StateEvent {
     /// The rows were rebuilt by a command, not by a key on one row: a filter
     /// landed, folders opened or closed together, the sort or the tree
     /// changed. The tree keeps the focus row on screen.
@@ -302,7 +302,7 @@ impl AppState {
     }
 
     /// Moves keyboard focus; returns the new focus row.
-    pub fn move_focus(&mut self, motion: Motion, cx: &mut Context<Self>) -> Option<usize> {
+    pub(crate) fn move_focus(&mut self, motion: Motion, cx: &mut Context<Self>) -> Option<usize> {
         let explorer = self.explorer.as_ref()?;
         let last = explorer.rows().len().checked_sub(1)?;
         let from = self.focus_index().unwrap_or(0);

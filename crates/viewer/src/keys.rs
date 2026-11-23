@@ -10,16 +10,16 @@
 use gpui_kit::{KeyBinding, actions};
 
 /// The key context the explorer's tree declares.
-pub const EXPLORER: &str = "Explorer";
+pub(crate) const EXPLORER: &str = "Explorer";
 
 /// The key context around the explorer's filter input.
-pub const FILTER: &str = "Filter";
+pub(crate) const FILTER: &str = "Filter";
 
 /// The key context the stage declares.
-pub const STAGE: &str = "Stage";
+pub(crate) const STAGE: &str = "Stage";
 
 /// The key context of the explorer's body while no tree is on screen.
-pub const EXPLORER_BODY: &str = "ExplorerBody";
+pub(crate) const EXPLORER_BODY: &str = "ExplorerBody";
 
 actions!(
     explorer,
@@ -74,7 +74,7 @@ actions!(
 ///
 /// Learning exercise: Sean may rewrite this body; the tests below define it.
 #[must_use]
-pub fn bindings() -> Vec<KeyBinding> {
+pub(crate) fn bindings() -> Vec<KeyBinding> {
     let (explorer, filter, stage) = (Some(EXPLORER), Some(FILTER), Some(STAGE));
     let body = Some(EXPLORER_BODY);
     vec![

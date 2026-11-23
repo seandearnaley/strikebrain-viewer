@@ -8,7 +8,7 @@
 //! widens; see [`crate::columns`].
 
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use explorer::{Check, Kind, NodeId, RowView, format_size};
 use gpui_kit::base::{Checkbox, CheckboxIndicator, CheckboxState, RoleOverride};
@@ -24,6 +24,11 @@ use crate::state::RowAction;
 
 /// Indent per level below the top: 20 px.
 const INDENT: Rems = Rems(1.25);
+
+/// Tabular figures, so sizes line up digit under digit. Made once; each row
+/// clones the `Arc`.
+static TABULAR_FIGURES: LazyLock<FontFeatures> =
+    LazyLock::new(|| FontFeatures(Arc::new(vec![("tnum".into(), 1)])));
 
 /// What the chevron target holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -239,7 +244,7 @@ impl TreeRow {
                         .id("size")
                         .test_support()
                         .font_family(mono)
-                        .font_features(FontFeatures(Arc::new(vec![("tnum".into(), 1)])))
+                        .font_features(TABULAR_FIGURES.clone())
                         .text_xs()
                         .text_color(muted_foreground)
                         .when_some(size, |cell, bytes| cell.child(format_size(bytes))),

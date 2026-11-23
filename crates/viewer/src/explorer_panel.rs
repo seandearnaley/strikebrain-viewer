@@ -116,15 +116,16 @@ impl ExplorerPanel {
         }
     }
 
-    /// Whether the filter input is on screen: a folder is open.
-    pub(crate) fn has_filter(&self, cx: &App) -> bool {
+    /// Whether the filter input is on screen: anything but the "Open
+    /// Folder" state.
+    pub(crate) fn filter_on_screen(&self, cx: &App) -> bool {
         !self.state.read(cx).is_empty()
     }
 
     /// Focuses the filter input with its text selected, so typing replaces
     /// the query.
     pub(crate) fn focus_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.has_filter(cx) {
+        if !self.filter_on_screen(cx) {
             return;
         }
         self.filter.update(cx, |input, cx| {
@@ -144,31 +145,19 @@ impl ExplorerPanel {
     // the focus row on screen.
 
     fn focus_previous(&mut self, _: &FocusPrevious, _: &mut Window, cx: &mut Context<Self>) {
-        let row = self
-            .state
-            .update(cx, |state, cx| state.move_focus(Motion::Up(1), cx));
-        self.after_key(row, cx);
+        self.move_focus(Motion::Up(1), cx);
     }
 
     fn focus_next(&mut self, _: &FocusNext, _: &mut Window, cx: &mut Context<Self>) {
-        let row = self
-            .state
-            .update(cx, |state, cx| state.move_focus(Motion::Down(1), cx));
-        self.after_key(row, cx);
+        self.move_focus(Motion::Down(1), cx);
     }
 
     fn focus_first(&mut self, _: &FocusFirst, _: &mut Window, cx: &mut Context<Self>) {
-        let row = self
-            .state
-            .update(cx, |state, cx| state.move_focus(Motion::First, cx));
-        self.after_key(row, cx);
+        self.move_focus(Motion::First, cx);
     }
 
     fn focus_last(&mut self, _: &FocusLast, _: &mut Window, cx: &mut Context<Self>) {
-        let row = self
-            .state
-            .update(cx, |state, cx| state.move_focus(Motion::Last, cx));
-        self.after_key(row, cx);
+        self.move_focus(Motion::Last, cx);
     }
 
     fn focus_previous_page(
@@ -178,17 +167,19 @@ impl ExplorerPanel {
         cx: &mut Context<Self>,
     ) {
         let page = self.page(cx);
-        let row = self
-            .state
-            .update(cx, |state, cx| state.move_focus(Motion::Up(page), cx));
-        self.after_key(row, cx);
+        self.move_focus(Motion::Up(page), cx);
     }
 
     fn focus_next_page(&mut self, _: &FocusNextPage, _: &mut Window, cx: &mut Context<Self>) {
         let page = self.page(cx);
+        self.move_focus(Motion::Down(page), cx);
+    }
+
+    /// The one step behind the six focus keys.
+    fn move_focus(&mut self, motion: Motion, cx: &mut Context<Self>) {
         let row = self
             .state
-            .update(cx, |state, cx| state.move_focus(Motion::Down(page), cx));
+            .update(cx, |state, cx| state.move_focus(motion, cx));
         self.after_key(row, cx);
     }
 

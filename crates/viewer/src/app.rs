@@ -143,7 +143,7 @@ impl AppView {
     /// Tab and shift-Tab: filter, tree, stage, round again. The filter is
     /// skipped while no folder is open.
     fn cycle_pane(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let order: &[Pane] = if self.explorer.read(cx).has_filter(cx) {
+        let order: &[Pane] = if self.explorer.read(cx).filter_on_screen(cx) {
             &[Pane::Filter, Pane::Tree, Pane::Stage]
         } else {
             &[Pane::Tree, Pane::Stage]
