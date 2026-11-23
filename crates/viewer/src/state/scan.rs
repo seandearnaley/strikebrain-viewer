@@ -63,6 +63,8 @@ impl AppState {
         self.current = None;
         self.focus = None;
         self.selected = 0;
+        self.restore = None;
+        self.restore_top = None;
         self.start_scan(root, ScanKind::Open, cx);
     }
 
@@ -168,6 +170,7 @@ impl AppState {
         match scanned {
             Ok(tree) => {
                 self.show_tree(Arc::clone(&tree));
+                self.restore_view(cx);
                 cx.notify();
                 Some(tree)
             }
@@ -190,6 +193,9 @@ impl AppState {
             return;
         };
         explorer.sizes_loaded();
+        if let Some(top) = self.restore_top.take() {
+            return self.show_saved_top(Some(&top), cx);
+        }
         if explorer.sort().key == SortKey::Size {
             self.rows_replaced(cx);
         } else {

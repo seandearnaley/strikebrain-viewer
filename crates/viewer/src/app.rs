@@ -9,18 +9,26 @@
 //! The split's sizes live in an entity this view owns rather than in the
 //! split element's own state, which lasts only while the split is drawn:
 //! so the explorer keeps its width while the presentation hides it.
+//!
+//! With a [`StateStore`] the view saves itself: half a second after a
+//! change (at most one save per half second), and when the app quits. A
+//! save copies the state out on the UI thread, cheaply, and names, encodes
+//! and writes it on the background executor.
 
-use gpui_kit::component::{ResizableState, h_resizable, resizable_panel};
+use std::time::Duration;
+
+use gpui_kit::component::{ResizablePanelEvent, ResizableState, h_resizable, resizable_panel};
 use gpui_kit::{
     App, AppContext as _, Context, Entity, Focusable as _, IntoElement, ParentElement as _, Pixels,
-    Render, SharedString, StyleRefinement, Styled as _, Subscription, TestSupportExt as _, Window,
-    div, prelude::*, px,
+    Render, SharedString, StyleRefinement, Styled as _, Subscription, Task, TestSupportExt as _,
+    Window, WindowBounds, div, prelude::*, px,
 };
 
 use crate::explorer_panel::{ExplorerFocus, ExplorerPanel};
 use crate::keys::{FocusExplorer, FocusFilter, NextPane, OpenFolder, PreviousPane};
+use crate::persist::{FolderView, SavedWindow, Snapshot, StateStore};
 use crate::stage::{Stage, StageProbe};
-use crate::state::{AppState, Launch};
+use crate::state::{AppState, Launch, StateOptions};
 use crate::theme;
 
 /// Starting width of the explorer pane, in pixels.
@@ -28,6 +36,22 @@ pub const EXPLORER_WIDTH: f32 = 300.0;
 
 /// Narrowest width the explorer pane can be dragged to, in pixels.
 pub const EXPLORER_MIN_WIDTH: f32 = 220.0;
+
+/// How long a change waits before it is saved; changes meanwhile ride
+/// along with it.
+pub const SAVE_DELAY: Duration = Duration::from_millis(500);
+
+/// What a window brings back from a saved state, and where it saves. The
+/// default does neither.
+#[derive(Debug, Default)]
+pub struct Session {
+    /// The saved view of the folder being opened.
+    pub view: Option<FolderView>,
+    /// The explorer's saved width, in pixels.
+    pub explorer_width: Option<f32>,
+    /// Where to save. `None` saves nothing.
+    pub store: Option<StateStore>,
+}
 
 /// A pane that takes keyboard focus, in Tab order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,13 +63,16 @@ enum Pane {
 
 /// The root view: explorer on the left, stage on the right. Owns the
 /// [`AppState`] both observe, keeps the window title on the folder's name,
-/// handles ⌘O, ⌘F and moving between panes, and follows the presentation.
+/// handles ⌘O, ⌘F and moving between panes, follows the presentation, and
+/// saves the state.
 pub struct AppView {
     state: Entity<AppState>,
     explorer: Entity<ExplorerPanel>,
     stage: Entity<Stage>,
     /// The sizes of the explorer and the stage beside it.
     split: Entity<ResizableState>,
+    /// The explorer's width when the split is first laid out.
+    explorer_width: Pixels,
     /// The title last given to the window.
     title: Option<SharedString>,
     /// Whether the window is laid out for the presentation: follows
@@ -54,7 +81,13 @@ pub struct AppView {
     /// Whether the presentation made the window fullscreen, so leaving it
     /// should make the window windowed again.
     entered_fullscreen: bool,
-    _subscriptions: [Subscription; 2],
+    /// Where the window is, as last reported.
+    window: Option<SavedWindow>,
+    /// Where the state is saved, if anywhere.
+    store: Option<StateStore>,
+    /// The save waiting for its delay. While it waits, changes add nothing.
+    save_task: Option<Task<()>>,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl std::fmt::Debug for AppView {
@@ -67,17 +100,46 @@ impl std::fmt::Debug for AppView {
 
 impl AppView {
     /// Builds the window's content and starts what `launch` asks for. The
-    /// tree takes keyboard focus.
+    /// tree takes keyboard focus. Nothing is restored or saved.
     pub fn new(launch: Launch, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let app_state = cx.new(|cx| AppState::new(launch, cx));
+        Self::with_session(launch, Session::default(), window, cx)
+    }
+
+    /// Builds the window's content as [`AppView::new`] does, restoring and
+    /// saving as `session` says.
+    pub fn with_session(
+        launch: Launch,
+        session: Session,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let options = StateOptions { view: session.view };
+        let app_state = cx.new(|cx| AppState::with_options(launch, options, cx));
         let explorer = cx.new(|cx| ExplorerPanel::new(app_state.clone(), window, cx));
         let stage = cx.new(|cx| Stage::new(app_state.clone(), window, cx));
-        let subscriptions = [
+        let split = cx.new(|_| ResizableState::default());
+        let subscriptions = vec![
             cx.observe_in(&app_state, window, |this, _, window, cx| {
                 this.sync_title(window, cx);
                 this.sync_presentation(window, cx);
+                this.schedule_save(cx);
             }),
             cx.observe_window_appearance(window, |_, window, cx| theme::follow_system(window, cx)),
+            cx.observe_window_bounds(window, |this, window, cx| {
+                this.window = Some(this.place(window, cx));
+                this.schedule_save(cx);
+            }),
+            cx.subscribe(&split, |this, _, _: &ResizablePanelEvent, cx| {
+                this.schedule_save(cx);
+            }),
+            cx.on_app_quit(|this, cx| {
+                let saved = this.save(cx);
+                async move {
+                    if let Some(saved) = saved {
+                        saved.await;
+                    }
+                }
+            }),
         ];
         window.focus(&explorer.focus_handle(cx), cx);
 
@@ -85,12 +147,20 @@ impl AppView {
             state: app_state,
             explorer,
             stage,
-            split: cx.new(|_| ResizableState::default()),
+            split,
+            explorer_width: px(session
+                .explorer_width
+                .unwrap_or(EXPLORER_WIDTH)
+                .max(EXPLORER_MIN_WIDTH)),
             title: None,
             presenting: false,
             entered_fullscreen: false,
+            window: None,
+            store: session.store,
+            save_task: None,
             _subscriptions: subscriptions,
         };
+        view.window = Some(view.place(window, cx));
         view.sync_title(window, cx);
         view
     }
@@ -113,6 +183,20 @@ impl AppView {
     #[must_use]
     pub fn title(&self) -> Option<&SharedString> {
         self.title.as_ref()
+    }
+
+    /// The explorer's width as laid out, in pixels; before the first
+    /// layout, the width it starts at.
+    #[must_use]
+    pub fn explorer_width(&self, cx: &App) -> f32 {
+        self.split
+            .read(cx)
+            .sizes()
+            .first()
+            .copied()
+            .filter(|width| *width > px(0.))
+            .unwrap_or(self.explorer_width)
+            .as_f32()
     }
 
     fn sync_title(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -155,7 +239,69 @@ impl AppView {
         cx.notify();
     }
 
-    fn open_folder(&mut self, _: &OpenFolder, _: &mut Window, cx: &mut Context<Self>) {
+    // Saving
+
+    /// Where the window is, to restore. A fullscreen the presentation made
+    /// is saved as the window it came from.
+    fn place(&self, window: &Window, cx: &App) -> SavedWindow {
+        let bounds = match window.window_bounds() {
+            WindowBounds::Fullscreen(bounds) if self.entered_fullscreen => {
+                WindowBounds::Windowed(bounds)
+            }
+            bounds => bounds,
+        };
+        let display = window
+            .display(cx)
+            .and_then(|display| display.uuid().ok())
+            .map(|uuid| uuid.to_string());
+        SavedWindow { bounds, display }
+    }
+
+    /// Saves after [`SAVE_DELAY`], unless a save is already waiting: that
+    /// one will take this change too.
+    fn schedule_save(&mut self, cx: &mut Context<Self>) {
+        if self.store.is_none() || self.save_task.is_some() {
+            return;
+        }
+        let delay = cx.background_executor().timer(SAVE_DELAY);
+        self.save_task = Some(cx.spawn(async move |this, cx| {
+            delay.await;
+            // Dropping this task's own handle ends it here, so the write
+            // goes on alone.
+            this.update(cx, |this, cx| {
+                this.save_task = None;
+                if let Some(write) = this.save(cx) {
+                    write.detach();
+                }
+            })
+            .unwrap_or_default();
+        }));
+    }
+
+    /// Saves now: copies the state out here and writes it on the
+    /// background executor. Returns the write, or `None` without a store.
+    /// A write that fails leaves the last good file in place.
+    pub fn save(&mut self, cx: &mut Context<Self>) -> Option<Task<()>> {
+        let store = self.store.clone()?;
+        let top_row = self.explorer.read(cx).top_row(cx);
+        let state = self.state.read(cx);
+        let snapshot = Snapshot {
+            root: state.saved_root(),
+            view: state.saved_view(top_row),
+            explorer_width: Some(self.explorer_width(cx)),
+            window: self.window.clone(),
+        };
+        let ticket = store.ticket();
+        Some(cx.background_spawn(async move {
+            // A failed write leaves the last good file, and the next save
+            // tries again; there is no one to tell.
+            let _written = store.write(ticket, &snapshot.saved());
+        }))
+    }
+
+    // Actions
+
+    fn open_folder_picker(&mut self, _: &OpenFolder, _: &mut Window, cx: &mut Context<Self>) {
         self.state
             .update(cx, |_, cx| AppState::prompt_for_folder(cx));
     }
@@ -231,7 +377,7 @@ impl Render for AppView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let root = div()
             .size_full()
-            .on_action(cx.listener(Self::open_folder))
+            .on_action(cx.listener(Self::open_folder_picker))
             .on_action(cx.listener(Self::next_pane))
             .on_action(cx.listener(Self::previous_pane))
             .on_action(cx.listener(Self::focus_filter))
@@ -244,7 +390,7 @@ impl Render for AppView {
                 .with_state(&self.split)
                 .child(
                     resizable_panel()
-                        .size(px(EXPLORER_WIDTH))
+                        .size(self.explorer_width)
                         .size_range(px(EXPLORER_MIN_WIDTH)..Pixels::MAX)
                         .child(
                             div()

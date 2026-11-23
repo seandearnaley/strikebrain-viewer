@@ -79,12 +79,19 @@ impl ExplorerPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let filter = cx.new(|cx| InputState::new(window, cx).placeholder("Filter"));
+        // A restored filter shows in the input from the start.
+        let query = state.read(cx).query().to_owned();
+        let filter = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Filter")
+                .default_value(query)
+        });
         let subscriptions = [
             cx.observe(&state, |_, _, cx| cx.notify()),
             cx.subscribe(&state, |this, _, event: &StateEvent, cx| match event {
                 StateEvent::RowsReplaced => this.reveal_focus(cx),
                 StateEvent::CurrentMoved => this.reveal_current(cx),
+                StateEvent::TopRow(row) => this.scroll.scroll_to_item(*row, ScrollStrategy::Top),
             }),
             cx.subscribe(&filter, |this, input, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Change) {
@@ -251,14 +258,42 @@ impl ExplorerPanel {
         self.state.update(cx, |state, cx| state.set_query("", cx));
     }
 
+    /// The row at the top of the tree's scroll, from the last layout: what
+    /// a saved state restores. `None` before the tree was laid out.
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "the quotient is a whole, non-negative row count, clamped below"
+    )]
+    pub(crate) fn top_row(&self, cx: &App) -> Option<usize> {
+        let rows = self
+            .state
+            .read(cx)
+            .explorer()
+            .map_or(0, |explorer| explorer.rows().len());
+        let row_height = self.row_height(rows)?;
+        let scrolled = -self.scroll.0.borrow().base_handle.offset().y;
+        let top = (scrolled / row_height).floor().max(0.) as usize;
+        Some(top.min(rows.saturating_sub(1)))
+    }
+
+    /// One row's height, from the last layout of `rows` rows.
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a row count past 2^24 only blurs a fraction of a row"
+    )]
+    fn row_height(&self, rows: usize) -> Option<gpui_kit::Pixels> {
+        let size = self.scroll.0.borrow().last_item_size?;
+        (rows > 0).then(|| size.contents.height / rows as f32)
+    }
+
     /// How many whole rows fit in the tree's viewport, from the last layout.
     /// The list records its viewport and content heights; the content is
     /// one row height per row.
     #[expect(
-        clippy::cast_precision_loss,
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
-        reason = "a row count past 2^24 only blurs a fraction of a row; `fit` is a whole, positive number of rows"
+        reason = "`fit` is a whole, positive number of rows"
     )]
     fn page(&self, cx: &App) -> usize {
         let rows = self
@@ -266,14 +301,16 @@ impl ExplorerPanel {
             .read(cx)
             .explorer()
             .map_or(0, |explorer| explorer.rows().len());
-        let Some(size) = self.scroll.0.borrow().last_item_size else {
+        let viewport = self
+            .scroll
+            .0
+            .borrow()
+            .last_item_size
+            .map(|size| size.item.height);
+        let (Some(row_height), Some(viewport)) = (self.row_height(rows), viewport) else {
             return FALLBACK_PAGE;
         };
-        if rows == 0 {
-            return FALLBACK_PAGE;
-        }
-        let row_height = size.contents.height / rows as f32;
-        let fit = (size.item.height / row_height).floor();
+        let fit = (viewport / row_height).floor();
         if fit >= 1. { fit as usize } else { 1 }
     }
 

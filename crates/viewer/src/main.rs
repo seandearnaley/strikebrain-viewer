@@ -1,14 +1,12 @@
 use std::path::PathBuf;
 
-use gpui_kit::{AppContext, TitlebarOptions, WindowOptions};
-use viewer::{AppAssets, AppView, Launch};
+use viewer::{AppAssets, StateStore, open_main_window};
 
 fn main() {
     // `strikebrain-viewer <folder>` opens the folder; with no argument the
-    // explorer offers "Open Folder".
-    let launch = std::env::args_os().nth(1).map_or(Launch::Empty, |folder| {
-        Launch::Folder(PathBuf::from(folder))
-    });
+    // folder open last time reopens, as it was seen.
+    let folder = std::env::args_os().nth(1).map(PathBuf::from);
+    let store = StateStore::in_config_dir();
 
     gpui_kit::application()
         .with_assets(AppAssets)
@@ -23,18 +21,7 @@ fn main() {
             })
             .detach();
 
-            gpui_kit::open_window(
-                WindowOptions {
-                    titlebar: Some(TitlebarOptions {
-                        title: Some("Strikebrain Viewer".into()),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
-                cx,
-                |window, cx| cx.new(|cx| AppView::new(launch, window, cx)),
-            )
-            .expect("open main window");
+            open_main_window(folder, store, cx).expect("open the main window");
             // Come to the front when launched from a terminal too. An
             // occluded window does not draw.
             cx.activate(true);

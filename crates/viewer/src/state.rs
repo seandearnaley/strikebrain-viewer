@@ -5,9 +5,11 @@
 //! scan. Views read it in `render` and change it only through its methods,
 //! each of which notifies once.
 //!
-//! Scanning lives in `state/scan.rs` and filtering in `state/filter.rs`.
+//! Scanning lives in `state/scan.rs`, filtering in `state/filter.rs`, and
+//! restoring a saved view in `state/restore.rs`.
 
 mod filter;
+mod restore;
 mod scan;
 
 use std::path::PathBuf;
@@ -16,6 +18,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use explorer::{Explorer, KindFilter, NodeId, SortKey, Tree};
 use gpui_kit::{Context, EventEmitter, Result, SharedString, Task};
+
+use crate::persist::FolderView;
 
 /// What the app shows when it starts.
 #[derive(Debug)]
@@ -27,6 +31,14 @@ pub enum Launch {
     /// Show a tree that is already built, such as a `Tree::from_paths`
     /// fixture. Nothing touches the disk; refreshing does nothing.
     Tree(Arc<Tree>),
+}
+
+/// What an [`AppState`] brings back from a saved state.
+#[derive(Clone, Debug, Default)]
+pub struct StateOptions {
+    /// A saved view of the folder `launch` opens, applied when its first
+    /// scan lands. Its filter and Show ignored apply from the start.
+    pub view: Option<FolderView>,
 }
 
 /// Where the folder scan stands.
@@ -90,6 +102,8 @@ pub(crate) enum StateEvent {
     /// The stage moved to another file by its own keys. The tree scrolls
     /// that file's row into view if it is a row, and opens no folder.
     CurrentMoved,
+    /// A saved view was restored: the tree scrolls this row to its top.
+    TopRow(usize),
 }
 
 /// The application state. See the module docs.
@@ -129,6 +143,10 @@ pub struct AppState {
     scan_task: Option<Task<Result<()>>>,
     /// Shows the progress bar once the scan is slow.
     slow_task: Option<Task<Result<()>>>,
+    /// A saved view waiting for the first scan of its folder.
+    restore: Option<FolderView>,
+    /// The saved top row, waiting for sizes before a Size sort settles.
+    restore_top: Option<String>,
 }
 
 impl std::fmt::Debug for AppState {
@@ -158,8 +176,15 @@ impl Drop for AppState {
 impl EventEmitter<StateEvent> for AppState {}
 
 impl AppState {
-    /// Creates the state and starts whatever `launch` asks for.
+    /// Creates the state and starts whatever `launch` asks for. Nothing is
+    /// restored.
     pub fn new(launch: Launch, cx: &mut Context<Self>) -> Self {
+        Self::with_options(launch, StateOptions::default(), cx)
+    }
+
+    /// Creates the state, restoring what `options` holds, and starts
+    /// whatever `launch` asks for.
+    pub fn with_options(launch: Launch, options: StateOptions, cx: &mut Context<Self>) -> Self {
         let mut state = Self {
             root: None,
             explorer: None,
@@ -178,11 +203,28 @@ impl AppState {
             scan_cancel: Arc::new(AtomicBool::new(false)),
             scan_task: None,
             slow_task: None,
+            restore: None,
+            restore_top: None,
         };
+        let view = options.view;
         match launch {
             Launch::Empty => {}
-            Launch::Folder(root) => state.open_folder(root, cx),
-            Launch::Tree(tree) => state.show_tree(tree),
+            Launch::Folder(root) => {
+                // The filter and the rules apply to the first scan already.
+                if let Some(view) = &view {
+                    state.take_filter(view);
+                }
+                state.open_folder(root, cx);
+                state.restore = view;
+            }
+            Launch::Tree(tree) => {
+                if let Some(view) = &view {
+                    state.take_filter(view);
+                }
+                state.show_tree(tree);
+                state.restore = view;
+                state.restore_view(cx);
+            }
         }
         state
     }

@@ -5,15 +5,21 @@ mod assets;
 mod columns;
 mod explorer_panel;
 mod keys;
+mod launch;
+mod persist;
 mod row;
 mod stage;
 mod state;
 mod theme;
 
-pub use app::{AppView, EXPLORER_MIN_WIDTH, EXPLORER_WIDTH};
+pub use app::{AppView, EXPLORER_MIN_WIDTH, EXPLORER_WIDTH, SAVE_DELAY, Session};
 pub use assets::AppAssets;
+pub use launch::open_main_window;
+pub use persist::{
+    APP_ID, FolderView, Plan, STATE_FILE_VAR, Saved, SavedWindow, StateStore, fit, plan_launch,
+};
 pub use stage::StageProbe;
-pub use state::{AppState, Launch, ScanStatus};
+pub use state::{AppState, Launch, ScanStatus, StateOptions};
 
 use gpui_kit::App;
 
