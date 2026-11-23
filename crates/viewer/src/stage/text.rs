@@ -33,6 +33,9 @@ use super::load::Stamp;
 /// How far ↑ and ↓ scroll: 40 px, a browser's arrow step.
 const STEP: Pixels = px(40.);
 
+/// The editor's language with no highlighter: its name for plain text.
+const PLAIN: &str = "text";
+
 /// The Markdown column's widest measure: 720 px, about 75 characters of
 /// body text.
 const MEASURE: Rems = Rems(45.);
@@ -130,9 +133,14 @@ impl TextViews {
         self.code_holds = Some(holds);
         let language: SharedString = language.to_owned().into();
         self.code.update(cx, |editor, cx| {
-            editor.set_highlighter(language, cx);
+            // The text goes in as plain text, then the language: the Kit's
+            // editor parses a document of up to 64 KB at once, on this
+            // thread, both when the text is set and on the next frame, so
+            // with the language first it parsed every file twice.
+            editor.set_highlighter(PLAIN, cx);
             // Starts at the top, with no selection.
             editor.set_value(text, window, cx);
+            editor.set_highlighter(language, cx);
         });
     }
 

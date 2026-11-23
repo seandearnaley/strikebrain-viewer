@@ -381,10 +381,13 @@ fn time_scroll_frames(
 #[expect(clippy::print_stderr, reason = "the probe reports its measurements")]
 fn timing_the_code_view_on_large_files(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().expect("a temporary folder");
+    // 1 KB first, which also loads the highlighter's syntax set; then 8 KB,
     // 27 KB, 62 KB (the largest the highlighter parses at once, on the UI
-    // thread), 68 KB, then about 0.5, 5.5 and 10 MB of 27-byte lines, and one
-    // 4.8 MB line.
-    let sizes = [1_000_i64, 2_300, 2_500, 20_000, 200_000, 360_000, -5_000];
+    // thread), 68 KB, then about 0.5, 5.5 and 10 MB of 27-byte lines, and
+    // one 4.8 MB line.
+    let sizes = [
+        40_i64, 300, 1_000, 2_300, 2_500, 20_000, 200_000, 360_000, -5_000,
+    ];
     for lines in sizes {
         crate::write(dir.path(), &format!("{lines:06}.rs"), generated_code(lines));
     }
