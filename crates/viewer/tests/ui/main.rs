@@ -83,8 +83,18 @@ struct Locked(PathBuf);
 impl Locked {
     /// `None` when the lock does not stop reads, as for root.
     fn new(path: &Path) -> Option<Self> {
+        Self::with_mode(path, 0o000)
+    }
+
+    /// A folder that can be passed through but not listed: what is inside
+    /// it can still be opened by its path. `None` as for [`Locked::new`].
+    fn unlisted(path: &Path) -> Option<Self> {
+        Self::with_mode(path, 0o311)
+    }
+
+    fn with_mode(path: &Path, mode: u32) -> Option<Self> {
         use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o000))
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
             .expect("lock the folder");
         let locked = Self(path.to_path_buf());
         std::fs::read_dir(path).is_err().then_some(locked)

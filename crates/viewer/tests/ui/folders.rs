@@ -236,3 +236,151 @@ fn pairs(names: &[(String, String)]) -> Vec<(&str, &str)> {
         .map(|(path, text)| (path.as_str(), text.as_str()))
         .collect()
 }
+
+/// How many rows are named `name`, scrolled away or not.
+fn count(cx: &mut TestAppContext, view: &Entity<AppView>, name: &str) -> usize {
+    read(cx, view, |state| {
+        let explorer = state.explorer().expect("a tree is on screen");
+        let tree = explorer.tree();
+        explorer
+            .rows()
+            .iter()
+            .filter(|&&id| tree.name(id) == name)
+            .count()
+    })
+}
+
+fn title(cx: &mut TestAppContext, view: &Entity<AppView>) -> String {
+    read(cx, view, |state| state.title().to_string())
+}
+
+/// Adds `paths` as the picker or the Dock would, and lets every task run.
+fn add(cx: &mut TestAppContext, view: &Entity<AppView>, paths: &[&std::path::Path]) {
+    let paths = paths.iter().map(|path| path.to_path_buf()).collect();
+    crate::state(cx, view).update(cx, |state, cx| state.add_folders(paths, Vec::new(), cx));
+    cx.run_until_parked();
+}
+
+#[gpui_kit::test]
+fn an_outer_folder_unreadable_then_readable_holds_the_inner_once(cx: &mut TestAppContext) {
+    let dir = folder(&[("d/sub/x.txt", "x"), ("d/top.txt", "t")]);
+    let (d, sub) = (dir.path().join("d"), dir.path().join("d/sub"));
+    let (handle, view) = open_app(cx, Launch::Folders(vec![sub.clone()]));
+    let Some(lock) = crate::Locked::unlisted(&d) else {
+        return;
+    };
+    // It cannot be listed: an unreadable row, holding nothing.
+    add(cx, &view, &[&d]);
+    assert_eq!(rows_now(cx, handle), ["sub", "x.txt", "d"]);
+    // Asked for again, the inner folder is open already.
+    add(cx, &view, &[&sub]);
+    assert_eq!(rows_now(cx, handle), ["sub", "x.txt", "d"]);
+
+    drop(lock);
+    crate::click(cx, handle, "refresh");
+    // Readable now, it takes the inner folder in: one copy of each file.
+    assert_eq!(rows_now(cx, handle), ["d", "sub", "x.txt", "top.txt"]);
+    assert_eq!(count(cx, &view, "x.txt"), 1);
+    assert_eq!(title(cx, &view), "d");
+}
+
+#[gpui_kit::test]
+fn an_inner_folder_rescanned_beside_an_unreadable_outer_stays_its_own(cx: &mut TestAppContext) {
+    let dir = folder(&[("d/sub/x.txt", "x"), ("d/top.txt", "t")]);
+    let (d, sub) = (dir.path().join("d"), dir.path().join("d/sub"));
+    let (handle, view) = open_app(cx, Launch::Folders(vec![sub]));
+    let Some(_lock) = crate::Locked::unlisted(&d) else {
+        return;
+    };
+    add(cx, &view, &[&d]);
+    crate::click(cx, handle, "refresh");
+    // Both rescanned: the inner one is still a folder of its own, with its
+    // rows, its title share and its watcher.
+    assert_eq!(rows_now(cx, handle), ["sub", "x.txt", "d"]);
+    assert_eq!(title(cx, &view), "Strikebrain Viewer");
+    assert_eq!(read(cx, &view, AppState::scans), 4);
+}
+
+/// A project whose ignore rules hide `target/`.
+fn project() -> tempfile::TempDir {
+    folder(&[
+        (".gitignore", "target/\n"),
+        ("src/main.rs", "fn main() {}"),
+        ("target/out.o", "o"),
+    ])
+}
+
+#[gpui_kit::test]
+fn a_folder_an_open_folder_ignores_is_added_as_its_own_and_taken_in_once_shown(
+    cx: &mut TestAppContext,
+) {
+    let dir = project();
+    let target = dir.path().join("target");
+    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
+    // Not in the tree: added as a folder of its own.
+    add(cx, &view, &[&target]);
+    let mut rows = under(dir.path(), &["src", ".gitignore"]);
+    rows.extend(["target".to_owned(), "out.o".to_owned()]);
+    assert_eq!(rows_now(cx, handle), rows);
+    assert_eq!(title(cx, &view), "Strikebrain Viewer");
+
+    // Show ignored: the outer folder lists it now, and takes it in.
+    crate::click(cx, handle, "show-ignored");
+    assert_eq!(
+        rows_now(cx, handle),
+        under(dir.path(), &["src", "target", "out.o", ".gitignore"])
+    );
+    assert_eq!(count(cx, &view, "out.o"), 1);
+    assert_eq!(title(cx, &view), name_of(dir.path()));
+}
+
+#[gpui_kit::test]
+fn a_folder_added_around_open_folders_takes_in_only_those_it_shows(cx: &mut TestAppContext) {
+    let dir = project();
+    let (src, target) = (dir.path().join("src"), dir.path().join("target"));
+    let (handle, view) = open_app(cx, Launch::Folders(vec![target, src]));
+    add(cx, &view, &[dir.path()]);
+    // src is in its tree, taken in open; target, which its ignore rules
+    // hide, stays a folder of its own.
+    let mut rows = vec!["target".to_owned(), "out.o".to_owned()];
+    rows.extend(under(dir.path(), &["src", "main.rs", ".gitignore"]));
+    assert_eq!(rows_now(cx, handle), rows);
+    assert_eq!(count(cx, &view, "main.rs"), 1);
+    // Two folders asked for, both followed.
+    assert_eq!(title(cx, &view), "Strikebrain Viewer");
+}
+
+#[gpui_kit::test]
+fn a_folder_asked_for_inside_one_still_scanning_waits_for_its_scan(cx: &mut TestAppContext) {
+    let dir = project();
+    let (src, target) = (dir.path().join("src"), dir.path().join("target"));
+    let (handle, view) = open_app(cx, Launch::Empty);
+    // Both asked for before the outer folder's first scan has run.
+    let state = crate::state(cx, &view);
+    state.update(cx, |state, cx| {
+        state.add_folders(vec![dir.path().to_owned()], Vec::new(), cx);
+        state.add_folders(vec![src.clone()], Vec::new(), cx);
+    });
+    cx.run_until_parked();
+    // Listed by the outer folder: the tree opens to its row, the focus row.
+    assert_eq!(
+        read(cx, &view, AppState::focus),
+        Some(node_at(cx, &view, &src))
+    );
+    assert_eq!(
+        rows_now(cx, handle),
+        under(dir.path(), &["src", ".gitignore"])
+    );
+
+    // Hidden by its ignore rules: a folder of its own once the scan lands.
+    let (handle, view) = open_app(cx, Launch::Empty);
+    let state = crate::state(cx, &view);
+    state.update(cx, |state, cx| {
+        state.add_folders(vec![dir.path().to_owned()], Vec::new(), cx);
+        state.add_folders(vec![target.clone()], Vec::new(), cx);
+    });
+    cx.run_until_parked();
+    let mut rows = under(dir.path(), &["src", ".gitignore"]);
+    rows.extend(["target".to_owned(), "out.o".to_owned()]);
+    assert_eq!(rows_now(cx, handle), rows);
+}

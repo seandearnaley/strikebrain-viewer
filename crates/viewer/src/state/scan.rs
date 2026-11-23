@@ -8,7 +8,7 @@
 //! shows as one unreadable row with the system's message, keeping the view
 //! it had until a scan can read it again.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -167,20 +167,37 @@ impl AppState {
             ),
         };
         let path = tree.root_path().to_path_buf();
-        // Inside a folder already on screen: its files are there already.
-        let inside = |other: &super::Folder| {
-            other.key != key && other.shown && other.path != path && path.starts_with(&other.path)
-        };
-        if self.folders.iter().any(inside) {
-            self.folders.retain(|other| other.key != key);
+        // A first scan of a folder a tree on screen lists already: its files
+        // are there.
+        let first = !folder.shown;
+        if first && self.listed(&path).is_some() {
+            let asked = self.take_folder(key);
+            self.settle_asked_inside(asked, cx);
             self.landed(cx);
             return None;
         }
         if error.is_none() {
-            // Folders inside this one leave; the join takes in those on
-            // screen, with their checks and open folders.
-            self.folders
-                .retain(|other| other.key == key || !other.path.starts_with(&path));
+            // Folders this scan lists leave, with what was asked inside
+            // them; the join takes in those on screen, with their checks
+            // and open folders.
+            let lists = |other: &super::Folder| {
+                other.key != key
+                    && tree
+                        .find_abs(&other.path)
+                        .is_some_and(|node| tree.kind(node).is_folder())
+            };
+            let taken: Vec<u64> = self
+                .folders
+                .iter()
+                .filter(|other| lists(other))
+                .map(|other| other.key)
+                .collect();
+            for each in taken {
+                let asked = self.take_folder(each);
+                if let Some(folder) = self.folder_mut(key) {
+                    folder.asked_inside.extend(asked);
+                }
+            }
         }
         let top = self.top_node();
         let joined = self.join(key, &old, &tree, error.is_some());
@@ -213,6 +230,10 @@ impl AppState {
         }
         self.selection_changed();
         self.landed_keeping(top.and_then(|top| map.get(top)), cx);
+        let asked = self
+            .folder_mut(key)
+            .map_or_else(Vec::new, |folder| std::mem::take(&mut folder.asked_inside));
+        self.settle_asked_inside(asked, cx);
         self.scan_settled(key, cx);
         (readable && !tree.has_sizes()).then_some(tree)
     }
@@ -255,6 +276,15 @@ impl AppState {
             folder.waiting = Some(explorer.snapshot().folder(top));
         }
         explorer.replace_folder(top, tree, current)
+    }
+
+    /// Takes the folder `key` out of the list, stopping its scan and its
+    /// watcher, and gives back what was asked for inside it meanwhile.
+    fn take_folder(&mut self, key: u64) -> Vec<(PathBuf, Option<SavedFolder>)> {
+        let Some(at) = self.folders.iter().position(|folder| folder.key == key) else {
+            return Vec::new();
+        };
+        std::mem::take(&mut self.folders.remove(at).asked_inside)
     }
 
     /// The sizes of the folder `key` on screen are in. Under a Size sort

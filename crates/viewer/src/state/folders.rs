@@ -3,10 +3,13 @@
 //!
 //! The folders keep the order they were added in. Each is known by its
 //! canonical path, which is also where its tree on screen says it is. A
-//! file is never in the tree twice: a folder already open, or one inside
-//! an open folder, is not added again; its row opens and takes focus
-//! instead. A folder added around open folders takes them in when its scan
-//! lands (see `state/scan.rs`).
+//! file is never in the tree twice, and that is the whole rule: a folder
+//! already open, or one an open folder's tree lists, is not added again;
+//! its row opens and becomes the focus row instead. A folder inside an open
+//! folder that its tree does not list (its ignore rules hide it, or it
+//! could not be read) is added as a folder of its own. One inside a folder
+//! whose first scan runs waits for that scan to decide. A folder whose scan
+//! lists open folders takes them in when it lands (see `state/scan.rs`).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -52,6 +55,10 @@ pub(super) struct Folder {
     /// Something changed on disk while a scan was running: rescan once it
     /// lands.
     pub(super) rescan_pending: bool,
+    /// Folders asked for inside this one while its first scan ran, with
+    /// their saved views: shown in its tree when it lands if it lists
+    /// them, else added as folders of their own.
+    pub(super) asked_inside: Vec<(PathBuf, Option<SavedFolder>)>,
 }
 
 impl std::fmt::Debug for Folder {
@@ -87,6 +94,7 @@ impl Folder {
             watch_task: None,
             watch_error: None,
             rescan_pending: false,
+            asked_inside: Vec::new(),
         }
     }
 
@@ -98,8 +106,8 @@ impl Folder {
         }
     }
 
-    /// Whether `path` is this folder or inside it.
-    fn holds(&self, path: &Path) -> bool {
+    /// Whether `path` is inside this folder, or is it.
+    pub(super) fn holds(&self, path: &Path) -> bool {
         path.starts_with(&self.path)
     }
 }
@@ -129,9 +137,10 @@ impl AppState {
 
     /// Adds each folder of `paths` as a top-level folder, after those open,
     /// and scans it: from the picker, the command line, "Open With" or the
-    /// Dock. A folder already open, or one inside an open folder, is not
-    /// added: its row opens and takes keyboard focus. `waiting` holds saved
-    /// views, each applied when its folder's first scan lands.
+    /// Dock. A folder already open, or one an open folder's tree lists, is
+    /// not added: its row opens and becomes the focus row. One inside a
+    /// folder whose first scan runs waits for that scan. `waiting` holds
+    /// saved views, each applied when its folder's first scan lands.
     pub fn add_folders(
         &mut self,
         paths: Vec<PathBuf>,
@@ -142,14 +151,27 @@ impl AppState {
             let path = std::fs::canonicalize(&path)
                 .or_else(|_| std::path::absolute(&path))
                 .unwrap_or(path);
-            if self.folders.iter().any(|folder| folder.holds(&path)) {
-                self.reveal_path(&path, cx);
-                continue;
-            }
             let saved = waiting
                 .iter()
                 .position(|view| view.path == path)
                 .map(|at| waiting.swap_remove(at));
+            // Open already, read or not, or in a tree on screen.
+            let open = self.folders.iter().any(|folder| folder.path == path);
+            if let Some(id) = self.listed(&path).or_else(|| self.folder_node(&path)) {
+                self.reveal(id, cx);
+                continue;
+            }
+            if open {
+                continue;
+            }
+            if let Some(outer) = self
+                .folders
+                .iter_mut()
+                .find(|folder| !folder.shown && folder.holds(&path))
+            {
+                outer.asked_inside.push((path, saved));
+                continue;
+            }
             let key = self.next_key;
             self.next_key += 1;
             self.folders.push(Folder::new(key, path, saved));
@@ -159,18 +181,45 @@ impl AppState {
         cx.notify();
     }
 
-    /// Opens the folders above the node at `path` and gives it keyboard
-    /// focus, if the tree lists it.
-    fn reveal_path(&mut self, path: &Path, cx: &mut Context<Self>) {
+    /// The node at `path` in the tree on screen, if a folder there lists
+    /// it: that folder itself, or a node its scan found. A folder that
+    /// could not be read lists nothing.
+    pub(super) fn listed(&self, path: &Path) -> Option<NodeId> {
+        self.folders
+            .iter()
+            .filter(|folder| folder.shown && folder.error.is_none() && folder.holds(path))
+            .find_map(|folder| self.node_in(&folder.path, path))
+    }
+
+    /// The node at `path` below the top-level folder at `folder`.
+    fn node_in(&self, folder: &Path, path: &Path) -> Option<NodeId> {
+        let explorer = self.explorer.as_ref()?;
+        let top = explorer.folder_at(folder)?;
+        let below = path.strip_prefix(folder).ok()?.to_str()?;
+        explorer.tree().find_from(top, below)
+    }
+
+    /// Opens the folders above `id` and makes it the focus row.
+    pub(super) fn reveal(&mut self, id: NodeId, cx: &mut Context<Self>) {
         let Some(explorer) = self.explorer.as_mut() else {
-            return;
-        };
-        let Some(id) = explorer.tree().find_abs(path) else {
             return;
         };
         if let Some(row) = explorer.reveal(id) {
             self.set_focus(id, row);
             self.rows_replaced(cx);
+        }
+    }
+
+    /// After the folder at `path` landed: each folder asked for inside it
+    /// meanwhile shows in its tree if the tree lists it, or is added as a
+    /// folder of its own.
+    pub(super) fn settle_asked_inside(
+        &mut self,
+        asked: Vec<(PathBuf, Option<SavedFolder>)>,
+        cx: &mut Context<Self>,
+    ) {
+        for (path, saved) in asked {
+            self.add_folders(vec![path], saved.into_iter().collect(), cx);
         }
     }
 
