@@ -34,7 +34,9 @@ jobs:
   build:
     name: build and test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    # A cold build of the optimized dependencies takes about 25 minutes on
+    # these runners; the cache makes later runs short.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -50,9 +52,14 @@ jobs:
           sudo apt-get install -y gcc g++ clang libfontconfig-dev libwayland-dev \
             libwebkit2gtk-4.1-dev libxkbcommon-x11-dev libx11-xcb-dev \
             libssl-dev libzstd-dev libasound2-dev libvulkan1
+      # Kept when a test fails, so the next push does not rebuild GPUI.
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest@0.9.152
-      - run: cargo build --locked -p viewer
-      - run: cargo nextest run --workspace --profile ci
+      - run: cargo nextest run --locked --workspace --profile ci
+      # The app as it ships, without test-support. A check, since a second
+      # build of GPUI would double the job.
+      - run: cargo check --locked -p viewer --lib --bins

@@ -432,6 +432,7 @@ mod tests {
         assert_eq!(text(&load(&path, "a.md", shown)), Some("# two, longer"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn only_regular_files_are_opened() {
         let dir = tempfile::tempdir().unwrap();
@@ -459,6 +460,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn opening_never_waits_on_a_fifo() {
         // What `load` meets if a file is swapped for a FIFO between reading
@@ -482,6 +484,7 @@ mod tests {
         assert!(!regular.unwrap());
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_symlink_to_a_fifo_is_never_opened() {
         let dir = tempfile::tempdir().unwrap();
