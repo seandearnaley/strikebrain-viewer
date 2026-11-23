@@ -1,9 +1,12 @@
 //! The explorer engine: tree, scan, selection, filter, sort and rows.
 //! This crate has no UI dependency.
 
+mod bits;
+mod selection;
 mod tree;
 
 pub use fixedbitset::FixedBitSet;
+pub use selection::{Check, Selection};
 pub use tree::{Kind, Tree, TreeError, compare_names};
 
 /// Identifies one node of a scanned tree. Ids are positions in depth-first order.
@@ -18,6 +21,12 @@ impl NodeId {
     #[must_use]
     pub const fn new(raw: u32) -> Self {
         Self(raw)
+    }
+
+    /// The id at array index `i`. A tree holds fewer than `u32::MAX` nodes,
+    /// so every index into its arrays fits.
+    pub(crate) fn from_index(i: usize) -> Self {
+        Self(u32::try_from(i).expect("a tree holds fewer than u32::MAX nodes"))
     }
 
     /// The id as an index into the tree's arrays.
