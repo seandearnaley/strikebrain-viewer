@@ -220,6 +220,27 @@ fn a_folder_added_around_open_folders_takes_them_in_with_their_view() {
 }
 
 #[test]
+fn a_folder_that_cannot_be_read_takes_nothing_in() {
+    let mut explorer = Explorer::empty();
+    explorer
+        .add_folder(&folder("/w/p/inner", &["a.txt"]), 0, None)
+        .unwrap();
+    explorer
+        .add_folder(&Tree::unreadable(Path::new("/w/p")), 1, None)
+        .unwrap();
+    assert_eq!(rows(&explorer), ["inner", "inner/a.txt", "p"]);
+    // A snapshot names one folder at a time too.
+    let p = at(&explorer, "/w/p");
+    assert_eq!(
+        explorer.snapshot().folder(p),
+        SavedFolder {
+            path: "/w/p".into(),
+            ..SavedFolder::default()
+        }
+    );
+}
+
+#[test]
 fn a_folder_added_after_select_all_comes_in_unchecked() {
     let mut explorer = two_folders();
     explorer.select_all();

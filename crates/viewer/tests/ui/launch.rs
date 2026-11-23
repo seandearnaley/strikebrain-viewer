@@ -1,21 +1,36 @@
-//! Opening a folder: from the command line, the picker, and failures.
+//! Adding folders: from the command line, the picker and the system, and
+//! a folder that cannot be read.
 
-use gpui_kit::AppContext as _;
-use gpui_kit::TestAppContext;
+use explorer::NodeId;
 use gpui_kit::test::TestWindowExt as _;
-use viewer::Launch;
+use gpui_kit::{AppContext as _, Entity, TestAppContext};
+use viewer::{AppState, AppView, Launch};
 
-use crate::{fixture_folder, labels, open_app, stage};
+use crate::{
+    fixture_folder, folder, labels, name_of, node, node_at, open_app, read, row, rows_now, stage,
+};
+
+/// The first top-level folder of the tree on screen.
+fn first_folder(cx: &mut TestAppContext, view: &Entity<AppView>) -> NodeId {
+    read(cx, view, |state| {
+        let tree = state.explorer().expect("a tree is on screen").tree();
+        tree.folders().next().expect("a folder")
+    })
+}
 
 #[gpui_kit::test]
 fn a_folder_argument_scans_the_folder_and_names_the_window(cx: &mut TestAppContext) {
-    let (handle, view) = open_app(cx, Launch::Folder(fixture_folder()));
+    let (handle, view) = open_app(cx, Launch::Folders(vec![fixture_folder()]));
 
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
-        assert_eq!(labels(window), ["nested", "alpha.txt", "beta.md"]);
+        // The folder is a top-level row, open, as it always is.
+        assert_eq!(
+            labels(window),
+            ["fixture", "nested", "alpha.txt", "beta.md"]
+        );
         assert_eq!(window.find("tree").label(), Some("fixture"));
-        assert_eq!(window.find_all("size").len(), 3);
+        assert_eq!(window.find_all("size").len(), 4);
     })
     .unwrap();
     let title = cx.update(|cx| view.read(cx).title().cloned());
@@ -23,49 +38,177 @@ fn a_folder_argument_scans_the_folder_and_names_the_window(cx: &mut TestAppConte
 }
 
 #[gpui_kit::test]
-fn an_unreadable_folder_shows_the_os_error(cx: &mut TestAppContext) {
-    let missing = fixture_folder().join("no-such-folder");
-    let (handle, _) = open_app(cx, Launch::Folder(missing));
-
-    cx.update_window(handle, |_, window, cx| {
-        window.render_frame(cx);
-        let error = window.find("scan-error");
-        assert!(error.visible());
-        // The operating system's message alone, without Rust's error code.
-        assert_eq!(error.label(), Some("No such file or directory"));
-        assert!(window.try_find("tree").is_none());
-    })
-    .unwrap();
+fn several_folders_open_in_the_order_given_and_the_title_is_the_apps(cx: &mut TestAppContext) {
+    let (b, a) = (folder(&[("b.txt", "b")]), folder(&[("a.txt", "a")]));
+    let launch = Launch::Folders(vec![b.path().to_owned(), a.path().to_owned()]);
+    let (handle, view) = open_app(cx, launch);
+    assert_eq!(
+        rows_now(cx, handle),
+        [
+            name_of(b.path()),
+            "b.txt".into(),
+            name_of(a.path()),
+            "a.txt".into()
+        ]
+    );
+    let title = cx.update(|cx| view.read(cx).title().cloned());
+    assert_eq!(title.as_deref(), Some("Strikebrain Viewer"));
+    // Each folder row's tooltip is its full path.
+    let top = node_at(cx, &view, a.path());
+    let tooltip = read(cx, &view, |state| state.folder_tooltip(top));
+    let path = std::fs::canonicalize(a.path()).unwrap();
+    assert_eq!(tooltip.as_deref(), path.to_str());
+    // A file's row has none.
+    let file = node(cx, &view, "b.txt");
+    assert_eq!(read(cx, &view, |state| state.folder_tooltip(file)), None);
 }
 
 #[gpui_kit::test]
-fn open_folder_and_command_o_show_the_folder_picker(cx: &mut TestAppContext) {
+fn an_unreadable_folder_is_a_row_with_the_os_error(cx: &mut TestAppContext) {
+    let missing = fixture_folder().join("no-such-folder");
+    let (handle, view) = open_app(cx, Launch::Folders(vec![missing.clone()]));
+
+    let top = first_folder(cx, &view);
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(labels(window), ["no-such-folder"]);
+        // A warning where the chevron would be; it never opens.
+        assert_eq!(window.find(row(top)).expanded(), None);
+        assert!(window.within(row(top)).try_find("warning").is_some());
+    })
+    .unwrap();
+    // The tooltip gives the path and the operating system's message alone,
+    // without Rust's error code.
+    let tooltip = read(cx, &view, |state| state.folder_tooltip(top)).unwrap();
+    assert_eq!(
+        tooltip.as_ref(),
+        format!("{}\nNo such file or directory", missing.display())
+    );
+}
+
+#[gpui_kit::test]
+fn add_folder_and_command_o_show_the_picker_which_adds_several(cx: &mut TestAppContext) {
     let (handle, view) = open_app(cx, Launch::Empty);
 
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         assert!(window.try_find("tree").is_none());
         assert_eq!(stage(window), None);
-        window.click("open-folder", cx);
+        assert_eq!(window.find("add-folder").label(), Some("Add Folder"));
+        window.click("add-folder", cx);
     })
     .unwrap();
     assert!(cx.did_prompt_for_paths());
-    cx.simulate_path_prompt_response(|options| {
-        assert!(options.directories && !options.files && !options.multiple);
-        Some(vec![fixture_folder()])
+    let other = folder(&[("c.txt", "c")]);
+    let other_path = other.path().to_owned();
+    cx.simulate_path_prompt_response(move |options| {
+        assert!(options.directories && !options.files && options.multiple);
+        Some(vec![fixture_folder(), other_path])
     });
     cx.run_until_parked();
+    assert_eq!(
+        rows_now(cx, handle),
+        [
+            "fixture".to_owned(),
+            "nested".into(),
+            "alpha.txt".into(),
+            "beta.md".into(),
+            name_of(other.path()),
+            "c.txt".into()
+        ]
+    );
 
+    // ⌘O adds beside what is open; cancelling the picker adds nothing.
+    cx.update_window(handle, |_, window, cx| window.press("cmd-o", cx))
+        .unwrap();
+    assert!(cx.did_prompt_for_paths());
+    cx.simulate_path_prompt_response(|_| None);
+    cx.run_until_parked();
+    assert_eq!(rows_now(cx, handle).len(), 6);
+    // The toolbar's button does the same.
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
-        assert_eq!(labels(window), ["nested", "alpha.txt", "beta.md"]);
-        window.press("cmd-o", cx);
+        assert_eq!(window.find("add-folder").label(), Some("Add Folder"));
+        window.click("add-folder", cx);
     })
     .unwrap();
     assert!(cx.did_prompt_for_paths());
-    // Cancelling the picker keeps the folder.
     cx.simulate_path_prompt_response(|_| None);
     cx.run_until_parked();
     let title = cx.update(|cx| view.read(cx).title().cloned());
-    assert_eq!(title.as_deref(), Some("fixture"));
+    assert_eq!(title.as_deref(), Some("Strikebrain Viewer"));
+}
+
+#[gpui_kit::test]
+fn a_folder_already_open_or_inside_one_is_not_added_again_but_shown(cx: &mut TestAppContext) {
+    let dir = folder(&[("deep/inner/x.txt", "x"), ("top.txt", "t")]);
+    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
+    let rows = rows_now(cx, handle);
+    assert_eq!(rows, [name_of(dir.path()), "deep".into(), "top.txt".into()]);
+
+    // The same folder by another spelling, and a folder inside it.
+    let state = crate::state(cx, &view);
+    let inner = dir.path().join("deep/inner");
+    state.update(cx, |state, cx| {
+        state.add_folders(
+            vec![dir.path().join("deep/.."), inner.clone()],
+            Vec::new(),
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    assert_eq!(read(cx, &view, AppState::scans), 1, "nothing scanned again");
+    // The inner folder's row opens and takes focus.
+    assert_eq!(
+        rows_now(cx, handle),
+        [
+            name_of(dir.path()),
+            "deep".into(),
+            "inner".into(),
+            "top.txt".into()
+        ]
+    );
+    let focus = read(cx, &view, AppState::focus);
+    assert_eq!(focus, Some(node_at(cx, &view, &inner)));
+}
+
+#[gpui_kit::test]
+fn a_folder_added_around_open_folders_takes_them_in(cx: &mut TestAppContext) {
+    let dir = folder(&[("one/a.txt", "a"), ("one/b.txt", "b"), ("two/c.txt", "c")]);
+    let one = dir.path().join("one");
+    let (handle, view) = open_app(cx, Launch::Folders(vec![one.clone()]));
+    let a = node(cx, &view, "a.txt");
+    cx.update_window(handle, |_, window, cx| {
+        window.within(row(a)).click("check", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(read(cx, &view, AppState::selected_count), 1);
+
+    let state = crate::state(cx, &view);
+    state.update(cx, |state, cx| {
+        state.add_folders(vec![dir.path().to_owned()], Vec::new(), cx);
+    });
+    cx.run_until_parked();
+    // One folder now, holding the other, which stays open, with its check.
+    assert_eq!(
+        rows_now(cx, handle),
+        [
+            name_of(dir.path()),
+            "one".into(),
+            "a.txt".into(),
+            "b.txt".into(),
+            "two".into()
+        ]
+    );
+    let checked = read(cx, &view, |state| {
+        state
+            .explorer()
+            .unwrap()
+            .selected_paths()
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(checked, [format!("{}/one/a.txt", name_of(dir.path()))]);
+    let title = cx.update(|cx| view.read(cx).title().cloned());
+    assert_eq!(title.as_deref(), Some(name_of(dir.path()).as_str()));
 }

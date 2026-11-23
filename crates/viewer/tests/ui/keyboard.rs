@@ -298,19 +298,21 @@ fn tab_moves_between_the_panes_with_no_folder_open(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn tab_and_command_f_work_when_the_folder_cannot_be_read(cx: &mut TestAppContext) {
-    let (handle, _) = open_app(cx, Launch::Folder(fixture_folder().join("no-such-folder")));
-    assert!(is_focused(cx, handle, "explorer-body"));
+    // The folder is one unreadable row: the tree is there to focus.
+    let missing = fixture_folder().join("no-such-folder");
+    let (handle, _) = open_app(cx, Launch::Folders(vec![missing]));
+    assert!(is_focused(cx, handle, "tree"));
 
     press(cx, handle, "cmd-f");
     assert!(is_focused(cx, handle, "filter"));
     press(cx, handle, "escape");
-    assert!(is_focused(cx, handle, "explorer-body"));
+    assert!(is_focused(cx, handle, "tree"));
     press(cx, handle, "tab");
     assert!(is_focused(cx, handle, "stage"));
     press(cx, handle, "tab");
     assert!(is_focused(cx, handle, "filter"));
     press(cx, handle, "tab");
-    assert!(is_focused(cx, handle, "explorer-body"));
+    assert!(is_focused(cx, handle, "tree"));
     press(cx, handle, "shift-tab");
     assert!(is_focused(cx, handle, "filter"));
 }
@@ -320,7 +322,9 @@ fn tab_and_command_f_work_during_the_first_scan(cx: &mut TestAppContext) {
     let dir = folder(&[("a.txt", "a")]);
     let (handle, view) = open_app(cx, Launch::Empty);
     // Keys arrive before the scan has run.
-    state(cx, &view).update(cx, |state, cx| state.open_folder(dir.path().to_owned(), cx));
+    state(cx, &view).update(cx, |state, cx| {
+        state.add_folders(vec![dir.path().to_owned()], Vec::new(), cx);
+    });
     cx.update_window(handle, |_, window, cx| {
         window.press("cmd-f", cx);
         assert_eq!(window.find("filter").focused(), Some(true));
@@ -331,5 +335,5 @@ fn tab_and_command_f_work_during_the_first_scan(cx: &mut TestAppContext) {
     })
     .unwrap();
     cx.run_until_parked();
-    assert_eq!(rows_now(cx, handle), ["a.txt"]);
+    assert_eq!(rows_now(cx, handle), crate::under(dir.path(), &["a.txt"]));
 }

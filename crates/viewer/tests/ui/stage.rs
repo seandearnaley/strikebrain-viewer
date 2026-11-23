@@ -145,7 +145,7 @@ pub(crate) fn open_checked(
     cx: &mut TestAppContext,
     dir: &Path,
 ) -> (AnyWindowHandle, Entity<AppView>) {
-    let (handle, view) = open_app(cx, Launch::Folder(dir.to_owned()));
+    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.to_owned()]));
     click(cx, handle, "select-all");
     press(cx, handle, "tab");
     assert!(is_focused(cx, handle, "stage"));
@@ -170,7 +170,7 @@ pub(crate) fn numbered(count: usize, before: &str, after: &str) -> String {
 fn each_file_gets_its_viewer(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     mixed(dir.path());
-    let (handle, view) = open_app(cx, Launch::Folder(dir.path().to_owned()));
+    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
 
     let expect = [
         ("photo.png", Shown::Image("photo.png".into())),
@@ -208,7 +208,7 @@ fn prose_wraps_with_no_line_numbers_and_code_does_not(cx: &mut TestAppContext) {
 fn the_code_view_holds_the_text_and_decodes_invalid_utf8_lossily(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     mixed(dir.path());
-    let (handle, view) = open_app(cx, Launch::Folder(dir.path().to_owned()));
+    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
 
     for (path, text) in [
         ("code.rs", "fn main() {\n    println!(\"hi\");\n}\n"),
@@ -228,7 +228,7 @@ fn the_code_view_holds_the_text_and_decodes_invalid_utf8_lossily(cx: &mut TestAp
 fn an_unsupported_file_shows_its_name_and_size(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     mixed(dir.path());
-    let (handle, view) = open_app(cx, Launch::Folder(dir.path().to_owned()));
+    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
 
     for (path, size) in [("data.bin", "3 B"), ("big.txt", "10.0 MB")] {
         let id = node(cx, &view, path);
@@ -247,7 +247,7 @@ fn an_image_that_cannot_be_decoded_is_unsupported(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     write(dir.path(), "broken.png", "not a png at all");
     write(dir.path(), "fine.png", png(8, 8));
-    let (handle, view) = open_app(cx, Launch::Folder(dir.path().to_owned()));
+    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
 
     let broken = node(cx, &view, "broken.png");
     show(cx, handle, broken);
@@ -269,7 +269,7 @@ fn an_image_that_cannot_be_decoded_is_unsupported(cx: &mut TestAppContext) {
 fn checking_a_file_shows_it(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     mixed(dir.path());
-    let (handle, view) = open_app(cx, Launch::Folder(dir.path().to_owned()));
+    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
     assert_eq!(shown(cx, handle), None);
 
     let notes = node(cx, &view, "notes.md");
@@ -322,7 +322,7 @@ fn a_file_outside_the_gallery_peeks_to_its_neighbours_without_a_position(cx: &mu
     for name in ["a.rs", "b.rs", "c.rs", "d.rs"] {
         write(dir.path(), name, name);
     }
-    let (handle, view) = open_app(cx, Launch::Folder(dir.path().to_owned()));
+    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
     let [a, b, c, d] = ["a.rs", "b.rs", "c.rs", "d.rs"].map(|path| node(cx, &view, path));
     cx.update_window(handle, |_, window, cx| {
         window.within(row(a)).click("check", cx);
@@ -351,7 +351,7 @@ fn a_file_outside_the_gallery_peeks_to_its_neighbours_without_a_position(cx: &mu
 fn a_blank_stage_draws_nothing_and_the_keys_do_nothing(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     write(dir.path(), "a.rs", "a");
-    let (handle, view) = open_app(cx, Launch::Folder(dir.path().to_owned()));
+    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
     press(cx, handle, "tab");
     for key in ["right", "left", "down", "end", "space", "enter"] {
         press(cx, handle, key);
@@ -686,7 +686,7 @@ fn only_web_and_mail_links_open(cx: &mut TestAppContext) {
             format!("[a link long enough to click on]({url})\n"),
         );
     }
-    let (handle, view) = open_app(cx, Launch::Folder(dir.path().to_owned()));
+    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
     for (name, url, opens) in urls {
         let id = node(cx, &view, name);
         show(cx, handle, id);

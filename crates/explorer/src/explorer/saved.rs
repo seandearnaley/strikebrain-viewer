@@ -106,29 +106,32 @@ impl ViewSnapshot {
     /// or the root's alone.
     #[must_use]
     pub fn folders(&self) -> Vec<SavedFolder> {
+        self.tree.folders().map(|top| self.folder(top)).collect()
+    }
+
+    /// The open folders and checks of the scanned folder at `top`, one of
+    /// [`Tree::folders`], by paths relative to it.
+    #[must_use]
+    pub fn folder(&self, top: NodeId) -> SavedFolder {
         let tree = &*self.tree;
-        tree.folders()
-            .map(|top| {
-                let range = tree.subtree(top);
-                let open = open_ids(tree, &self.open)
-                    .filter(|id| range.contains(&id.index()))
-                    .map(|id| tree.path_from(top, id))
-                    .collect();
-                let (mut folders, mut files) = (Vec::new(), Vec::new());
-                compact_from(tree, &self.selection, top, &mut folders, &mut files);
-                let relative = |ids: Vec<NodeId>| -> Vec<String> {
-                    ids.into_iter().map(|id| tree.path_from(top, id)).collect()
-                };
-                SavedFolder {
-                    path: tree.abs_path(top),
-                    open,
-                    selection: SavedSelection {
-                        folders: relative(folders),
-                        files: relative(files),
-                    },
-                }
-            })
-            .collect()
+        let range = tree.subtree(top);
+        let open = open_ids(tree, &self.open)
+            .filter(|id| range.contains(&id.index()))
+            .map(|id| tree.path_from(top, id))
+            .collect();
+        let (mut folders, mut files) = (Vec::new(), Vec::new());
+        compact_from(tree, &self.selection, top, &mut folders, &mut files);
+        let relative = |ids: Vec<NodeId>| -> Vec<String> {
+            ids.into_iter().map(|id| tree.path_from(top, id)).collect()
+        };
+        SavedFolder {
+            path: tree.abs_path(top),
+            open,
+            selection: SavedSelection {
+                folders: relative(folders),
+                files: relative(files),
+            },
+        }
     }
 }
 

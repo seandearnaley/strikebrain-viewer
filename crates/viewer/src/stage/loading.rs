@@ -43,14 +43,16 @@ impl Stage {
         } else {
             extension
         };
+        let path = tree.abs_path(id);
         Some(File {
             staged: self.asked.staged,
-            path: tree.abs_path(id).into(),
+            // A tree built from paths alone lists relative paths, not files.
+            in_memory: !path.is_absolute(),
+            path: path.into(),
             name: name.to_owned().into(),
             size: tree.size(id),
             language: language.to_owned().into(),
             prose: super::text::is_prose(name, extension),
-            in_memory: tree.root_path().as_os_str().is_empty(),
         })
     }
 

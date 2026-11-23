@@ -91,7 +91,7 @@ fn three(dir: &Path) {
 fn space_on_the_stage_presents_and_escape_restores_the_split(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     three(dir.path());
-    let (handle, view) = open_app(cx, Launch::Folder(dir.path().to_owned()));
+    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
     click(cx, handle, "select-all");
     drag_divider(cx, handle, 400.);
     press(cx, handle, "tab");
@@ -130,7 +130,7 @@ fn enter_on_the_stage_presents_too(cx: &mut TestAppContext) {
 fn a_blank_stage_does_not_present(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     three(dir.path());
-    let (handle, view) = open_app(cx, Launch::Folder(dir.path().to_owned()));
+    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
     press(cx, handle, "tab");
     assert!(is_focused(cx, handle, "stage"));
     for key in ["space", "enter"] {
@@ -312,7 +312,7 @@ fn a_fullscreen_the_person_makes_during_the_presentation_stays_after_it(cx: &mut
 fn the_split_comes_back_at_its_width_after_the_window_grows_and_shrinks(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     three(dir.path());
-    let (handle, view) = open_app(cx, Launch::Folder(dir.path().to_owned()));
+    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
     click(cx, handle, "select-all");
     drag_divider(cx, handle, 400.);
     press(cx, handle, "tab");
@@ -378,7 +378,7 @@ fn a_file_outside_an_empty_gallery_is_presented_alone(cx: &mut TestAppContext) {
     for name in ["a.rs", "b.rs", "c.rs"] {
         write(dir.path(), name, name);
     }
-    let (handle, view) = open_app(cx, Launch::Folder(dir.path().to_owned()));
+    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
     let b = node(cx, &view, "b.rs");
     show(cx, handle, b);
     press(cx, handle, "tab");

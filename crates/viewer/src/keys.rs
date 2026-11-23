@@ -5,7 +5,7 @@
 //! Before a tree is on screen (no folder, a first scan, a folder that
 //! cannot be read) the explorer's body holds focus in the tree's place, in
 //! [`EXPLORER_BODY`]. Tab moves between the panes from each of them.
-//! Opening a folder and quitting bind everywhere.
+//! Adding a folder and quitting bind everywhere.
 //!
 //! The stage's code view is the Kit's editor, which takes focus on a click
 //! so its text can be selected and copied. It declares the Kit's `Input`
@@ -69,14 +69,16 @@ actions!(
         /// Esc in the filter input: clears a query, or with none moves focus
         /// to the tree.
         CancelFilter,
+        /// Removes the focused top-level folder.
+        RemoveFolder,
     ]
 );
 
 actions!(
     viewer,
     [
-        /// Opens the system folder picker.
-        OpenFolder,
+        /// Opens the system folder picker and adds the folders chosen.
+        AddFolder,
         /// Quits the application.
         Quit,
         /// Moves keyboard focus to the next pane: filter, tree, stage.
@@ -95,7 +97,7 @@ actions!(
         StartPresenting,
         /// Shows or hides the files the ignore rules leave out.
         ToggleShowIgnored,
-        /// Rescans the folder.
+        /// Rescans every folder.
         Refresh,
         /// Minimizes the window.
         Minimize,
@@ -149,6 +151,7 @@ pub(crate) fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("space", ToggleCheck, explorer),
         KeyBinding::new("enter", ShowFile, explorer),
         KeyBinding::new("escape", ClearFilter, explorer),
+        KeyBinding::new("cmd-backspace", RemoveFolder, explorer),
         KeyBinding::new("cmd-f", FocusFilter, explorer),
         KeyBinding::new("tab", NextPane, explorer),
         KeyBinding::new("shift-tab", PreviousPane, explorer),
@@ -158,7 +161,7 @@ pub(crate) fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-f", FocusFilter, body),
         KeyBinding::new("tab", NextPane, body),
         KeyBinding::new("shift-tab", PreviousPane, body),
-        KeyBinding::new("cmd-o", OpenFolder, None),
+        KeyBinding::new("cmd-o", AddFolder, None),
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("cmd-m", Minimize, None),
     ];
@@ -315,8 +318,14 @@ mod tests {
     }
 
     #[test]
+    fn command_backspace_removes_a_folder_in_the_explorer() {
+        assert_bound("cmd-backspace", Some(EXPLORER), &RemoveFolder);
+        assert!(binding("cmd-backspace", Some(STAGE)).is_none());
+    }
+
+    #[test]
     fn command_o_command_q_and_command_m_work_everywhere() {
-        assert_bound("cmd-o", None, &OpenFolder);
+        assert_bound("cmd-o", None, &AddFolder);
         assert_bound("cmd-q", None, &Quit);
         assert_bound("cmd-m", None, &Minimize);
     }

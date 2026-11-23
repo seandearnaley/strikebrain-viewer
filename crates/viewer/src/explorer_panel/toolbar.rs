@@ -1,6 +1,7 @@
-//! The toolbar, 36 px: Expand all and Collapse all on the left; Show
-//! ignored, Refresh and Select all (Clear while anything is checked) on the
-//! right. Icon buttons, 24 px, each with a tooltip and an accessible name.
+//! The toolbar, 36 px: Expand all and Collapse all on the left; Add Folder,
+//! Show ignored, Refresh and Select all (Clear while anything is checked)
+//! on the right. Icon buttons, 24 px, each with a tooltip and an accessible
+//! name.
 //! The scan's progress bar runs along its bottom edge. Refresh shows in the
 //! warning colour while the folder's changes are not followed.
 
@@ -14,6 +15,7 @@ use gpui_kit::component::{
 use gpui_kit::{Context, IntoElement, ParentElement as _, Styled as _, div, prelude::*};
 
 use super::ExplorerPanel;
+use crate::keys::AddFolder;
 use crate::state::{AppState, ScanStatus};
 
 /// An icon button whose tooltip is also its accessible name. The toolbar
@@ -45,7 +47,7 @@ impl ExplorerPanel {
                 }))
         };
 
-        // Refresh turns the warning colour while the folder is not followed
+        // Refresh turns the warning colour while a folder is not followed
         // on disk, and its tooltip says why.
         let refresh = match state.watch_error() {
             None => command("refresh", IconName::RefreshCw, "Refresh"),
@@ -76,6 +78,10 @@ impl ExplorerPanel {
                     })),
             )
             .content(div().flex_1())
+            .child(
+                command("add-folder", AllIcons::FolderPlus, "Add Folder")
+                    .on_click(|_, window, cx| window.dispatch_action(Box::new(AddFolder), cx)),
+            )
             .child(
                 command("show-ignored", IconName::Eye, "Show ignored")
                     .selected(shows_ignored)

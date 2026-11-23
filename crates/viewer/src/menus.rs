@@ -11,7 +11,7 @@ use gpui_kit::component::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
 use gpui_kit::{App, Menu, MenuItem, OsAction, PromptLevel};
 
 use crate::keys::{
-    About, Minimize, OpenFolder, Quit, Refresh, StartPresenting, ToggleShowIgnored, Zoom,
+    About, AddFolder, Minimize, Quit, Refresh, StartPresenting, ToggleShowIgnored, Zoom,
 };
 
 /// The name the menus show.
@@ -25,7 +25,7 @@ pub(crate) fn install(shows_ignored: bool, cx: &App) {
             MenuItem::separator(),
             MenuItem::action(format!("Quit {APP_NAME}"), Quit),
         ]),
-        Menu::new("File").items([MenuItem::action("Open Folder…", OpenFolder)]),
+        Menu::new("File").items([MenuItem::action("Add Folder…", AddFolder)]),
         // The editing commands of the filter input and the code view, which
         // macOS also routes to its own panels, such as the folder picker.
         Menu::new("Edit").items([
@@ -112,7 +112,7 @@ mod tests {
             items(0),
             ["About Strikebrain Viewer", "-", "Quit Strikebrain Viewer"]
         );
-        assert_eq!(items(1), ["Open Folder…"]);
+        assert_eq!(items(1), ["Add Folder…"]);
         assert_eq!(
             items(2),
             ["Undo", "Redo", "-", "Cut", "Copy", "Paste", "Select All"]

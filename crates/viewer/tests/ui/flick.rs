@@ -64,7 +64,7 @@ fn flicking_through_a_thousand_mixed_files_stays_under_a_memory_ceiling(cx: &mut
             _ => write(dir.path(), &format!("{name}.bin"), b"\0\x01\x02"),
         }
     }
-    let (handle, view) = open_app(cx, Launch::Folder(dir.path().to_owned()));
+    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
     click(cx, handle, "select-all");
     press(cx, handle, "tab");
     assert!(is_focused(cx, handle, "stage"));

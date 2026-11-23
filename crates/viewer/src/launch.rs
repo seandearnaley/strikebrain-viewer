@@ -1,5 +1,5 @@
-//! Opening the main window as the app launches: the folder from the
-//! command line or the saved one, the saved view and window, and folders
+//! Opening the main window as the app launches: the folders from the
+//! command line or the saved ones, the saved view and window, and folders
 //! the system hands over later ("Open With", a folder dropped on the Dock
 //! icon) as `file://` URLs.
 
@@ -14,9 +14,9 @@ use crate::app::{AppView, Session};
 use crate::menus::APP_NAME;
 use crate::persist::{SavedWindow, StateStore, fit, plan_launch};
 
-/// Opens the main window. `folder` is the command line's; the saved state
+/// Opens the main window. `folders` are the command line's; the saved state
 /// comes from `store`, which then also receives the window's state as it
-/// changes. With `watch` the folder is followed on disk, as the app does;
+/// changes. With `watch` the folders are followed on disk, as the app does;
 /// tests that need determinism leave it off. Closing the window quits, so
 /// the state is saved by the quit with the window still there.
 ///
@@ -24,12 +24,12 @@ use crate::persist::{SavedWindow, StateStore, fit, plan_launch};
 ///
 /// If the platform cannot open a window.
 pub fn open_main_window(
-    folder: Option<PathBuf>,
+    folders: Vec<PathBuf>,
     store: Option<StateStore>,
     watch: bool,
     cx: &mut App,
 ) -> Result<(AnyWindowHandle, Entity<AppView>)> {
-    let plan = plan_launch(folder, store.as_ref().and_then(StateStore::load));
+    let plan = plan_launch(folders, store.as_ref().and_then(StateStore::load));
     let (window_bounds, display_id) = match plan.window.as_ref() {
         Some(saved) => {
             let (bounds, display) = placement(saved, cx);
@@ -39,7 +39,6 @@ pub fn open_main_window(
     };
     let session = Session {
         view: plan.view,
-        kept: plan.kept,
         explorer_width: plan.explorer_width,
         store,
         watch,

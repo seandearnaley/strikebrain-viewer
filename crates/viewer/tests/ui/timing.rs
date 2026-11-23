@@ -391,7 +391,7 @@ fn timing_the_code_view_on_large_files(cx: &mut TestAppContext) {
     for lines in sizes {
         crate::write(dir.path(), &format!("{lines:06}.rs"), generated_code(lines));
     }
-    let (handle, view) = open_app(cx, Launch::Folder(dir.path().to_owned()));
+    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
     for lines in sizes {
         let name = format!("{lines:06}.rs");
         let id = crate::node(cx, &view, &name);
@@ -466,7 +466,7 @@ fn timing_the_markdown_view_on_large_documents(cx: &mut TestAppContext) {
             generated_markdown(sections),
         );
     }
-    let (handle, view) = open_app(cx, Launch::Folder(dir.path().to_owned()));
+    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
     for sections in sizes {
         let name = format!("{sections:05}.md");
         let id = crate::node(cx, &view, &name);
@@ -509,7 +509,7 @@ fn timing_markdown_around_its_size_limit(cx: &mut TestAppContext) {
             prose.repeat(kb * 1024 / prose.len()),
         );
     }
-    let (handle, view) = open_app(cx, Launch::Folder(dir.path().to_owned()));
+    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
     for name in kilobytes
         .iter()
         .flat_map(|kb| [format!("a{kb:04}.md"), format!("b{kb:04}.md")])
@@ -573,7 +573,7 @@ fn timing_a_large_photo(cx: &mut TestAppContext) {
     crate::write(dir.path(), "large.jpg", noisy_jpeg(8000, 6000));
     crate::write(dir.path(), "small.txt", "x");
     eprintln!("wrote the photos in {:.2?}", start.elapsed());
-    let (handle, view) = open_app(cx, Launch::Folder(dir.path().to_owned()));
+    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
     let small = crate::node(cx, &view, "small.txt");
     for name in ["large.png", "large.jpg"] {
         let id = crate::node(cx, &view, name);

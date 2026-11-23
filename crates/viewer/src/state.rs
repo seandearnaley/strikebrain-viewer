@@ -1,17 +1,19 @@
 //! The application state: one entity that both panes observe.
 //!
-//! [`AppState`] owns the explorer engine, the file on the stage
-//! (`current`), the keyboard focus row, the filter asked for and the folder
-//! scan. Views read it in `render` and change it only through its methods,
-//! each of which notifies once.
+//! [`AppState`] owns the folders asked for, the explorer engine over the
+//! ones on screen, the file on the stage (`current`), the keyboard focus
+//! row and the filter asked for. Views read it in `render` and change it
+//! only through its methods, each of which notifies once.
 //!
-//! Moving over the rows lives in `state/rows.rs`, checks and the stage in
-//! `state/checks.rs`, scanning in `state/scan.rs`, filtering in
-//! `state/filter.rs`, following the folder on disk in `state/watch.rs`,
-//! and restoring a saved view in `state/restore.rs`.
+//! The folders and their order live in `state/folders.rs`, scanning them
+//! in `state/scan.rs`, following them on disk in `state/watch.rs`, moving
+//! over the rows in `state/rows.rs`, checks and the stage in
+//! `state/checks.rs`, filtering in `state/filter.rs`, and restoring a
+//! saved view in `state/restore.rs`.
 
 mod checks;
 mod filter;
+mod folders;
 mod restore;
 mod rows;
 mod scan;
@@ -19,55 +21,54 @@ mod watch;
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use explorer::{Explorer, KindFilter, NodeId, Tree};
-use gpui_kit::{Context, EventEmitter, Result, SharedString, Task};
+use gpui_kit::{Context, EventEmitter, Result, Task};
 
-use crate::persist::{FolderView, SavedFolder, SnapshotView};
+use crate::persist::SavedView;
+use folders::Folder;
+use restore::Pending;
 use watch::Watching;
 
 /// What the app shows when it starts.
 #[derive(Debug)]
 pub enum Launch {
-    /// No folder: the explorer offers "Open Folder".
+    /// No folder: the explorer offers "Add Folder".
     Empty,
-    /// Scan this folder.
-    Folder(PathBuf),
+    /// Scan these folders, each a top-level folder, in this order.
+    Folders(Vec<PathBuf>),
     /// Show a tree that is already built, such as a `Tree::from_paths`
-    /// fixture. Nothing touches the disk; refreshing does nothing.
+    /// fixture, as it is: its top-level entries are the top rows. Nothing
+    /// touches the disk; refreshing does nothing.
     Tree(Arc<Tree>),
 }
 
 /// What an [`AppState`] brings back from a saved state, and whether it
-/// follows its folder on disk.
+/// follows its folders on disk.
 #[derive(Clone, Debug, Default)]
 pub struct StateOptions {
-    /// A saved view of the folder `launch` opens, applied when its first
-    /// scan lands. Its filter and Show ignored apply from the start.
-    pub view: Option<FolderView>,
-    /// A saved folder `launch` does not open: saved again as it was until
-    /// another folder opens.
-    pub kept: Option<SavedFolder>,
-    /// Rescan when something under the folder changes on disk.
+    /// A saved view of the folders `launch` opens. Its filter and Show
+    /// ignored apply from the start, each folder's open folders and checks
+    /// when that folder's first scan lands, and the sort, the file on the
+    /// stage and the top row as the folders land.
+    pub view: Option<SavedView>,
+    /// Rescan a folder when something under it changes on disk.
     pub watch: bool,
     /// Changes to these files never cause a rescan: the app's own state
-    /// file and its temporary name, should the open folder hold them.
+    /// file and its temporary name, should an open folder hold them.
     pub quiet: Vec<PathBuf>,
 }
 
-/// Where the folder scan stands.
+/// Where the folders' scans stand.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ScanStatus {
     /// No scan is running.
     Idle,
-    /// A scan is running; `slow` once it has taken longer than 200 ms.
+    /// A scan is running; `slow` once one has taken longer than 200 ms.
     Scanning {
         /// Whether to show the progress bar.
         slow: bool,
     },
-    /// The folder itself could not be read: the operating system's message.
-    Failed(SharedString),
 }
 
 /// A keyboard movement over the rows.
@@ -105,6 +106,8 @@ pub(crate) enum RowAction {
     /// A press on the chevron, or Expand or Collapse from assistive
     /// technology.
     ToggleOpen,
+    /// A press on a top-level folder's remove button.
+    Remove,
 }
 
 /// What [`AppState`] tells its views besides "something changed".
@@ -123,14 +126,17 @@ pub(crate) enum StateEvent {
 
 /// The application state. See the module docs.
 pub struct AppState {
-    /// The folder last asked for, as given.
-    root: Option<PathBuf>,
+    /// Every folder asked for, in the order added: being scanned, on
+    /// screen, or unreadable.
+    folders: Vec<Folder>,
+    /// The key the next folder takes.
+    next_key: u64,
+    /// The tree of the folders on screen; `None` before the first lands.
     explorer: Option<Explorer>,
     /// Bumped whenever the tree on screen is replaced or removed, so a row
     /// drawn for an older tree is recognised. A count, not the tree's
     /// address, which a new tree can reuse.
     tree_generation: u64,
-    status: ScanStatus,
     /// The file on the stage.
     current: Option<NodeId>,
     /// The keyboard focus row, by node so it survives row changes. Always a
@@ -150,44 +156,21 @@ pub struct AppState {
     filter_task: Option<Task<Result<()>>>,
     /// Whether scans list the files the ignore rules would leave out.
     show_ignored: bool,
-    /// Bumped by every scan; a result from an older one is dropped.
-    scan_generation: u64,
-    /// Stops the running scan's worker threads.
-    scan_cancel: Arc<AtomicBool>,
-    /// The running scan. Replacing it drops the previous one.
-    scan_task: Option<Task<Result<()>>>,
-    /// Shows the progress bar once the scan is slow.
-    slow_task: Option<Task<Result<()>>>,
-    /// A saved view waiting for the first scan of its folder.
-    restore: Option<FolderView>,
+    /// How many scans have started, across folders; each scan's number.
+    scans: u64,
+    /// The parts of a saved view that wait for the folders to land.
+    restore: Option<Pending>,
     /// The saved top row, waiting for sizes before a Size sort settles.
-    restore_top: Option<String>,
-    /// What to save while no tree is on screen and no saved view waits for
-    /// a scan: the saved folder this launch did not open, or the last tree
-    /// when its folder could no longer be read. Dropped once a folder
-    /// opens, so a folder that is away for a while loses nothing.
-    kept: Option<(PathBuf, SnapshotView)>,
-    /// The row at the top of the tree's scroll when the state was last
-    /// saved, by path: the top row of a view kept once its tree is gone.
-    saved_top: Option<String>,
-    /// How to follow the folder on disk; `None` does not.
+    restore_top: Option<PathBuf>,
+    /// How to follow the folders on disk; `None` does not.
     watching: Option<Watching>,
-    /// Follows the folder: its watcher and the task batching its events.
-    /// Replacing it stops the watcher.
-    watch_task: Option<Task<Result<()>>>,
-    /// Why the folder is not followed, when its watcher failed to start.
-    watch_error: Option<SharedString>,
-    /// Something changed on disk while a scan was running: rescan once it
-    /// lands.
-    rescan_pending: bool,
 }
 
 impl std::fmt::Debug for AppState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AppState")
-            .field("root", &self.root)
+            .field("folders", &self.folders)
             .field("explorer", &self.explorer)
-            .field("status", &self.status)
             .field("current", &self.current)
             .field("focus", &self.focus)
             .field("selected", &self.selected)
@@ -195,14 +178,8 @@ impl std::fmt::Debug for AppState {
             .field("query", &self.query)
             .field("kind", &self.kind)
             .field("show_ignored", &self.show_ignored)
-            .field("scan_generation", &self.scan_generation)
+            .field("scans", &self.scans)
             .finish_non_exhaustive()
-    }
-}
-
-impl Drop for AppState {
-    fn drop(&mut self) {
-        self.scan_cancel.store(true, Ordering::Relaxed);
     }
 }
 
@@ -210,7 +187,7 @@ impl EventEmitter<StateEvent> for AppState {}
 
 impl AppState {
     /// Creates the state and starts whatever `launch` asks for. Nothing is
-    /// restored and the folder is not followed on disk.
+    /// restored and no folder is followed on disk.
     pub fn new(launch: Launch, cx: &mut Context<Self>) -> Self {
         Self::with_options(launch, StateOptions::default(), cx)
     }
@@ -219,10 +196,10 @@ impl AppState {
     /// starts whatever `launch` asks for.
     pub fn with_options(launch: Launch, options: StateOptions, cx: &mut Context<Self>) -> Self {
         let mut state = Self {
-            root: None,
+            folders: Vec::new(),
+            next_key: 0,
             explorer: None,
             tree_generation: 0,
-            status: ScanStatus::Idle,
             current: None,
             focus: None,
             focus_row: 0,
@@ -232,41 +209,24 @@ impl AppState {
             kind: KindFilter::All,
             filter_task: None,
             show_ignored: false,
-            scan_generation: 0,
-            scan_cancel: Arc::new(AtomicBool::new(false)),
-            scan_task: None,
-            slow_task: None,
+            scans: 0,
             restore: None,
             restore_top: None,
-            kept: options
-                .kept
-                .map(|kept| (kept.root, SnapshotView::Waiting(kept.view))),
-            saved_top: None,
             watching: options.watch.then_some(Watching {
                 quiet: options.quiet,
             }),
-            watch_task: None,
-            watch_error: None,
-            rescan_pending: false,
         };
-        let view = options.view;
+        // The filter and the rules apply to the first scans already.
+        let waiting = options.view.map(|view| state.take_view(view));
         match launch {
             Launch::Empty => {}
-            Launch::Folder(root) => {
-                // The filter and the rules apply to the first scan already.
-                if let Some(view) = &view {
-                    state.take_filter(view);
-                }
-                state.open_folder(root, cx);
-                state.restore = view;
-            }
+            Launch::Folders(folders) => state.add_folders(folders, waiting.unwrap_or_default(), cx),
             Launch::Tree(tree) => {
-                if let Some(view) = &view {
-                    state.take_filter(view);
-                }
                 state.show_tree(tree);
-                state.restore = view;
-                state.restore_view(cx);
+                for folder in waiting.unwrap_or_default() {
+                    state.restore_folder(&folder);
+                }
+                state.landed(cx);
             }
         }
         state
@@ -280,16 +240,25 @@ impl AppState {
         self.explorer.as_ref()
     }
 
-    /// Where the folder scan stands.
+    /// Where the folders' scans stand: scanning while any is, slow when
+    /// any is slow.
     #[must_use]
-    pub fn status(&self) -> &ScanStatus {
-        &self.status
+    pub fn status(&self) -> ScanStatus {
+        let mut status = ScanStatus::Idle;
+        for folder in &self.folders {
+            match (folder.status(), &status) {
+                (ScanStatus::Scanning { slow: true }, _) => return folder.status(),
+                (scanning @ ScanStatus::Scanning { .. }, ScanStatus::Idle) => status = scanning,
+                _ => {}
+            }
+        }
+        status
     }
 
-    /// Whether no folder is open or being opened: the "Open Folder" state.
+    /// Whether no folder is open or being opened: the "Add Folder" state.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.explorer.is_none() && self.status == ScanStatus::Idle
+        self.folders.is_empty() && self.explorer.is_none()
     }
 
     /// The file on the stage.
@@ -338,28 +307,17 @@ impl AppState {
         self.selected
     }
 
-    /// How many scans have started, the first included: a probe for tests
-    /// of live refresh.
+    /// How many scans have started, across folders, the first included: a
+    /// probe for tests of live refresh.
     #[must_use]
     pub fn scans(&self) -> u64 {
-        self.scan_generation
+        self.scans
     }
 
     /// Whether the presentation is showing: the stage alone, fullscreen.
     #[must_use]
     pub fn is_presenting(&self) -> bool {
         self.presenting
-    }
-
-    /// The name the window shows: the open folder's.
-    #[must_use]
-    pub fn folder_name(&self) -> Option<SharedString> {
-        if let Some(explorer) = &self.explorer {
-            return Some(explorer.tree().name(NodeId::ROOT).to_owned().into());
-        }
-        let root = self.root.as_ref()?;
-        let name = root.file_name().unwrap_or(root.as_os_str());
-        Some(name.to_string_lossy().into_owned().into())
     }
 
     /// The name of a node, for the stage.

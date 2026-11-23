@@ -38,6 +38,7 @@ impl AppState {
             RowAction::Show => self.show(row.id, cx),
             RowAction::ToggleCheck => self.toggle_check(row.id, cx),
             RowAction::ToggleOpen => self.toggle_folder(row.id, cx),
+            RowAction::Remove => self.remove_folder(row.id, cx),
         }
         cx.notify();
         true

@@ -1,35 +1,49 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use explorer::{Direction, Explorer, KindFilter, SavedSelection, Sort, SortKey, Tree};
+use explorer::{Direction, Explorer, KindFilter, SavedFolder, SavedSelection, Sort, SortKey, Tree};
 use gpui_kit::{Bounds, WindowBounds, point, px, size};
 
 use super::{
-    APP_ID, FolderView, Saved, SavedWindow, Snapshot, SnapshotView, StateStore, decode, encode,
-    fit, plan_launch, split_app_id,
+    APP_ID, FolderSnapshot, Saved, SavedView, SavedWindow, Snapshot, SnapshotView, StateStore,
+    decode, encode, fit, plan_launch, split_app_id,
 };
 use crate::state::Launch;
 
-/// A state with every field away from its default.
-fn full(root: PathBuf) -> Saved {
+/// One folder's part, with open folders and checks.
+fn saved_folder(path: PathBuf) -> SavedFolder {
+    SavedFolder {
+        path,
+        open: vec![String::new(), "src".into(), "src/app".into()],
+        selection: SavedSelection {
+            folders: vec!["docs".into()],
+            files: vec!["README.md".into(), "src/main.rs".into()],
+        },
+    }
+}
+
+/// A state with every field away from its default: `root` and a second
+/// folder inside it.
+fn full(root: &Path) -> Saved {
     Saved {
-        root: Some(root),
-        view: FolderView {
+        view: SavedView {
+            folders: vec![
+                saved_folder(root.to_owned()),
+                SavedFolder {
+                    path: root.join("second"),
+                    ..SavedFolder::default()
+                },
+            ],
             show_ignored: true,
-            expanded: vec!["src".into(), "src/app".into()],
-            selected: SavedSelection {
-                folders: vec!["docs".into()],
-                files: vec!["README.md".into(), "src/main.rs".into()],
-            },
-            current: Some("src/main.rs".into()),
+            current: Some(root.join("src/main.rs")),
             query: "main -test".into(),
             kind: KindFilter::Text,
             sort: Sort {
                 key: SortKey::Size,
                 direction: Direction::Descending,
             },
-            top_row: Some("src/app".into()),
+            top_row: Some(root.join("src/app")),
         },
         explorer_width: Some(412.5),
         window: Some(SavedWindow {
@@ -44,14 +58,18 @@ fn full(root: PathBuf) -> Saved {
 
 #[test]
 fn a_state_survives_the_trip_through_json() {
-    let saved = full(PathBuf::from("/projects/demo"));
+    let saved = full(Path::new("/projects/demo"));
     let bytes = encode(&saved).unwrap();
     assert_eq!(decode(&bytes), Some(saved));
     let text = String::from_utf8(bytes).unwrap();
-    assert!(text.contains("\"version\": 1"), "{text}");
+    assert!(text.contains("\"version\": 2"), "{text}");
     assert!(text.contains("\"kind\": \"text\""), "{text}");
     assert!(
-        text.contains("\"first_visible_row\": \"src/app\""),
+        text.contains("\"root\": \"/projects/demo/second\""),
+        "{text}"
+    );
+    assert!(
+        text.contains("\"first_visible_row\": \"/projects/demo/src/app\""),
         "{text}"
     );
 }
@@ -63,28 +81,59 @@ fn an_empty_state_survives_too() {
 }
 
 #[test]
-fn a_file_that_is_not_a_state_of_this_version_is_ignored() {
-    let ok = encode(&full(PathBuf::from("/p"))).unwrap();
+fn a_file_of_the_old_one_folder_format_loads_as_one_folder() {
+    let old = br#"{"version": 1, "root": "/p", "show_ignored": true,
+        "expanded": ["src"], "selected": {"folders": ["docs"], "files": ["README.md"]},
+        "current": "src/main.rs", "query": "q", "kind": "images",
+        "sort": {"key": "type", "direction": "descending"},
+        "first_visible_row": "src", "explorer_width": 280.0}"#;
+    let saved = decode(old).unwrap();
+    assert_eq!(
+        saved.view.folders,
+        [SavedFolder {
+            path: "/p".into(),
+            // The folder itself shows open, as a folder added does.
+            open: vec![String::new(), "src".into()],
+            selection: SavedSelection {
+                folders: vec!["docs".into()],
+                files: vec!["README.md".into()],
+            },
+        }]
+    );
+    assert_eq!(saved.view.current, Some(PathBuf::from("/p/src/main.rs")));
+    assert_eq!(saved.view.top_row, Some(PathBuf::from("/p/src")));
+    assert!(saved.view.show_ignored);
+    assert_eq!(saved.view.kind, KindFilter::Images);
+    assert_eq!(saved.view.sort.key, SortKey::Type);
+    assert_eq!(saved.explorer_width, Some(280.));
+    // With no usable root, nothing is relative to anything.
+    let rootless = br#"{"version": 1, "root": "relative", "current": "a.txt"}"#;
+    assert_eq!(decode(rootless), Some(Saved::default()));
+}
+
+#[test]
+fn a_file_that_is_not_a_state_of_a_known_version_is_ignored() {
+    let ok = encode(&full(Path::new("/p"))).unwrap();
     let newer = String::from_utf8(ok.clone())
         .unwrap()
-        .replace("\"version\": 1", "\"version\": 2");
+        .replace("\"version\": 2", "\"version\": 3");
     for bytes in [
         &b""[..],
         b"{",
         b"[]",
         b"null",
         b"{}",
-        b"{\"version\": 1, \"kind\": \"sounds\"}",
+        b"{\"version\": 2, \"kind\": \"sounds\"}",
+        b"{\"version\": 2, \"folders\": 3}",
         b"{\"version\": 1, \"expanded\": 3}",
         b"\xff\xfe",
         newer.as_bytes(),
     ] {
         assert_eq!(decode(bytes), None, "{}", String::from_utf8_lossy(bytes));
     }
-    // A version 1 file missing fields takes their defaults; values that
-    // cannot be used are dropped, not trusted.
-    let sparse =
-        br#"{"version": 1, "root": "relative/path", "explorer_width": -3, "window": {"state": "windowed", "x": 0, "y": 0, "width": 0, "height": 10, "display": null}, "future": true}"#;
+    // A file missing fields takes their defaults; values that cannot be
+    // used are dropped, not trusted.
+    let sparse = br#"{"version": 2, "folders": [{"root": "relative/path"}], "current": "a.txt", "first_visible_row": "b", "explorer_width": -3, "window": {"state": "windowed", "x": 0, "y": 0, "width": 0, "height": 10, "display": null}, "future": true}"#;
     assert_eq!(decode(sparse), Some(Saved::default()));
 }
 
@@ -93,7 +142,7 @@ fn the_store_writes_atomically_and_reads_back() {
     let dir = tempfile::tempdir().unwrap();
     let store = StateStore::at(dir.path().join("nested/state.json"));
     assert_eq!(store.load(), None);
-    let saved = full(dir.path().to_owned());
+    let saved = full(dir.path());
     let ticket = store.ticket();
     assert!(store.write(ticket, &saved).unwrap());
     assert_eq!(store.load(), Some(saved.clone()));
@@ -110,7 +159,7 @@ fn the_store_writes_atomically_and_reads_back() {
 fn the_store_skips_an_unchanged_state_and_a_save_overtaken_by_a_later_one() {
     let dir = tempfile::tempdir().unwrap();
     let store = StateStore::at(dir.path().join("state.json"));
-    let first = full(dir.path().to_owned());
+    let first = full(dir.path());
     let (old, new) = (store.ticket(), store.ticket());
     let mut second = first.clone();
     second.view.query = "later".into();
@@ -172,63 +221,83 @@ fn the_bundle_names_the_same_identifier() {
     assert!(plist.contains(&format!("<string>{APP_ID}</string>")));
 }
 
-#[test]
-fn a_folder_argument_opens_and_takes_the_view_only_if_it_was_saved() {
-    let dir = tempfile::tempdir().unwrap();
-    let (a, b) = (dir.path().join("a"), dir.path().join("b"));
-    fs::create_dir_all(&a).unwrap();
-    fs::create_dir_all(&b).unwrap();
-    let saved = full(fs::canonicalize(&a).unwrap());
+/// The folders a plan opens.
+fn opened(launch: &Launch) -> Vec<PathBuf> {
+    match launch {
+        Launch::Folders(folders) => folders.clone(),
+        Launch::Empty => Vec::new(),
+        Launch::Tree(_) => panic!("a plan never opens a tree from memory"),
+    }
+}
 
-    // The same folder, by another spelling of its path.
-    let plan = plan_launch(Some(dir.path().join("b/../a")), Some(saved.clone()));
-    assert!(matches!(&plan.launch, Launch::Folder(path) if path.ends_with("b/../a")));
-    assert_eq!(plan.view, Some(saved.view.clone()));
+/// The folders a plan's view restores.
+fn restored(view: Option<&SavedView>) -> Vec<PathBuf> {
+    view.map_or_else(Vec::new, |view| {
+        view.folders
+            .iter()
+            .map(|folder| folder.path.clone())
+            .collect()
+    })
+}
+
+#[test]
+fn folder_arguments_open_exactly_those_each_with_its_own_saved_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(dir.path()).unwrap();
+    for folder in ["a", "b", "c"] {
+        fs::create_dir_all(root.join(folder)).unwrap();
+    }
+    let (a, b, c) = (root.join("a"), root.join("b"), root.join("c"));
+    let mut saved = full(&a);
+    saved.view.folders[1].path.clone_from(&b);
+
+    // A saved folder by another spelling of its path, and one not saved.
+    let plan = plan_launch(vec![root.join("c/../a"), c.clone()], Some(saved.clone()));
+    assert_eq!(opened(&plan.launch), [root.join("c/../a"), c.clone()]);
+    assert_eq!(restored(plan.view.as_ref()), std::slice::from_ref(&a));
+    let view = plan.view.unwrap();
+    assert_eq!(view.query, saved.view.query);
     assert_eq!(plan.explorer_width, Some(412.5));
     assert!(plan.window.is_some());
 
-    // Another folder: no view, but the window and the width stay.
-    let plan = plan_launch(Some(b.clone()), Some(saved.clone()));
-    assert!(matches!(&plan.launch, Launch::Folder(path) if *path == b));
+    // Folders never saved: no view, but the window and the width stay.
+    let plan = plan_launch(vec![c.clone()], Some(saved.clone()));
+    assert_eq!(opened(&plan.launch), [c]);
     assert_eq!(plan.view, None);
     assert_eq!(plan.window, saved.window);
-    // The saved folder stays saved until another one opens.
-    let kept = plan.kept.expect("the saved folder is kept");
-    assert_eq!(
-        (kept.root, kept.view),
-        (saved.root.clone().unwrap(), saved.view.clone())
-    );
 
     // A folder that does not exist opens, to show its error.
-    let plan = plan_launch(Some(dir.path().join("gone")), Some(saved));
-    assert!(matches!(plan.launch, Launch::Folder(_)));
+    let plan = plan_launch(vec![root.join("gone")], Some(saved));
+    assert_eq!(opened(&plan.launch), [root.join("gone")]);
     assert_eq!(plan.view, None);
 }
 
 #[test]
-fn no_argument_reopens_the_saved_folder_while_it_exists() {
+fn no_argument_reopens_the_saved_folders_that_still_exist() {
     let dir = tempfile::tempdir().unwrap();
     let root = fs::canonicalize(dir.path()).unwrap();
-    let saved = full(root.clone());
+    fs::create_dir_all(root.join("second")).unwrap();
+    let saved = full(&root);
 
-    let plan = plan_launch(None, Some(saved.clone()));
-    assert!(matches!(&plan.launch, Launch::Folder(path) if *path == root));
+    let plan = plan_launch(Vec::new(), Some(saved.clone()));
+    assert_eq!(opened(&plan.launch), [root.clone(), root.join("second")]);
     assert_eq!(plan.view, Some(saved.view.clone()));
-    assert_eq!(plan.kept, None);
 
-    let gone = full(root.join("gone"));
-    let plan = plan_launch(None, Some(gone.clone()));
+    // One that no longer exists is dropped.
+    fs::remove_dir(root.join("second")).unwrap();
+    let plan = plan_launch(Vec::new(), Some(saved));
+    assert_eq!(opened(&plan.launch), std::slice::from_ref(&root));
+    assert_eq!(restored(plan.view.as_ref()), std::slice::from_ref(&root));
+
+    let gone = full(&root.join("gone"));
+    let plan = plan_launch(Vec::new(), Some(gone));
     assert!(matches!(plan.launch, Launch::Empty));
     assert_eq!(plan.view, None);
     assert_eq!(plan.explorer_width, Some(412.5));
-    // Kept, to be saved again: an unmounted volume loses nothing.
-    let kept = plan.kept.expect("the saved folder is kept");
-    assert_eq!((Some(kept.root), kept.view), (gone.root, gone.view));
 
-    let plan = plan_launch(None, None);
+    let plan = plan_launch(Vec::new(), None);
     assert!(matches!(plan.launch, Launch::Empty));
     assert!(plan.window.is_none() && plan.explorer_width.is_none());
-    assert!(plan.kept.is_none());
 }
 
 #[test]
@@ -248,40 +317,52 @@ fn a_window_is_moved_and_shrunk_onto_the_display() {
 }
 
 #[test]
-fn a_snapshot_names_its_paths_and_makes_the_root_canonical() {
-    let dir = tempfile::tempdir().unwrap();
+fn a_snapshot_names_each_folder_in_order() {
     let tree = Arc::new(Tree::from_paths(&["docs/a.md", "docs/b.md", "src/main.rs"]).unwrap());
     let mut explorer = Explorer::new(tree);
     let docs = explorer.tree().find("docs").unwrap();
     explorer.toggle_check(docs);
     explorer.toggle_folder(explorer.tree().find("src").unwrap());
-    let rest = FolderView {
-        current: Some("docs/a.md".into()),
-        ..FolderView::default()
+    // A folder still waiting for its scan keeps the view it waits with.
+    let waiting = saved_folder(PathBuf::from("/nowhere"));
+    let view = SnapshotView {
+        live: Some(explorer.snapshot()),
+        folders: vec![
+            FolderSnapshot::Waiting(waiting.clone()),
+            FolderSnapshot::Live(PathBuf::new()),
+            FolderSnapshot::Live(PathBuf::from("/not/on/screen")),
+        ],
+        rest: SavedView {
+            current: Some("/x/docs/a.md".into()),
+            ..SavedView::default()
+        },
     };
-    let snapshot = Snapshot {
-        root: Some(dir.path().join(".")),
-        view: Some(SnapshotView::Live(explorer.snapshot(), rest)),
+    let saved = Snapshot {
+        view,
         explorer_width: Some(300.),
         window: None,
-    };
-    let saved = snapshot.saved();
-    assert_eq!(saved.root, Some(fs::canonicalize(dir.path()).unwrap()));
-    assert_eq!(saved.view.expanded, ["src"]);
-    assert_eq!(saved.view.selected.folders, ["docs"]);
-    assert_eq!(saved.view.current.as_deref(), Some("docs/a.md"));
-
-    // Before the first scan lands, the view waiting to be restored is kept.
-    let waiting = full(PathBuf::from("/nowhere")).view;
-    let snapshot = Snapshot {
-        root: Some(PathBuf::from("/nowhere/at/all")),
-        view: Some(SnapshotView::Waiting(waiting.clone())),
-        explorer_width: None,
-        window: None,
-    };
-    let saved = snapshot.saved();
-    assert_eq!(saved.view, waiting);
-    assert_eq!(saved.root, Some(PathBuf::from("/nowhere/at/all")));
+    }
+    .saved();
+    assert_eq!(
+        saved.view.folders,
+        [
+            waiting,
+            SavedFolder {
+                path: PathBuf::new(),
+                open: vec!["src".into()],
+                selection: SavedSelection {
+                    folders: vec!["docs".into()],
+                    files: vec![],
+                },
+            },
+            SavedFolder {
+                path: "/not/on/screen".into(),
+                ..SavedFolder::default()
+            },
+        ]
+    );
+    assert_eq!(saved.view.current, Some(PathBuf::from("/x/docs/a.md")));
+    assert_eq!(saved.explorer_width, Some(300.));
 }
 
 /// Saving 100,000 checked files. Run in release:
@@ -321,11 +402,11 @@ fn timing_saving_a_hundred_thousand_checked_files() {
         let checked = explorer.selection().count();
         let started = Instant::now();
         let snapshot = Snapshot {
-            root: Some(dir.path().to_owned()),
-            view: Some(SnapshotView::Live(
-                explorer.snapshot(),
-                FolderView::default(),
-            )),
+            view: SnapshotView {
+                live: Some(explorer.snapshot()),
+                folders: vec![FolderSnapshot::Live(PathBuf::new())],
+                rest: SavedView::default(),
+            },
             explorer_width: Some(300.),
             window: None,
         };
@@ -340,14 +421,16 @@ fn timing_saving_a_hundred_thousand_checked_files() {
         let back = store.load().unwrap();
         let read = loaded.elapsed();
         let mut restored = Explorer::new(Arc::clone(&tree));
-        restored.restore_saved_selection(&back.view.selected);
+        let folder = &saved.view.folders[0];
+        restored.restore_saved_selection(&folder.selection);
         assert_eq!(restored.selection(), explorer.selection());
+        assert_eq!(back.view.folders.len(), 0, "a tree in memory is not saved");
         eprintln!(
             "{case}: {checked} checked, {} folder and {} file entries, {} bytes; \
              UI thread {ui:.2?}, named {named:.2?}, encoded {encoded:.2?}, written {written:.2?}; \
              read back {read:.2?}",
-            saved.view.selected.folders.len(),
-            saved.view.selected.files.len(),
+            folder.selection.folders.len(),
+            folder.selection.files.len(),
             bytes.len(),
         );
     }

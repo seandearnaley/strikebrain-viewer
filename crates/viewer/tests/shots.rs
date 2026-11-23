@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use explorer::Tree;
+use explorer::{NodeId, Tree};
 use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::test::{TestEventExt as _, TestWindowExt as _};
 use gpui_kit::{
@@ -129,26 +129,45 @@ fn capture(
     path
 }
 
-/// The node at `path` in the tree on screen.
+/// The row of the node at `path` in the tree on screen: from the root of a
+/// tree built in memory, or inside the first folder of a tree of folders.
 fn node(cx: &mut HeadlessAppContext, view: &Entity<AppView>, path: &str) -> ElementId {
     let id = cx.update(|cx| {
         let state = view.read(cx).state().read(cx);
-        let explorer = state.explorer().expect("a tree is on screen");
-        explorer.tree().find(path).expect("the path is in the tree")
+        let tree = state.explorer().expect("a tree is on screen").tree();
+        let from = if tree.is_joined() {
+            tree.folders().next().expect("a folder is open")
+        } else {
+            NodeId::ROOT
+        };
+        tree.find_from(from, path).expect("the path is in the tree")
     });
     ("row", id.index()).into()
 }
 
-/// A temporary folder holding `files`, each with its text.
-fn folder(files: &[(&str, &str)]) -> tempfile::TempDir {
+/// The row of the top-level folder at `path`.
+fn folder_row(cx: &mut HeadlessAppContext, view: &Entity<AppView>, path: &Path) -> ElementId {
+    let id = cx.update(|cx| {
+        let state = view.read(cx).state().read(cx);
+        let explorer = state.explorer().expect("a tree is on screen");
+        let path = path.canonicalize().expect("the folder exists");
+        explorer.folder_at(&path).expect("the folder is open")
+    });
+    ("row", id.index()).into()
+}
+
+/// A folder named `name` in a temporary folder, holding `files`, each with
+/// its text. The folder goes when the returned handle drops.
+fn folder(name: &str, files: &[(&str, &str)]) -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().expect("a temporary folder");
+    let root = dir.path().join(name);
     for (path, text) in files {
-        let path = dir.path().join(path);
+        let path = root.join(path);
         std::fs::create_dir_all(path.parent().expect("a file has a folder"))
             .expect("make the file's folder");
         std::fs::write(path, text).expect("write the file");
     }
-    dir
+    (dir, root)
 }
 
 /// Sets a folder's permissions: 0o000 makes it unreadable.
@@ -165,7 +184,11 @@ fn chmod(path: &Path, mode: u32) {
 /// scan job.
 fn open_slowly(cx: &mut HeadlessAppContext, view: &Entity<AppView>, root: PathBuf) {
     let state = cx.update(|cx| view.read(cx).state().clone());
-    cx.update(|cx| state.update(cx, |state, cx| state.open_folder(root, cx)));
+    cx.update(|cx| {
+        state.update(cx, |state, cx| {
+            state.add_folders(vec![root], Vec::new(), cx);
+        });
+    });
     let executor = cx.background_executor.clone();
     let dispatcher = executor
         .dispatcher()
@@ -177,7 +200,7 @@ fn open_slowly(cx: &mut HeadlessAppContext, view: &Entity<AppView>, root: PathBu
         .advance(Duration::from_millis(200));
     while dispatcher.tick(true) {}
     let slow = |cx: &mut HeadlessAppContext| {
-        cx.update(|cx| *state.read(cx).status() == ScanStatus::Scanning { slow: true })
+        cx.update(|cx| state.read(cx).status() == ScanStatus::Scanning { slow: true })
     };
     while !slow(cx) && dispatcher.tick(false) {}
     assert!(slow(cx), "the scan shows its progress bar");
@@ -202,11 +225,12 @@ fn long_list() -> Launch {
 
 /// One file of each kind the stage shows, in display order: a landscape
 /// photo, a portrait photo, an icon smaller than the stage, Markdown, Rust,
-/// a file of long lines and a binary file.
-fn stage_folder() -> tempfile::TempDir {
-    let dir = tempfile::tempdir().expect("a temporary folder");
+/// a file of long lines and a binary file; in a folder named `gallery`.
+fn stage_folder() -> (tempfile::TempDir, PathBuf) {
+    let (dir, root) = folder("gallery", &[]);
+    std::fs::create_dir_all(&root).expect("make the gallery folder");
     let write = |name: &str, bytes: &[u8]| {
-        std::fs::write(dir.path().join(name), bytes).expect("write a stage file");
+        std::fs::write(root.join(name), bytes).expect("write a stage file");
     };
     write("a-landscape.png", &photo(1600, 1000));
     write("b-portrait.jpg", &photo_jpeg(900, 1400));
@@ -223,7 +247,7 @@ fn stage_folder() -> tempfile::TempDir {
         .collect();
     write("f-long-lines.txt", long.as_bytes());
     write("g-archive.bin", &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
-    dir
+    (dir, root)
 }
 
 /// A calm test picture: a dusk gradient with soft bands and a sun.
@@ -576,13 +600,16 @@ fn main() {
         ));
 
         // Show ignored on: the ignored file listed, the eye pressed.
-        let ignoring = folder(&[
-            (".gitignore", "build.log\n"),
-            ("build.log", "x"),
-            ("notes.md", "x"),
-        ]);
+        let (_ignoring, ignoring) = folder(
+            "notes",
+            &[
+                (".gitignore", "build.log\n"),
+                ("build.log", "x"),
+                ("notes.md", "x"),
+            ],
+        );
         let mut cx = context();
-        let (handle, _) = open(&mut cx, Launch::Folder(ignoring.path().to_owned()));
+        let (handle, _) = open(&mut cx, Launch::Folders(vec![ignoring]));
         click(&mut cx, handle, "show-ignored");
         written.push(save(
             &mut cx,
@@ -593,17 +620,20 @@ fn main() {
         ));
 
         // An unreadable folder and a symlink among ordinary rows.
-        let special = folder(&[
-            ("locked/secret.txt", "x"),
-            ("real/inside.txt", "x"),
-            ("a.txt", "x"),
-        ]);
-        std::os::unix::fs::symlink(special.path().join("real"), special.path().join("link"))
+        let (_special, special) = folder(
+            "project",
+            &[
+                ("locked/secret.txt", "x"),
+                ("real/inside.txt", "x"),
+                ("a.txt", "x"),
+            ],
+        );
+        std::os::unix::fs::symlink(special.join("real"), special.join("link"))
             .expect("make a symlink");
-        chmod(&special.path().join("locked"), 0o000);
+        chmod(&special.join("locked"), 0o000);
         let mut cx = context();
-        let (handle, _) = open(&mut cx, Launch::Folder(special.path().to_owned()));
-        chmod(&special.path().join("locked"), 0o755);
+        let (handle, _) = open(&mut cx, Launch::Folders(vec![special.clone()]));
+        chmod(&special.join("locked"), 0o755);
         written.push(save(
             &mut cx,
             handle,
@@ -614,11 +644,11 @@ fn main() {
 
         // The stage, one file of each kind, in a gallery of seven: the
         // position shows under each.
-        let stage = stage_folder();
+        let (_stage, stage) = stage_folder();
         let mut cx = context();
         let (handle, _) = open_sized(
             &mut cx,
-            Launch::Folder(stage.path().to_owned()),
+            Launch::Folders(vec![stage.clone()]),
             size(px(1200.), px(760.)),
         );
         click(&mut cx, handle, "select-all");
@@ -648,7 +678,7 @@ fn main() {
         let mut cx = context();
         let (handle, _) = open_sized(
             &mut cx,
-            Launch::Folder(stage.path().to_owned()),
+            Launch::Folders(vec![stage.clone()]),
             size(px(1200.), px(760.)),
         );
         click(&mut cx, handle, "select-all");
@@ -679,7 +709,7 @@ fn main() {
         let mut cx = context();
         let (handle, view) = open_sized(
             &mut cx,
-            Launch::Folder(stage.path().to_owned()),
+            Launch::Folders(vec![stage.clone()]),
             size(px(1200.), px(760.)),
         );
         let rust = node(&mut cx, &view, "e-lib.rs");
@@ -693,9 +723,61 @@ fn main() {
             &format!("stage-peek-{suffix}"),
         ));
 
+        // Two folders, each a top-level row in the order added, the second
+        // closed.
+        let (_folders, first) = folder(
+            "web-app",
+            &[
+                ("src/app.rs", "fn app() {}"),
+                ("src/lib.rs", "pub mod app;"),
+                ("Cargo.toml", "[package]"),
+                ("README.md", "# Web app"),
+            ],
+        );
+        let second = first.with_file_name("design-notes");
+        for (path, text) in [("brief.md", "# Brief"), ("sketch.png", "png")] {
+            std::fs::create_dir_all(&second).expect("make the second folder");
+            std::fs::write(second.join(path), text).expect("write the file");
+        }
+        let mut cx = context();
+        let (handle, view) = open(
+            &mut cx,
+            Launch::Folders(vec![first.clone(), second.clone()]),
+        );
+        let src = node(&mut cx, &view, "src");
+        let notes = folder_row(&mut cx, &view, &second);
+        cx.update_window(handle, |_, window, cx| {
+            window.within(src).click("chevron", cx);
+            window.within(notes.clone()).click("chevron", cx);
+            // The pointer leaves the tree.
+            let stage = window.find("stage-pane").bounds().center();
+            window.pointer_move(stage, None, cx);
+        })
+        .expect("open and close folders");
+        written.push(save(
+            &mut cx,
+            handle,
+            mode,
+            &dir,
+            &format!("folders-{suffix}"),
+        ));
+
+        // The pointer over a folder's row: its remove button, over the Size
+        // cell.
+        cx.update_window(handle, |_, window, cx| window.hover(notes, cx))
+            .expect("hover a folder row");
+        written.push(save(
+            &mut cx,
+            handle,
+            mode,
+            &dir,
+            &format!("remove-folder-{suffix}"),
+        ));
+
+        // A folder that cannot be read: one row, with a warning.
         let mut cx = context();
         let missing = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/no-such-folder");
-        let (handle, _) = open(&mut cx, Launch::Folder(missing));
+        let (handle, _) = open(&mut cx, Launch::Folders(vec![missing]));
         written.push(save(
             &mut cx,
             handle,
@@ -727,7 +809,12 @@ fn main() {
                             ..Session::default()
                         };
                         cx.new(|cx| {
-                            AppView::with_session(Launch::Folder(missing), session, window, cx)
+                            AppView::with_session(
+                                Launch::Folders(vec![missing]),
+                                session,
+                                window,
+                                cx,
+                            )
                         })
                     },
                 )

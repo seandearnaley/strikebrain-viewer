@@ -5,7 +5,9 @@
 //! 1 px rule, the panel's 8 px inset, a 24 px chevron target, then 6 px
 //! gaps around a 16 px checkbox and a 16 px icon, and the name at 14/16 px.
 //! The Type and Size cells follow as the tree widens; see
-//! [`crate::columns`].
+//! [`crate::columns`]. A top-level folder's row shows a remove button over
+//! the Size cell while it is hovered or focused, and its full path as a
+//! tooltip.
 //!
 //! The indent is not brainstrike's: 12 px per level, half the chevron's
 //! target, where brainstrike has 20 px. At the default 300 px width a name
@@ -24,7 +26,9 @@ use explorer::{
 };
 use gpui_kit::assets::IconName as AssetIcon;
 use gpui_kit::base::{Checkbox, CheckboxIndicator, CheckboxState, RoleOverride};
-use gpui_kit::component::{ActiveTheme as _, Icon, IconName, h_flex};
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex};
 use gpui_kit::{
     AccessibleAction, App, Font, IntoElement, MouseButton, ParentElement as _, Pixels, Rems,
     RenderOnce, Role, SharedString, StatefulInteractiveElement, Styled as _, TestSupportExt as _,
@@ -64,6 +68,7 @@ enum Focus {
 }
 
 type RowHandler = Rc<dyn Fn(&RowAction, &mut Window, &mut App)>;
+type HoverHandler = Rc<dyn Fn(&bool, &mut Window, &mut App)>;
 
 /// One row, built fresh each frame from the engine's row view.
 #[derive(IntoElement)]
@@ -79,7 +84,13 @@ pub(crate) struct TreeRow {
     size: Option<u64>,
     current: bool,
     focus: Focus,
+    /// A top-level folder's full path, and why it could not be read.
+    tooltip: Option<SharedString>,
+    /// Whether the remove button shows: a top-level folder's row, hovered
+    /// or focused.
+    removable: bool,
     on_event: RowHandler,
+    on_hover: Option<HoverHandler>,
 }
 
 impl TreeRow {
@@ -104,8 +115,33 @@ impl TreeRow {
             size: row.size,
             current: false,
             focus: Focus::Elsewhere,
+            tooltip: None,
+            removable: false,
             on_event: Rc::new(on_event),
+            on_hover: None,
         }
+    }
+
+    /// The row's tooltip: a top-level folder's full path.
+    pub(crate) fn tooltip(mut self, tooltip: Option<SharedString>) -> Self {
+        self.tooltip = tooltip;
+        self
+    }
+
+    /// Shows the remove button over the Size cell: a top-level folder's
+    /// row while it is hovered or focused.
+    pub(crate) fn removable(mut self, removable: bool) -> Self {
+        self.removable = removable;
+        self
+    }
+
+    /// Hears the pointer enter and leave the row.
+    pub(crate) fn on_hover(
+        mut self,
+        handler: impl Fn(&bool, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_hover = Some(Rc::new(handler));
+        self
     }
 
     /// The row of the file on the stage: accent background.
@@ -155,6 +191,8 @@ impl RenderOnce for TreeRow {
         let on_click = Rc::clone(&self.on_event);
         let on_disclose = Rc::clone(&self.on_event);
         let (current, focus, disclosure) = (self.current, self.focus, self.disclosure);
+        let tooltip = self.tooltip.clone();
+        let on_hover = self.on_hover.clone();
 
         div()
             .id(("row", self.id.index()))
@@ -194,6 +232,12 @@ impl RenderOnce for TreeRow {
                 }
             })
             .on_click(move |_, window, cx| on_click(&RowAction::Show, window, cx))
+            .when_some(on_hover, |row, on_hover| {
+                row.on_hover(move |hovered, window, cx| on_hover(hovered, window, cx))
+            })
+            .when_some(tooltip, |row, tooltip| {
+                row.tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+            })
             .child(
                 div()
                     .h_7()
@@ -262,6 +306,7 @@ impl TreeRow {
         let mono = theme.mono_font_family.clone();
         let muted_foreground = theme.muted_foreground;
         let ext = self.ext.clone();
+        let remove = self.removable.then(|| self.remove_button(cx));
 
         columns::line()
             .child(
@@ -298,8 +343,11 @@ impl TreeRow {
                         .child(ext),
                 )
             })
-            .when(columns.size, |line| {
-                line.child(
+            .map(|line| match (remove, columns.size) {
+                // Over the Size cell, in place of the size.
+                (Some(remove), true) => line.child(columns::size_cell().child(remove)),
+                (Some(remove), false) => line.child(div().flex_shrink_0().child(remove)),
+                (None, true) => line.child(
                     columns::size_cell()
                         .id("size")
                         .test_support()
@@ -311,7 +359,25 @@ impl TreeRow {
                         .top(shifts.size)
                         .text_color(muted_foreground)
                         .when_some(size, |cell, bytes| cell.child(format_size(bytes))),
-                )
+                ),
+                (None, false) => line,
+            })
+    }
+
+    /// The remove button of a top-level folder's row: a 24 px ghost icon
+    /// button, muted as the chevrons are. A press does not reach the row.
+    fn remove_button(&self, cx: &App) -> Button {
+        let on_event = Rc::clone(&self.on_event);
+        Button::new("remove-folder")
+            .icon(Icon::new(IconName::Close).text_color(cx.theme().muted_foreground))
+            .ghost()
+            .compact()
+            .small()
+            .tooltip("Remove Folder")
+            .accessibility_label("Remove Folder")
+            .on_click(move |_, window, cx| {
+                cx.stop_propagation();
+                on_event(&RowAction::Remove, window, cx);
             })
     }
 

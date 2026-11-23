@@ -5,9 +5,9 @@ use futures::channel::mpsc;
 use viewer::{AppAssets, StateStore, folder_from_url, open_main_window};
 
 fn main() {
-    // `strikebrain-viewer <folder>` opens the folder; with no argument the
-    // folder open last time reopens, as it was seen.
-    let folder = std::env::args_os().nth(1).map(PathBuf::from);
+    // `strikebrain-viewer <folder>...` opens those folders; with none the
+    // folders open last time reopen, as they were seen.
+    let asked: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
     let store = StateStore::in_config_dir();
 
     // Folders the system hands over while running: "Open With", or a
@@ -26,12 +26,12 @@ fn main() {
         viewer::init(cx);
         // Closing the window quits, as ⌘Q does: `open_main_window` makes
         // its close button quit, keeping the window for the quit's save.
-        let (_, view) = open_main_window(folder, store, true, cx).expect("open the main window");
+        let (_, view) = open_main_window(asked, store, true, cx).expect("open the main window");
         let view = view.downgrade();
         cx.spawn(async move |cx| {
             while let Some(folder) = folders.next().await {
                 // The window is gone only as the app quits.
-                let opened = view.update(cx, |view, cx| view.open_folder(folder, cx));
+                let opened = view.update(cx, |view, cx| view.add_folder(folder, cx));
                 opened.unwrap_or_default();
             }
         })

@@ -1,34 +1,37 @@
-//! The saved state, end to end: a real folder and a real state file in
+//! The saved state, end to end: real folders and a real state file in
 //! temporary folders, saved by the app as it runs and quits, restored by a
 //! second app launched over the same file.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use explorer::{Direction, Sort, SortKey};
+use explorer::{Direction, Kind, SavedSelection, Sort, SortKey};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
     AnyWindowHandle, AppContext as _, Entity, ScrollDelta, TestAppContext, WindowBounds, point, px,
     size,
 };
-use viewer::{AppState, AppView, Launch, SAVE_DELAY, StateStore, open_main_window};
+use viewer::{AppState, AppView, Launch, SAVE_DELAY, Saved, StateStore, open_main_window};
 
-use crate::{click, drag_divider, filter_value, folder, labels, node, read, row, rows_now, write};
+use crate::{
+    checked, click, drag_divider, filter_value, folder, labels, name_of, node, node_at, read, row,
+    rows_now, under, write,
+};
 
 /// Launches the app as the binary does, without following the disk.
 fn launch(
     cx: &mut TestAppContext,
-    folder: Option<&Path>,
+    folders: &[&Path],
     store: &StateStore,
 ) -> (AnyWindowHandle, Entity<AppView>) {
-    let opened = launch_unsettled(cx, folder, store);
+    let opened = launch_unsettled(cx, folders, store);
     cx.run_until_parked();
     opened
 }
 
-/// Launches as [`launch`] does, but returns before the first scan lands.
+/// Launches as [`launch`] does, but returns before the first scans land.
 fn launch_unsettled(
     cx: &mut TestAppContext,
-    folder: Option<&Path>,
+    folders: &[&Path],
     store: &StateStore,
 ) -> (AnyWindowHandle, Entity<AppView>) {
     cx.update(|cx| {
@@ -36,12 +39,17 @@ fn launch_unsettled(
         viewer::init(cx);
     });
     cx.update(|cx| {
-        open_main_window(folder.map(Path::to_owned), Some(store.clone()), false, cx)
-            .expect("open the main window")
+        let folders = folders.iter().map(|folder| folder.to_path_buf()).collect();
+        open_main_window(folders, Some(store.clone()), false, cx).expect("open the main window")
     })
 }
 
-/// What a state file says about the folder: everything before the window,
+/// What the state file at `path` holds.
+fn saved(path: &Path) -> Saved {
+    StateStore::at(path).load().expect("a state file")
+}
+
+/// What a state file says about the folders: everything before the window,
 /// whose display the test platform names afresh in each app.
 fn folder_part(state_file: &str) -> &str {
     state_file
@@ -50,20 +58,19 @@ fn folder_part(state_file: &str) -> &str {
 }
 
 /// Opens `dir`, checks every file, quits: the state file then holds a
-/// view of `dir` with three checks. Returns what the file holds.
+/// view of `dir` with three checks, as one folder entry. Returns what the
+/// file holds.
 fn save_three_checked(cx: &mut TestAppContext, dir: &Path, store: &StateStore) -> String {
-    let (_, view) = launch(cx, Some(dir), store);
+    let (_, view) = launch(cx, &[dir], store);
     let state = view.read_with(cx, |view, _| view.state().clone());
     state.update(cx, AppState::select_all);
     cx.run_until_parked();
     assert_eq!(read(cx, &view, AppState::selected_count), 3);
     cx.quit();
-    let saved = std::fs::read_to_string(store.path()).expect("saved on quit");
-    assert!(
-        saved.contains("\"folders\": [\n      \"\"\n    ]"),
-        "{saved}"
-    );
-    saved
+    let view = saved(store.path()).view;
+    assert_eq!(view.folders.len(), 1);
+    assert_eq!(view.folders[0].selection.folders, [""]);
+    std::fs::read_to_string(store.path()).expect("saved on quit")
 }
 
 /// Everything a view shows that the saved state should bring back.
@@ -138,10 +145,11 @@ fn quitting_and_reopening_returns_the_same_view(cx: &mut TestAppContext) {
         .map(|(p, t)| (p.as_str(), t.as_str()))
         .collect();
     let dir = folder(&files);
+    let name = name_of(dir.path());
     let state_dir = tempfile::tempdir().unwrap();
     let store = StateStore::at(state_dir.path().join("state.json"));
 
-    let (handle, view) = launch(cx, Some(dir.path()), &store);
+    let (handle, view) = launch(cx, &[dir.path()], &store);
     // Show ignored, open two folders, check a folder and a file, put a
     // file on the stage, sort by size, filter, widen the explorer,
     // resize the window and scroll.
@@ -172,8 +180,7 @@ fn quitting_and_reopening_returns_the_same_view(cx: &mut TestAppContext) {
     // The debounced save lands half a second after the changes.
     cx.executor().advance_clock(SAVE_DELAY);
     cx.run_until_parked();
-    let written = std::fs::read_to_string(store.path()).expect("saved after the delay");
-    assert!(written.contains("\"query\": \"-secret\""), "{written}");
+    assert_eq!(saved(store.path()).view.query, "-secret");
 
     cx.update_window(handle, |_, window, cx| {
         window.scroll("tree", ScrollDelta::Pixels(point(px(0.), px(-300.))), cx);
@@ -181,8 +188,15 @@ fn quitting_and_reopening_returns_the_same_view(cx: &mut TestAppContext) {
     })
     .unwrap();
     let before = seen(cx, handle, &view);
-    assert_eq!(before.current.as_deref(), Some("docs/b.md"));
-    assert_eq!(before.checked, ["docs/a.md", "docs/b.md", "README.md"]);
+    assert_eq!(before.current, Some(format!("{name}/docs/b.md")));
+    assert_eq!(
+        before.checked,
+        [
+            format!("{name}/docs/a.md"),
+            format!("{name}/docs/b.md"),
+            format!("{name}/README.md")
+        ]
+    );
     assert_eq!(
         before.sort,
         Sort {
@@ -191,7 +205,9 @@ fn quitting_and_reopening_returns_the_same_view(cx: &mut TestAppContext) {
         }
     );
     assert!(before.shows_ignored);
-    // Scrolled: the largest folder, first under Size, is above the top.
+    // Scrolled: the folder's row and its largest folder, first under Size,
+    // are above the top.
+    assert_ne!(before.top.as_deref(), Some(name.as_str()));
     assert_ne!(before.top.as_deref(), Some("many"));
     assert_eq!(before.explorer_width, 450.);
     assert_eq!(before.window.get_bounds().size, size(px(1100.), px(760.)));
@@ -200,10 +216,68 @@ fn quitting_and_reopening_returns_the_same_view(cx: &mut TestAppContext) {
     // schedules a save.
     cx.quit();
     let mut cx = cx.new_app();
-    let (handle, view) = launch(&mut cx, None, &StateStore::at(store.path()));
+    let (handle, view) = launch(&mut cx, &[], &StateStore::at(store.path()));
     let after = seen(&mut cx, handle, &view);
     assert_eq!(after, before);
     assert_eq!(read(&mut cx, &view, AppState::selected_count), 3);
+    cx.quit();
+}
+
+#[gpui_kit::test]
+fn several_folders_come_back_in_order_each_with_its_own_view(cx: &mut TestAppContext) {
+    let one = folder(&[("a.txt", "a"), ("sub/b.txt", "b")]);
+    let two = folder(&[("c.txt", "c"), ("d.txt", "d")]);
+    let state_dir = tempfile::tempdir().unwrap();
+    let store = StateStore::at(state_dir.path().join("state.json"));
+
+    let (handle, view) = launch(cx, &[one.path(), two.path()], &store);
+    // In the first, the folder inside opened and a file in it checked; the
+    // second closed with a file checked, on the stage.
+    let sub = node(cx, &view, "sub");
+    cx.update_window(handle, |_, window, cx| {
+        window.within(row(sub)).click("chevron", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let b = node(cx, &view, "sub/b.txt");
+    let d = node_at(cx, &view, &two.path().join("d.txt"));
+    let two_top = node_at(cx, &view, two.path());
+    cx.update_window(handle, |_, window, cx| {
+        window.within(row(b)).click("check", cx);
+        window.within(row(d)).click("check", cx);
+        window.within(row(two_top)).click("chevron", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let before = seen(cx, handle, &view);
+    assert_eq!(before.title.as_deref(), Some("Strikebrain Viewer"));
+    assert_eq!(
+        before.current,
+        Some(format!("{}/d.txt", name_of(two.path())))
+    );
+    let mut rows = under(one.path(), &["sub", "b.txt", "a.txt"]);
+    rows.push(name_of(two.path()));
+    assert_eq!(rows_now(cx, handle), rows);
+    cx.quit();
+
+    let file = saved(store.path());
+    let paths: Vec<PathBuf> = file.view.folders.iter().map(|f| f.path.clone()).collect();
+    let canonical = |dir: &Path| std::fs::canonicalize(dir).unwrap();
+    assert_eq!(paths, [canonical(one.path()), canonical(two.path())]);
+    assert_eq!(file.view.folders[0].open, ["", "sub"]);
+    assert_eq!(
+        file.view.folders[1].selection,
+        SavedSelection {
+            folders: vec![],
+            files: vec!["d.txt".into()],
+        }
+    );
+    assert_eq!(file.view.current, Some(canonical(two.path()).join("d.txt")));
+
+    let mut cx = cx.new_app();
+    let (handle, view) = launch(&mut cx, &[], &StateStore::at(store.path()));
+    assert_eq!(seen(&mut cx, handle, &view), before);
+    assert_eq!(rows_now(&mut cx, handle), rows);
     cx.quit();
 }
 
@@ -214,7 +288,7 @@ fn another_folder_opens_fresh_in_the_saved_window(cx: &mut TestAppContext) {
     let state_dir = tempfile::tempdir().unwrap();
     let store = StateStore::at(state_dir.path().join("state.json"));
 
-    let (handle, view) = launch(cx, Some(saved_folder.path()), &store);
+    let (handle, view) = launch(cx, &[saved_folder.path()], &store);
     let a = node(cx, &view, "a.txt");
     cx.update_window(handle, |_, window, cx| {
         window.within(row(a)).click("check", cx);
@@ -224,13 +298,21 @@ fn another_folder_opens_fresh_in_the_saved_window(cx: &mut TestAppContext) {
     cx.quit();
 
     let mut cx = cx.new_app();
-    let (handle, view) = launch(&mut cx, Some(other.path()), &StateStore::at(store.path()));
-    assert_eq!(rows_now(&mut cx, handle), ["c.txt"]);
+    let (handle, view) = launch(&mut cx, &[other.path()], &StateStore::at(store.path()));
+    assert_eq!(rows_now(&mut cx, handle), under(other.path(), &["c.txt"]));
     assert_eq!(read(&mut cx, &view, AppState::selected_count), 0);
     // The explorer keeps its width: that belongs to the window.
     let width = cx.update(|cx| view.read(cx).explorer_width(cx));
     assert_eq!(width, 380.);
     cx.quit();
+    // Exactly the folders asked for opened, and they are what is saved.
+    let paths: Vec<PathBuf> = saved(store.path())
+        .view
+        .folders
+        .into_iter()
+        .map(|folder| folder.path)
+        .collect();
+    assert_eq!(paths, [std::fs::canonicalize(other.path()).unwrap()]);
 }
 
 #[gpui_kit::test]
@@ -241,48 +323,54 @@ fn a_saved_folder_that_is_gone_or_a_broken_file_opens_empty(cx: &mut TestAppCont
     // The saved folder was deleted.
     let gone = folder(&[("a.txt", "a")]);
     let store = StateStore::at(&path);
-    let (_, view) = launch(cx, Some(gone.path()), &store);
+    let (_, view) = launch(cx, &[gone.path()], &store);
     assert!(read(cx, &view, |state| state.explorer().is_some()));
     cx.quit();
     std::fs::remove_dir_all(gone.path()).unwrap();
     let mut cx = cx.new_app();
-    let (handle, view) = launch(&mut cx, None, &StateStore::at(&path));
+    let (handle, view) = launch(&mut cx, &[], &StateStore::at(&path));
     assert!(read(&mut cx, &view, AppState::is_empty));
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
-        assert!(window.try_find("open-folder").is_some());
+        assert!(window.try_find("add-folder").is_some());
     })
     .unwrap();
     cx.quit();
+    // It was dropped: nothing of it is saved.
+    assert_eq!(saved(&path).view.folders, []);
 
     // A file that is not a state: the same, and it is replaced on quit.
     write(state_dir.path(), "state.json", "{ not json");
     let mut cx = cx.new_app();
-    let (_, view) = launch(&mut cx, None, &StateStore::at(&path));
+    let (_, view) = launch(&mut cx, &[], &StateStore::at(&path));
     assert!(read(&mut cx, &view, AppState::is_empty));
     cx.quit();
     let replaced = std::fs::read_to_string(&path).unwrap();
-    assert!(replaced.contains("\"version\": 1"), "{replaced}");
+    assert!(replaced.contains("\"version\": 2"), "{replaced}");
 }
 
 #[gpui_kit::test]
 fn a_view_is_restored_over_a_tree_built_in_memory(cx: &mut TestAppContext) {
     use std::sync::Arc;
 
-    use explorer::{KindFilter, SavedSelection, Tree};
-    use viewer::{FolderView, Session};
+    use explorer::{KindFilter, SavedFolder, SavedSelection, Tree};
+    use viewer::{SavedView, Session};
 
     let tree = Arc::new(Tree::from_paths(&["docs/a.md", "docs/b.png", "src/main.rs"]).unwrap());
+    // A tree built from paths is one folder whose path is empty.
     let session = Session {
-        view: Some(FolderView {
-            expanded: vec!["src".into(), "gone".into()],
-            selected: SavedSelection {
-                folders: vec!["docs".into()],
-                files: vec!["missing.txt".into()],
-            },
+        view: Some(SavedView {
+            folders: vec![SavedFolder {
+                path: PathBuf::new(),
+                open: vec!["src".into(), "gone".into()],
+                selection: SavedSelection {
+                    folders: vec!["docs".into()],
+                    files: vec!["missing.txt".into()],
+                },
+            }],
             current: Some("gone.txt".into()),
             kind: KindFilter::Text,
-            ..FolderView::default()
+            ..SavedView::default()
         }),
         ..Session::default()
     };
@@ -317,10 +405,10 @@ fn refresh_during_the_first_scan_keeps_the_saved_view(cx: &mut TestAppContext) {
     let dir = folder(&[("a.txt", "a"), ("b.txt", "b"), ("sub/c.txt", "c")]);
     let state_dir = tempfile::tempdir().unwrap();
     let store = StateStore::at(state_dir.path().join("state.json"));
-    let saved = save_three_checked(cx, dir.path(), &store);
+    let saved_file = save_three_checked(cx, dir.path(), &store);
 
     let mut cx = cx.new_app();
-    let (_, view) = launch_unsettled(&mut cx, None, &StateStore::at(store.path()));
+    let (_, view) = launch_unsettled(&mut cx, &[], &StateStore::at(store.path()));
     // View > Refresh before the first scan lands.
     let state = view.read_with(&cx, |view, _| view.state().clone());
     state.update(&mut cx, AppState::refresh);
@@ -328,7 +416,7 @@ fn refresh_during_the_first_scan_keeps_the_saved_view(cx: &mut TestAppContext) {
     assert_eq!(read(&mut cx, &view, AppState::selected_count), 3);
     cx.quit();
     let written = std::fs::read_to_string(store.path()).unwrap();
-    assert_eq!(folder_part(&written), folder_part(&saved));
+    assert_eq!(folder_part(&written), folder_part(&saved_file));
 }
 
 #[gpui_kit::test]
@@ -339,18 +427,15 @@ fn show_ignored_during_the_first_scan_keeps_the_saved_view(cx: &mut TestAppConte
     save_three_checked(cx, dir.path(), &store);
 
     let mut cx = cx.new_app();
-    let (_, view) = launch_unsettled(&mut cx, None, &StateStore::at(store.path()));
+    let (_, view) = launch_unsettled(&mut cx, &[], &StateStore::at(store.path()));
     let state = view.read_with(&cx, |view, _| view.state().clone());
     state.update(&mut cx, AppState::toggle_show_ignored);
     // Saved while the second scan runs: the waiting view, with the rule
     // just chosen.
     cx.executor().advance_clock(SAVE_DELAY);
-    let waiting = std::fs::read_to_string(store.path()).unwrap();
-    assert!(waiting.contains("\"show_ignored\": true"), "{waiting}");
-    assert!(
-        waiting.contains("\"folders\": [\n      \"\"\n    ]"),
-        "{waiting}"
-    );
+    let waiting = saved(store.path()).view;
+    assert!(waiting.show_ignored);
+    assert_eq!(waiting.folders[0].selection.folders, [""]);
     cx.run_until_parked();
     assert!(read(&mut cx, &view, AppState::shows_ignored));
     assert_eq!(read(&mut cx, &view, AppState::selected_count), 3);
@@ -358,38 +443,54 @@ fn show_ignored_during_the_first_scan_keeps_the_saved_view(cx: &mut TestAppConte
 }
 
 #[gpui_kit::test]
-fn a_folder_that_vanishes_keeps_its_saved_view(cx: &mut TestAppContext) {
+fn a_folder_that_vanishes_keeps_its_checks_and_open_folders(cx: &mut TestAppContext) {
     let dir = folder(&[("a.txt", "a"), ("b.txt", "b"), ("sub/c.txt", "c")]);
     let state_dir = tempfile::tempdir().unwrap();
     let store = StateStore::at(state_dir.path().join("state.json"));
-    let (_, view) = launch(cx, Some(dir.path()), &store);
+    let (handle, view) = launch(cx, &[dir.path()], &store);
     let state = view.read_with(cx, |view, _| view.state().clone());
     state.update(cx, AppState::select_all);
+    let sub = node(cx, &view, "sub");
+    cx.update_window(handle, |_, window, cx| {
+        window.within(row(sub)).click("chevron", cx);
+    })
+    .unwrap();
     cx.executor().advance_clock(SAVE_DELAY);
     cx.run_until_parked();
-    let saved = std::fs::read_to_string(store.path()).expect("saved after the delay");
-    assert!(
-        saved.contains("\"folders\": [\n      \"\"\n    ]"),
-        "{saved}"
-    );
+    let before = saved(store.path()).view.folders;
+    assert_eq!(before[0].open, ["", "sub"]);
+    assert_eq!(before[0].selection.folders, [""]);
 
     // The folder is moved away (or its volume unmounted), and a refresh
-    // finds nothing.
+    // finds nothing: its row stays, unreadable, with the system's message.
     let moved = tempfile::tempdir().unwrap();
     std::fs::rename(dir.path(), moved.path().join("away")).unwrap();
     state.update(cx, AppState::refresh);
     cx.run_until_parked();
-    assert!(read(cx, &view, |state| state.explorer().is_none()));
+    let top = read(cx, &view, |state| {
+        let tree = state.explorer().unwrap().tree();
+        let top = tree.folders().next().unwrap();
+        assert_eq!(tree.kind(top), Kind::Unreadable);
+        top
+    });
+    let tooltip = read(cx, &view, |state| state.folder_tooltip(top)).unwrap();
+    assert!(tooltip.ends_with("No such file or directory"), "{tooltip}");
+    assert_eq!(read(cx, &view, AppState::selected_count), 0);
     cx.executor().advance_clock(SAVE_DELAY);
     cx.run_until_parked();
     cx.quit();
-    assert_eq!(std::fs::read_to_string(store.path()).unwrap(), saved);
+    // What it had is what is saved.
+    assert_eq!(saved(store.path()).view.folders, before);
 
     // Back where it was: the next launch finds it, with its view.
     std::fs::rename(moved.path().join("away"), dir.path()).unwrap();
     let mut cx = cx.new_app();
-    let (_, view) = launch(&mut cx, None, &StateStore::at(store.path()));
+    let (handle, view) = launch(&mut cx, &[], &StateStore::at(store.path()));
     assert_eq!(read(&mut cx, &view, AppState::selected_count), 3);
+    assert_eq!(
+        rows_now(&mut cx, handle),
+        under(dir.path(), &["sub", "c.txt", "a.txt", "b.txt"])
+    );
     cx.quit();
 }
 
@@ -398,7 +499,7 @@ fn a_refresh_after_the_folder_returns_brings_its_view_back(cx: &mut TestAppConte
     let dir = folder(&[("a.txt", "a"), ("b.txt", "b")]);
     let state_dir = tempfile::tempdir().unwrap();
     let store = StateStore::at(state_dir.path().join("state.json"));
-    let (handle, view) = launch(cx, Some(dir.path()), &store);
+    let (handle, view) = launch(cx, &[dir.path()], &store);
     let state = view.read_with(cx, |view, _| view.state().clone());
     let b = node(cx, &view, "b.txt");
     cx.update_window(handle, |_, window, cx| {
@@ -411,63 +512,52 @@ fn a_refresh_after_the_folder_returns_brings_its_view_back(cx: &mut TestAppConte
     std::fs::rename(dir.path(), moved.path().join("away")).unwrap();
     state.update(cx, AppState::refresh);
     cx.run_until_parked();
-    assert!(read(cx, &view, |state| state.explorer().is_none()));
+    assert_eq!(rows_now(cx, handle), under(dir.path(), &[]));
     std::fs::rename(moved.path().join("away"), dir.path()).unwrap();
     state.update(cx, AppState::refresh);
     cx.run_until_parked();
-    let checked = read(cx, &view, |state| {
-        state
-            .explorer()
-            .unwrap()
-            .selected_paths()
-            .collect::<Vec<_>>()
-    });
-    assert_eq!(checked, ["b.txt"]);
+    assert_eq!(checked(cx, &view), ["b.txt"]);
     cx.quit();
 }
 
 #[gpui_kit::test]
-fn a_saved_folder_missing_at_launch_leaves_the_state_file_alone(cx: &mut TestAppContext) {
+fn a_saved_folder_missing_at_launch_is_dropped(cx: &mut TestAppContext) {
     let dir = folder(&[("a.txt", "a"), ("b.txt", "b"), ("sub/c.txt", "c")]);
     let state_dir = tempfile::tempdir().unwrap();
     let store = StateStore::at(state_dir.path().join("state.json"));
-    let saved = save_three_checked(cx, dir.path(), &store);
+    save_three_checked(cx, dir.path(), &store);
 
-    // Its volume is not mounted at launch: the empty state shows, and
-    // quitting keeps what was saved.
+    // Gone at launch: the empty state shows, and quitting forgets it.
     let moved = tempfile::tempdir().unwrap();
     std::fs::rename(dir.path(), moved.path().join("away")).unwrap();
     let mut cx = cx.new_app();
-    let (_, view) = launch(&mut cx, None, &StateStore::at(store.path()));
+    let (_, view) = launch(&mut cx, &[], &StateStore::at(store.path()));
     assert!(read(&mut cx, &view, AppState::is_empty));
-    cx.executor().advance_clock(SAVE_DELAY);
-    cx.run_until_parked();
     cx.quit();
-    let written = std::fs::read_to_string(store.path()).unwrap();
-    assert_eq!(folder_part(&written), folder_part(&saved));
-
-    // Mounted again: the view comes back.
-    std::fs::rename(moved.path().join("away"), dir.path()).unwrap();
-    let mut cx = cx.new_app();
-    let (_, view) = launch(&mut cx, None, &StateStore::at(store.path()));
-    assert_eq!(read(&mut cx, &view, AppState::selected_count), 3);
-    cx.quit();
+    assert_eq!(saved(store.path()).view.folders, []);
 }
 
 #[gpui_kit::test]
-fn another_folder_that_fails_to_open_keeps_the_saved_view(cx: &mut TestAppContext) {
+fn a_folder_argument_that_cannot_be_read_opens_as_its_row(cx: &mut TestAppContext) {
     let dir = folder(&[("a.txt", "a"), ("b.txt", "b"), ("sub/c.txt", "c")]);
     let state_dir = tempfile::tempdir().unwrap();
     let store = StateStore::at(state_dir.path().join("state.json"));
-    let saved = save_three_checked(cx, dir.path(), &store);
+    save_three_checked(cx, dir.path(), &store);
 
     let mut cx = cx.new_app();
     let missing = state_dir.path().join("no such folder");
-    let (_, view) = launch(&mut cx, Some(&missing), &StateStore::at(store.path()));
-    assert!(read(&mut cx, &view, |state| state.explorer().is_none()));
+    let (handle, view) = launch(&mut cx, &[&missing], &StateStore::at(store.path()));
+    assert_eq!(rows_now(&mut cx, handle), ["no such folder"]);
+    assert_eq!(read(&mut cx, &view, AppState::selected_count), 0);
     cx.quit();
-    let written = std::fs::read_to_string(store.path()).unwrap();
-    assert_eq!(folder_part(&written), folder_part(&saved));
+    // Exactly the folders asked for: the one saved before is not.
+    let paths: Vec<PathBuf> = saved(store.path())
+        .view
+        .folders
+        .into_iter()
+        .map(|folder| folder.path)
+        .collect();
+    assert_eq!(paths, [missing]);
 }
 
 #[gpui_kit::test]
@@ -485,21 +575,21 @@ fn a_disk_change_during_the_first_scan_keeps_the_saved_top_row(cx: &mut TestAppC
     let root = std::fs::canonicalize(dir.path()).unwrap();
     let state_dir = tempfile::tempdir().unwrap();
     let path = state_dir.path().join("state.json");
+    // A state file from before several folders.
     let state_file = format!(
         r#"{{"version":1,"root":{root:?},"sort":{{"key":"size","direction":"descending"}},"first_visible_row":"f060.txt"}}"#
     );
     let focus_path = |cx: &mut TestAppContext, view: &Entity<AppView>| {
         read(cx, view, |state| {
-            state
-                .focus()
-                .map(|id| state.explorer().unwrap().tree().path(id))
+            let tree = state.explorer().unwrap().tree();
+            state.focus().map(|id| tree.abs_path(id))
         })
     };
 
     // Undisturbed, the saved top row takes focus once sizes are read.
     std::fs::write(&path, &state_file).unwrap();
-    let (handle, view) = launch(cx, None, &StateStore::at(&path));
-    assert_eq!(focus_path(cx, &view).as_deref(), Some("f060.txt"));
+    let (handle, view) = launch(cx, &[], &StateStore::at(&path));
+    assert_eq!(focus_path(cx, &view), Some(root.join("f060.txt")));
     let top = cx
         .update_window(handle, |_, window, cx| {
             window.render_frame(cx);
@@ -516,12 +606,12 @@ fn a_disk_change_during_the_first_scan_keeps_the_saved_top_row(cx: &mut TestAppC
     // The watcher reports a change while the first scan runs.
     std::fs::write(&path, &state_file).unwrap();
     let mut cx = cx.new_app();
-    let (handle, view) = launch_unsettled(&mut cx, None, &StateStore::at(&path));
+    let (handle, view) = launch_unsettled(&mut cx, &[], &StateStore::at(&path));
     let state = view.read_with(&cx, |view, _| view.state().clone());
     state.update(&mut cx, AppState::disk_changed);
     cx.run_until_parked();
     assert_eq!(read(&mut cx, &view, AppState::scans), 2);
-    assert_eq!(focus_path(&mut cx, &view).as_deref(), Some("f060.txt"));
+    assert_eq!(focus_path(&mut cx, &view), Some(root.join("f060.txt")));
     let top = cx
         .update_window(handle, |_, window, cx| {
             window.render_frame(cx);
@@ -540,11 +630,7 @@ fn a_disk_change_during_the_first_scan_keeps_the_saved_top_row(cx: &mut TestAppC
     })
     .unwrap();
     cx.quit();
-    let written = std::fs::read_to_string(&path).unwrap();
-    assert!(
-        written.contains("\"first_visible_row\": \"f050.txt\""),
-        "{written}"
-    );
+    assert_eq!(saved(&path).view.top_row, Some(root.join("f050.txt")));
 }
 
 #[gpui_kit::test]
@@ -561,7 +647,7 @@ fn a_saved_explorer_wider_than_the_window_fits_it(cx: &mut TestAppContext) {
         ),
     )
     .unwrap();
-    let (handle, view) = launch(cx, None, &StateStore::at(&path));
+    let (handle, view) = launch(cx, &[], &StateStore::at(&path));
     let (window, explorer, stage) = cx
         .update_window(handle, |_, window, cx| {
             window.render_frame(cx);

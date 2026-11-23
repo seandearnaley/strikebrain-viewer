@@ -1,29 +1,28 @@
-//! Opening and rescanning the folder, off the UI thread.
+//! Scanning the folders, off the UI thread, each on its own.
 //!
-//! Opening a folder clears the view and shows the tree as soon as its names
-//! are read; sizes follow. Refresh and Show ignored rescan the same folder
-//! while the old tree stays on screen, read the sizes too, then swap the
-//! trees, carrying checks, open folders and the stage across by path.
+//! A folder's first scan puts its tree on screen as soon as its names are
+//! read; sizes follow. A rescan (Refresh, Show ignored, a change on disk)
+//! keeps the tree on screen, reads the sizes too when the tree on screen
+//! has them, then swaps that folder's part of the tree, carrying checks,
+//! open folders and the stage across by path. A folder that cannot be read
+//! shows as one unreadable row with the system's message, keeping the view
+//! it had until a scan can read it again.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use explorer::{Explorer, ScanError, ScanOptions, SortKey, Tree, read_sizes, scan};
-use gpui_kit::{AppContext as _, Context, PathPromptOptions, Result, TaskExt as _};
+use explorer::{
+    Explorer, IdMap, Kind, NodeId, SavedFolder, ScanError, ScanOptions, SortKey, Tree, TreeError,
+    read_sizes, scan,
+};
+use gpui_kit::{AppContext as _, Context};
 
-use super::{AppState, ScanStatus};
+use super::AppState;
 
 /// A scan that takes longer than this shows the progress bar.
 const SLOW_SCAN: Duration = Duration::from_millis(200);
-
-/// Whether a scan replaces the view or refreshes the tree on screen.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ScanKind {
-    Open,
-    Refresh,
-}
 
 impl AppState {
     /// Whether scans list the files the ignore rules leave out.
@@ -32,95 +31,32 @@ impl AppState {
         self.show_ignored
     }
 
-    /// Shows the system folder picker and opens the folder chosen.
-    pub fn prompt_for_folder(cx: &mut Context<Self>) {
-        let chosen = cx.prompt_for_paths(PathPromptOptions {
-            files: false,
-            directories: true,
-            multiple: false,
-            prompt: None,
-        });
-        cx.spawn(async move |this, cx| {
-            // A cancelled picker or a dropped channel leaves the current
-            // folder open; a picker that failed to open is logged.
-            let Ok(paths) = chosen.await else {
-                return Ok(());
-            };
-            let Some(root) = paths?.and_then(|paths| paths.into_iter().next()) else {
-                return Ok(());
-            };
-            this.update(cx, |this, cx| this.open_folder(root, cx))
-        })
-        .detach_and_log_err(cx);
-    }
-
-    /// Scans `root` on the background executor and shows its tree. Sizes are
-    /// read afterwards, also in the background. Supersedes any running scan.
-    /// Until the new tree is on screen, the view on screen before is what
-    /// is saved.
-    pub fn open_folder(&mut self, root: PathBuf, cx: &mut Context<Self>) {
-        self.keep_view();
-        self.root = Some(root.clone());
-        self.explorer = None;
-        self.tree_replaced();
-        self.current = None;
-        self.focus = None;
-        self.selected = 0;
-        self.restore = None;
-        self.restore_top = None;
-        self.follow(root.clone(), cx);
-        self.start_scan(root, ScanKind::Open, cx);
-    }
-
-    /// Rescans the folder with the current rules, keeping the tree on screen
-    /// until the new one is ready. Does nothing for a tree with no folder.
-    /// With no tree on screen (the first scan runs, or the folder could not
-    /// be read) it scans the folder again, and the view waiting for it, or
-    /// the view it had, applies when that scan lands. A folder that is not
-    /// followed on disk because its watcher could not start is followed
-    /// again.
+    /// Rescans every folder with the current rules, keeping the trees on
+    /// screen until the new ones are ready. Does nothing for a tree with no
+    /// folder. A folder not followed on disk because its watcher could not
+    /// start is followed again.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
-        let Some(root) = self.root.clone() else {
-            return;
-        };
-        if self.explorer.is_none() {
-            return self.reopen(root, cx);
+        let keys: Vec<u64> = self.folders.iter().map(|folder| folder.key).collect();
+        for key in keys {
+            self.refresh_folder(key, cx);
         }
-        if self.watch_error.is_some() {
-            self.follow(root.clone(), cx);
-        }
-        self.start_scan(root, ScanKind::Refresh, cx);
     }
 
-    /// Scans `root` again while no tree is on screen, keeping the view that
-    /// waits for it. After a failure, the view the folder had waits: named
-    /// here, on the UI thread, as this happens once per Refresh of a
-    /// folder that could not be read.
-    fn reopen(&mut self, root: PathBuf, cx: &mut Context<Self>) {
-        if self.restore.is_none()
-            && let Some((kept_root, kept)) = &self.kept
-            && same_folder(kept_root, &root)
+    /// Rescans one folder, following it again if its watcher failed.
+    pub(super) fn refresh_folder(&mut self, key: u64, cx: &mut Context<Self>) {
+        if self
+            .folder(key)
+            .is_some_and(|folder| folder.watch_error.is_some())
         {
-            self.restore = Some(kept.clone().named());
+            self.follow(key, cx);
         }
-        self.follow(root.clone(), cx);
-        self.start_scan(root, ScanKind::Open, cx);
+        self.start_scan(key, cx);
     }
 
-    /// Before the tree on screen goes: keeps its view, or the saved view
-    /// still waiting for it, as the one to save. Its top row is the one the
-    /// last save saw. With neither, whatever was kept before stays.
-    fn keep_view(&mut self) {
-        let top = self.saved_top.take();
-        if let (Some(root), Some(view)) = (self.saved_root(), self.saved_view(top)) {
-            self.kept = Some((root, view));
-        }
-    }
-
-    /// Shows or hides the files the ignore rules leave out, by rescanning.
-    /// Does nothing for a tree with no folder.
+    /// Shows or hides the files the ignore rules leave out, by rescanning
+    /// every folder. Does nothing for a tree with no folder.
     pub fn toggle_show_ignored(&mut self, cx: &mut Context<Self>) {
-        if self.root.is_none() {
+        if self.folders.is_empty() {
             return;
         }
         self.show_ignored = !self.show_ignored;
@@ -128,199 +64,239 @@ impl AppState {
         cx.notify();
     }
 
-    fn start_scan(&mut self, root: PathBuf, kind: ScanKind, cx: &mut Context<Self>) {
-        // This scan sees every change made before it starts.
-        self.rescan_pending = false;
-        self.scan_cancel.store(true, Ordering::Relaxed);
-        let cancel = Arc::new(AtomicBool::new(false));
-        self.scan_cancel = Arc::clone(&cancel);
-        self.scan_generation += 1;
-        let generation = self.scan_generation;
+    /// Scans the folder `key` on the background executor and puts its tree
+    /// on screen, superseding its running scan.
+    pub(super) fn start_scan(&mut self, key: u64, cx: &mut Context<Self>) {
         let options = ScanOptions {
             show_ignored: self.show_ignored,
         };
-        self.status = ScanStatus::Scanning { slow: false };
+        self.scans += 1;
+        let generation = self.scans;
+        // Sizes first when the tree on screen has them, so the Size column
+        // never blanks.
+        let sizes_first = self.folder(key).is_some_and(|folder| {
+            let top = self.folder_node(&folder.path);
+            let tree = self.explorer.as_ref().map(Explorer::tree);
+            top.zip(tree)
+                .is_some_and(|(top, tree)| tree.size(top).is_some())
+        });
+        let Some(folder) = self.folder_mut(key) else {
+            return;
+        };
+        folder.rescan_pending = false;
+        folder.cancel.store(true, Ordering::Relaxed);
+        let cancel = Arc::new(AtomicBool::new(false));
+        folder.cancel = Arc::clone(&cancel);
+        folder.generation = generation;
+        folder.scanning = Some(false);
+        let root = folder.path.clone();
 
         // Each task ends early with an error only when the state is gone.
         let timer = cx.background_executor().timer(SLOW_SCAN);
-        self.slow_task = Some(cx.spawn(async move |this, cx| {
+        folder.slow_task = Some(cx.spawn(async move |this, cx| {
             timer.await;
-            this.update(cx, |this, cx| this.mark_slow(generation, cx))
+            this.update(cx, |this, cx| this.mark_slow(key, generation, cx))
         }));
-        self.scan_task = Some(cx.spawn(async move |this, cx| {
+        folder.scan_task = Some(cx.spawn(async move |this, cx| {
             let worker_cancel = Arc::clone(&cancel);
-            let scanned = cx
+            let mut scanned = cx
                 .background_spawn(async move { scan(&root, options, &worker_cancel) })
                 .await
                 .map(Arc::new);
-            if kind == ScanKind::Refresh {
-                // Sizes first, so the Size column never blanks. A cancelled
-                // read means a newer scan has replaced this one.
-                let scanned = match scanned {
-                    Ok(tree) => {
-                        let (sized, sizes_cancel) = (Arc::clone(&tree), Arc::clone(&cancel));
-                        cx.background_spawn(async move { read_sizes(&sized, &sizes_cancel) })
-                            .await
-                            .map(|()| tree)
-                    }
-                    Err(err) => Err(err),
-                };
-                return this.update(cx, |this, cx| this.finish_refresh(generation, scanned, cx));
+            if sizes_first && let Ok(tree) = &scanned {
+                // A cancelled read means a newer scan has replaced this one.
+                let (sized, sizes_cancel) = (Arc::clone(tree), Arc::clone(&cancel));
+                if let Err(err) = cx
+                    .background_spawn(async move { read_sizes(&sized, &sizes_cancel) })
+                    .await
+                {
+                    scanned = Err(err);
+                }
             }
-            let shown = this.update(cx, |this, cx| this.finish_open(generation, scanned, cx))?;
+            let shown = this.update(cx, |this, cx| {
+                this.finish_scan(key, generation, scanned, cx)
+            })?;
             let Some(tree) = shown else {
                 return Ok(());
             };
-            // A cancelled read leaves the Size column blank; a newer scan
-            // has replaced this tree by then.
+            // A cancelled read leaves the folder's Size cells blank; a newer
+            // scan has replaced this tree by then.
             let sized = cx
                 .background_spawn(async move { read_sizes(&tree, &cancel) })
                 .await;
             if sized.is_ok() {
-                this.update(cx, |this, cx| this.finish_sizes(generation, cx))?;
+                this.update(cx, |this, cx| this.finish_sizes(key, generation, cx))?;
             }
             Ok(())
         }));
         cx.notify();
     }
 
-    fn mark_slow(&mut self, generation: u64, cx: &mut Context<Self>) {
-        if generation == self.scan_generation
-            && let ScanStatus::Scanning { slow } = &mut self.status
+    fn mark_slow(&mut self, key: u64, generation: u64, cx: &mut Context<Self>) {
+        if let Some(folder) = self.folder_mut(key)
+            && folder.generation == generation
+            && folder.scanning.is_some()
         {
-            *slow = true;
+            folder.scanning = Some(true);
             cx.notify();
         }
     }
 
-    /// Shows a finished scan if it is still the latest. Returns the tree so
-    /// the caller can read its sizes.
-    fn finish_open(
+    /// Puts a finished scan of the folder `key` on screen, if it is still
+    /// that folder's latest. Returns the tree when its sizes are still to be
+    /// read.
+    pub(super) fn finish_scan(
         &mut self,
+        key: u64,
         generation: u64,
         scanned: Result<Arc<Tree>, ScanError>,
         cx: &mut Context<Self>,
     ) -> Option<Arc<Tree>> {
-        if generation != self.scan_generation {
+        let folder = self
+            .folder_mut(key)
+            .filter(|folder| folder.generation == generation)?;
+        folder.scanning = None;
+        folder.slow_task = None;
+        let old = folder.path.clone();
+        let (tree, error) = match scanned {
+            Ok(tree) => (tree, None),
+            Err(ScanError::Cancelled) => return None,
+            Err(err) => (
+                Arc::new(Tree::unreadable(&old)),
+                Some(os_message(&err.to_string()).to_owned()),
+            ),
+        };
+        let path = tree.root_path().to_path_buf();
+        // Inside a folder already on screen: its files are there already.
+        let inside = |other: &super::Folder| {
+            other.key != key && other.shown && other.path != path && path.starts_with(&other.path)
+        };
+        if self.folders.iter().any(inside) {
+            self.folders.retain(|other| other.key != key);
+            self.landed(cx);
             return None;
         }
-        self.slow_task = None;
-        let shown = match scanned {
-            Ok(tree) => {
-                self.kept = None;
-                self.show_tree(Arc::clone(&tree));
-                self.restore_view(cx);
-                cx.notify();
-                Some(tree)
-            }
-            Err(ScanError::Cancelled) => return None,
+        if error.is_none() {
+            // Folders inside this one leave; the join takes in those on
+            // screen, with their checks and open folders.
+            self.folders
+                .retain(|other| other.key == key || !other.path.starts_with(&path));
+        }
+        let joined = self.join(key, &old, &tree, error.is_some());
+        let (map, current) = match joined {
+            Ok(joined) => joined,
             Err(err) => {
-                self.fail(&err, cx);
-                None
+                // Past the tree's limits: the folder stays as it was.
+                if let Some(folder) = self.folder_mut(key) {
+                    folder.error = Some(err.to_string().into());
+                }
+                cx.notify();
+                return None;
             }
         };
-        self.scan_settled(cx);
-        shown
+        self.current = current;
+        self.focus = self.focus.and_then(|focus| map.get(focus));
+        self.tree_replaced();
+        let folder = self.folder_mut(key)?;
+        folder.shown = true;
+        folder.path.clone_from(&path);
+        let readable = error.is_none();
+        folder.error = error.map(Into::into);
+        let waiting = if readable {
+            folder.waiting.take()
+        } else {
+            None
+        };
+        if let (Some(saved), Some(explorer)) = (waiting, self.explorer.as_mut()) {
+            explorer.restore_folder(&SavedFolder { path, ..saved });
+        }
+        self.selection_changed();
+        self.landed(cx);
+        self.scan_settled(key, cx);
+        (readable && !tree.has_sizes()).then_some(tree)
     }
 
-    /// The sizes of the tree on screen are in. Under a Size sort they
-    /// reorder the rows, which keeps the focus row on screen as any command
-    /// that rebuilds the rows does.
-    fn finish_sizes(&mut self, generation: u64, cx: &mut Context<Self>) {
-        if generation != self.scan_generation {
+    /// Joins `tree`, the folder `key` last seen at `old`, into the tree on
+    /// screen: in place of its tree there, or as a new top-level folder in
+    /// its place among the folders. A folder that could no longer be read
+    /// keeps the view it had, to restore when it can be again.
+    fn join(
+        &mut self,
+        key: u64,
+        old: &Path,
+        tree: &Tree,
+        unreadable: bool,
+    ) -> Result<(IdMap, Option<NodeId>), TreeError> {
+        let at = self
+            .folders
+            .iter()
+            .position(|folder| folder.key == key)
+            .unwrap_or(self.folders.len());
+        let shown_after = self.folders[at..]
+            .iter()
+            .skip(1)
+            .filter(|folder| folder.shown)
+            .count();
+        let fresh = self.explorer.is_none().then(|| self.new_explorer());
+        let (current, folders) = (self.current, &mut self.folders);
+        let explorer = self
+            .explorer
+            .get_or_insert_with(|| fresh.unwrap_or_else(Explorer::empty));
+        let Some(top) = explorer.folder_at(old) else {
+            let index = explorer.tree().folders().len().saturating_sub(shown_after);
+            return explorer.add_folder(tree, index, current);
+        };
+        if unreadable
+            && explorer.tree().kind(top) == Kind::Dir
+            && let Some(folder) = folders.get_mut(at)
+            && folder.waiting.is_none()
+        {
+            folder.waiting = Some(explorer.snapshot().folder(top));
+        }
+        explorer.replace_folder(top, tree, current)
+    }
+
+    /// The sizes of the folder `key` on screen are in. Under a Size sort
+    /// they reorder the rows, which keeps the focus row on screen as any
+    /// command that rebuilds the rows does.
+    fn finish_sizes(&mut self, key: u64, generation: u64, cx: &mut Context<Self>) {
+        if self
+            .folder(key)
+            .is_none_or(|folder| folder.generation != generation)
+        {
             return;
         }
         let Some(explorer) = &mut self.explorer else {
             return;
         };
         explorer.sizes_loaded();
-        if let Some(top) = self.restore_top.take() {
-            return self.show_saved_top(Some(&top), cx);
-        }
-        if explorer.sort().key == SortKey::Size {
+        let sorted_by_size = explorer.sort().key == SortKey::Size;
+        if self.restore_top.is_some() {
+            self.landed(cx);
+        } else if sorted_by_size {
             self.rows_replaced(cx);
         } else {
             cx.notify();
         }
     }
 
-    /// Swaps a rescanned tree in, if it is still the latest: checks, open
-    /// folders, the filter and the stage carry across by path. A file on the
-    /// stage that is gone moves to the nearest checked file.
-    fn finish_refresh(
-        &mut self,
-        generation: u64,
-        scanned: Result<Arc<Tree>, ScanError>,
-        cx: &mut Context<Self>,
-    ) {
-        if generation != self.scan_generation {
-            return;
-        }
-        self.slow_task = None;
-        let tree = match scanned {
-            Ok(tree) => tree,
-            Err(ScanError::Cancelled) => return,
-            Err(err) => {
-                self.fail(&err, cx);
-                return self.scan_settled(cx);
-            }
-        };
-        let Some(explorer) = self.explorer.as_mut() else {
-            self.kept = None;
-            self.show_tree(tree);
-            self.restore_view(cx);
-            cx.notify();
-            return self.scan_settled(cx);
-        };
-        let map = match self.current {
-            Some(current) => {
-                let (map, carried) = explorer.replace_tree_carrying(tree, current);
-                self.current = carried;
-                map
-            }
-            None => explorer.replace_tree(tree),
-        };
-        self.tree_replaced();
-        self.focus = self.focus.and_then(|focus| map.get(focus));
-        self.status = ScanStatus::Idle;
-        self.selection_changed();
-        // A saved top row still waiting for sizes: this tree has them. The
-        // open scan's own read of them was cancelled by this one.
-        match self.restore_top.take() {
-            Some(top) => self.show_saved_top(Some(&top), cx),
-            None => self.rows_replaced(cx),
-        }
-        self.scan_settled(cx);
-    }
-
-    /// A scan landed or failed and no newer one runs: if the disk changed
-    /// meanwhile, rescan once.
-    fn scan_settled(&mut self, cx: &mut Context<Self>) {
-        if std::mem::take(&mut self.rescan_pending) {
-            self.refresh(cx);
+    /// A scan of the folder `key` landed or failed: if its folder changed
+    /// on disk meanwhile, rescan it once.
+    fn scan_settled(&mut self, key: u64, cx: &mut Context<Self>) {
+        let pending = self
+            .folder_mut(key)
+            .is_some_and(|folder| std::mem::take(&mut folder.rescan_pending));
+        if pending {
+            self.refresh_folder(key, cx);
         }
     }
 
-    /// The folder itself could not be read: show the system's message. The
-    /// view it had stays the one to save.
-    fn fail(&mut self, err: &ScanError, cx: &mut Context<Self>) {
-        if self.explorer.is_some() {
-            self.keep_view();
-        }
-        self.explorer = None;
-        self.tree_replaced();
-        self.current = None;
-        self.focus = None;
-        self.selected = 0;
-        self.status = ScanStatus::Failed(os_message(&err.to_string()).to_owned().into());
-        cx.notify();
-    }
-
-    /// Puts a new tree on screen with the filter asked for.
+    /// Puts a tree built in memory on screen, as it is, with the filter
+    /// asked for.
     pub(super) fn show_tree(&mut self, tree: Arc<Tree>) {
         let mut explorer = Explorer::new(tree);
         if self.filter_asked() {
-            // Synchronous: a scan just finished, and this runs once.
+            // Synchronous: this runs once.
             explorer.set_filter(&self.query, self.kind);
         }
         self.focus = explorer.rows().first().copied();
@@ -329,14 +305,7 @@ impl AppState {
         self.tree_replaced();
         self.current = None;
         self.selected = 0;
-        self.status = ScanStatus::Idle;
     }
-}
-
-/// Whether two paths name the same folder: the same path, or the same
-/// folder once links and `..` are resolved.
-fn same_folder(a: &Path, b: &Path) -> bool {
-    a == b || std::fs::canonicalize(a).is_ok_and(|a| std::fs::canonicalize(b).is_ok_and(|b| a == b))
 }
 
 /// The operating system's message alone: Rust's `io::Error` ends it with
@@ -352,7 +321,47 @@ pub(super) fn os_message(text: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    use explorer::{ScanOptions, scan};
+    use gpui_kit::{AppContext as _, TestAppContext};
+
     use super::os_message;
+    use crate::state::{AppState, Launch};
+
+    #[gpui_kit::test]
+    fn folders_keep_the_order_they_were_added_in_whichever_scan_lands_first(
+        cx: &mut TestAppContext,
+    ) {
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        std::fs::write(a.path().join("a.txt"), "a").unwrap();
+        std::fs::write(b.path().join("b.txt"), "b").unwrap();
+        let launch = Launch::Folders(vec![a.path().to_owned(), b.path().to_owned()]);
+        let state = cx.new(|cx| AppState::new(launch, cx));
+        state.update(cx, |state, cx| {
+            // The scans the launch started never land; these do, the
+            // second folder's first.
+            for folder in &mut state.folders {
+                folder.scan_task = None;
+            }
+            for (key, dir) in [(1, &b), (0, &a)] {
+                let tree = scan(dir.path(), ScanOptions::default(), &AtomicBool::new(false));
+                let generation = state.folder(key).unwrap().generation;
+                state.finish_scan(key, generation, tree.map(Arc::new), cx);
+            }
+            let tree = state.explorer().unwrap().tree();
+            let names: Vec<&str> = tree.folders().map(|top| tree.name(top)).collect();
+            let name = |dir: &tempfile::TempDir| {
+                dir.path()
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            assert_eq!(names, [name(&a), name(&b)]);
+        });
+    }
 
     #[test]
     fn the_os_message_loses_only_the_error_code() {

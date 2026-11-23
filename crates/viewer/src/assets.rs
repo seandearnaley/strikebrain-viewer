@@ -1,6 +1,6 @@
 //! The icons the app draws: the Kit's default set plus the few it leaves
-//! out: the picture, code and symlink files, Collapse all, Select all and
-//! Clear.
+//! out: the picture, code and symlink files, Collapse all, Select all,
+//! Clear and Add Folder.
 
 use std::borrow::Cow;
 
@@ -15,7 +15,8 @@ icon_assets!(
         FileSymlink,
         ChevronsDownUp,
         ListChecks,
-        ListX
+        ListX,
+        FolderPlus
     ]
 );
 
@@ -54,6 +55,7 @@ mod tests {
             IconName::ChevronsDownUp,
             IconName::ListChecks,
             IconName::ListX,
+            IconName::FolderPlus,
         ] {
             assert!(AppAssets.load(&icon.path()).unwrap().is_some());
         }

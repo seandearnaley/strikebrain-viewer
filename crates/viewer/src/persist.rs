@@ -1,16 +1,18 @@
-//! The saved state: which folder was open and how it was seen, the
+//! The saved state: which folders were open and how they were seen, the
 //! explorer's width and the window's bounds. One JSON file in the
 //! platform's config folder (on macOS `~/Library/Application
 //! Support/ai.brainstrike.viewer/state.json`), read once at launch and
 //! written in the background as the view changes.
 //!
-//! Paths inside the folder are stored relative to it, with `/` separators,
-//! so they outlive a tree's ids. Checks are stored compactly: a folder
-//! whose every file is checked is one entry. The file carries a schema
-//! version; a file that is missing, unreadable, malformed or of another
-//! version is ignored and the app starts fresh. Writes go to a temporary
-//! file, synced to disk, that is renamed over the old one, so a reader
-//! never sees half a file.
+//! Each folder is saved by its canonical path, with its open folders and
+//! checks relative to it, with `/` separators, so they outlive a tree's
+//! ids; the file on the stage and the top row are saved by their paths on
+//! disk. Checks are stored compactly: a folder whose every file is checked
+//! is one entry. The file carries a schema version: version 1, from before
+//! several folders, still loads, as one folder; a file that is missing,
+//! unreadable, malformed or of another version is ignored and the app
+//! starts fresh. Writes go to a temporary file, synced to disk, that is
+//! renamed over the old one, so a reader never sees half a file.
 
 use std::collections::hash_map::DefaultHasher;
 use std::fs;
@@ -19,7 +21,7 @@ use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use explorer::{KindFilter, SavedSelection, Sort, ViewSnapshot};
+use explorer::{KindFilter, SavedFolder, Sort, ViewSnapshot};
 use gpui_kit::{Bounds, Pixels, WindowBounds, point, size};
 
 use crate::state::Launch;
@@ -31,29 +33,25 @@ pub const APP_ID: &str = "ai.brainstrike.viewer";
 /// running a build without touching the saved state of the installed app.
 pub const STATE_FILE_VAR: &str = "STRIKEBRAIN_VIEWER_STATE";
 
-/// The state file's schema version. A file of any other is ignored.
-const VERSION: u32 = 1;
-
-/// How the folder on screen was seen: everything about it that is
-/// restored, by path. Restored only when the same folder is opened again.
+/// How the explorer was seen: everything that is restored, by path. Each
+/// folder's part is restored only when that folder opens again.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct FolderView {
+pub struct SavedView {
+    /// Each folder, in the order added: its canonical path, open folders
+    /// and checks.
+    pub folders: Vec<SavedFolder>,
     /// Whether the files the ignore rules hide were listed.
     pub show_ignored: bool,
-    /// The folders opened by hand.
-    pub expanded: Vec<String>,
-    /// The checked files, compactly.
-    pub selected: SavedSelection,
-    /// The file on the stage.
-    pub current: Option<String>,
+    /// The file on the stage, by its path on disk.
+    pub current: Option<PathBuf>,
     /// The filter text.
     pub query: String,
     /// The filter kind.
     pub kind: KindFilter,
     /// The tree's sort.
     pub sort: Sort,
-    /// The row at the top of the tree's scroll.
-    pub top_row: Option<String>,
+    /// The row at the top of the tree's scroll, by its path on disk.
+    pub top_row: Option<PathBuf>,
 }
 
 /// Where the window was, relative to the display it was on, and that
@@ -71,77 +69,60 @@ pub struct SavedWindow {
 /// Everything the state file holds.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Saved {
-    /// The folder that was open, absolute and canonical.
-    pub root: Option<PathBuf>,
-    /// How it was seen.
-    pub view: FolderView,
+    /// How the explorer was seen.
+    pub view: SavedView,
     /// The explorer's width, in pixels.
     pub explorer_width: Option<f32>,
     /// Where the window was.
     pub window: Option<SavedWindow>,
 }
 
-/// A saved folder with its view.
-#[derive(Clone, Debug, PartialEq)]
-pub struct SavedFolder {
-    /// The folder, absolute and canonical.
-    pub root: PathBuf,
-    /// How it was seen.
-    pub view: FolderView,
-}
-
 /// What a launch opens and what of the saved state applies to it.
 #[derive(Debug)]
 pub struct Plan {
-    /// The folder to open, or nothing.
+    /// The folders to open, or nothing.
     pub launch: Launch,
-    /// The saved view, when it belongs to the folder opened.
-    pub view: Option<FolderView>,
-    /// The saved folder, when the launch does not open it: it stays the
-    /// saved one, untouched, until another folder opens.
-    pub kept: Option<SavedFolder>,
+    /// The saved view, when a folder opened was saved: with only the
+    /// folders that open.
+    pub view: Option<SavedView>,
     /// The explorer's saved width.
     pub explorer_width: Option<f32>,
     /// The window's saved place.
     pub window: Option<SavedWindow>,
 }
 
-/// Decides what a launch opens. A folder from the command line opens, and
-/// takes the saved view only if it is the folder that was saved. With no
-/// folder the saved one reopens with its view, if it still exists;
-/// otherwise nothing opens. A saved folder the launch does not open is
-/// kept, to be saved again as it was until another folder opens: a
-/// volume that is not mounted today loses nothing. The window and the
-/// explorer's width are restored either way. Touches the disk:
-/// canonicalizing a path and asking whether a folder exists.
+/// Decides what a launch opens. Folders from the command line open,
+/// exactly those, each taking its saved view if it was saved. With none,
+/// the saved folders reopen with their views; one that no longer exists is
+/// dropped. The filter, the sort, Show ignored, the file on the stage and
+/// the top row come back with any saved folder that opens. The window and
+/// the explorer's width are restored either way. Touches the disk:
+/// canonicalizing paths and asking whether folders exist.
 #[must_use]
-pub fn plan_launch(folder: Option<PathBuf>, saved: Option<Saved>) -> Plan {
+pub fn plan_launch(folders: Vec<PathBuf>, saved: Option<Saved>) -> Plan {
     let saved = saved.unwrap_or_default();
-    let opens_saved = match &folder {
-        Some(folder) => saved
-            .root
-            .as_ref()
-            .is_some_and(|root| fs::canonicalize(folder).is_ok_and(|asked| &asked == root)),
-        None => saved.root.as_ref().is_some_and(|root| root.is_dir()),
-    };
-    let launch = match (folder, &saved.root) {
-        (Some(folder), _) => Launch::Folder(folder),
-        (None, Some(root)) if opens_saved => Launch::Folder(root.clone()),
-        (None, _) => Launch::Empty,
-    };
-    let (view, kept) = if opens_saved {
-        (Some(saved.view), None)
+    let mut view = saved.view;
+    let open = if folders.is_empty() {
+        view.folders.retain(|folder| folder.path.is_dir());
+        view.folders
+            .iter()
+            .map(|folder| folder.path.clone())
+            .collect()
     } else {
-        let kept = saved.root.map(|root| SavedFolder {
-            root,
-            view: saved.view,
-        });
-        (None, kept)
+        let asked: Vec<PathBuf> = folders
+            .iter()
+            .filter_map(|folder| fs::canonicalize(folder).ok())
+            .collect();
+        view.folders.retain(|folder| asked.contains(&folder.path));
+        folders
     };
     Plan {
-        launch,
-        view,
-        kept,
+        launch: if open.is_empty() {
+            Launch::Empty
+        } else {
+            Launch::Folders(open)
+        },
+        view: (!view.folders.is_empty()).then_some(view),
         explorer_width: saved.explorer_width,
         window: saved.window,
     }
@@ -167,49 +148,66 @@ pub fn fit(bounds: Bounds<Pixels>, area: Bounds<Pixels>) -> Bounds<Pixels> {
 /// names its paths, which can take a while, anywhere.
 #[derive(Debug)]
 pub(crate) struct Snapshot {
-    /// The folder, as asked for or as scanned.
-    pub(crate) root: Option<PathBuf>,
-    pub(crate) view: Option<SnapshotView>,
+    pub(crate) view: SnapshotView,
     pub(crate) explorer_width: Option<f32>,
     pub(crate) window: Option<SavedWindow>,
 }
 
-/// The view of the folder in a [`Snapshot`].
+/// The view in a [`Snapshot`].
 #[derive(Clone, Debug)]
-pub(crate) enum SnapshotView {
-    /// A tree is on screen: its open folders and checks still to be named,
-    /// the rest of `FolderView` filled in.
-    Live(ViewSnapshot, FolderView),
-    /// No tree is on screen: the view waiting to be restored, or one
-    /// kept as it was saved.
-    Waiting(FolderView),
+pub(crate) struct SnapshotView {
+    /// The tree on screen, its folders' open folders and checks still to
+    /// be named.
+    pub(crate) live: Option<ViewSnapshot>,
+    /// Every folder, in order.
+    pub(crate) folders: Vec<FolderSnapshot>,
+    /// The rest of the view, its `folders` left empty.
+    pub(crate) rest: SavedView,
+}
+
+/// One folder of a [`SnapshotView`].
+#[derive(Clone, Debug)]
+pub(crate) enum FolderSnapshot {
+    /// On screen: its part of the tree, named from the live snapshot.
+    Live(PathBuf),
+    /// Not on screen as it was seen: the saved view waiting for its scan,
+    /// or the view it had when it could last be read.
+    Waiting(SavedFolder),
 }
 
 impl SnapshotView {
-    /// The view with its open folders and checks named. Costs a path per
-    /// entry, so the UI thread calls it only where that is rare.
-    pub(crate) fn named(self) -> FolderView {
-        match self {
-            Self::Live(snapshot, rest) => FolderView {
-                expanded: snapshot.open_paths(),
-                selected: snapshot.selection(),
-                ..rest
-            },
-            Self::Waiting(view) => view,
+    /// The view with every folder named. Costs a path per entry, so the UI
+    /// thread calls it only where that is rare.
+    pub(crate) fn named(self) -> SavedView {
+        let mut live = self.live.map_or_else(Vec::new, |live| live.folders());
+        let folders = self
+            .folders
+            .into_iter()
+            .map(|folder| match folder {
+                FolderSnapshot::Live(path) => {
+                    match live.iter().position(|named| named.path == path) {
+                        Some(at) => live.swap_remove(at),
+                        None => SavedFolder {
+                            path,
+                            ..SavedFolder::default()
+                        },
+                    }
+                }
+                FolderSnapshot::Waiting(saved) => saved,
+            })
+            .collect();
+        SavedView {
+            folders,
+            ..self.rest
         }
     }
 }
 
 impl Snapshot {
-    /// The state to write. Names the open folders and the checks, and
-    /// makes the root canonical, so it reads the disk once.
+    /// The state to write, with every folder named.
     pub(crate) fn saved(self) -> Saved {
-        let view = self.view.map_or_default(SnapshotView::named);
         Saved {
-            root: self
-                .root
-                .map(|root| fs::canonicalize(&root).unwrap_or(root)),
-            view,
+            view: self.view.named(),
             explorer_width: self.explorer_width,
             window: self.window,
         }

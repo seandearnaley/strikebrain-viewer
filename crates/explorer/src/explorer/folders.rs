@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use super::Explorer;
 use crate::remap::IdMap;
-use crate::{NodeId, Tree, TreeError};
+use crate::{Kind, NodeId, Tree, TreeError};
 
 /// Where a top-level folder of a new join comes from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,8 +35,10 @@ impl Explorer {
     /// top-level folder at index `at` (or last). The tree becomes a joined
     /// tree; one that was not counts as a single folder. Top-level folders
     /// inside the new one leave, their checks and open folders carried into
-    /// it by path, so no file is in the tree twice. The caller makes sure
-    /// the new folder is not inside one already on view.
+    /// it by path, so no file is in the tree twice; a folder that could not
+    /// be read ([`Tree::unreadable`]) holds nothing and takes nothing in.
+    /// The caller makes sure the new folder is not inside one already on
+    /// view.
     ///
     /// Returns the old-to-new id map, and where `current`, the file on the
     /// stage, goes: as [`Explorer::replace_tree_carrying`] says.
@@ -52,6 +54,7 @@ impl Explorer {
         current: Option<NodeId>,
     ) -> Result<(IdMap, Option<NodeId>), TreeError> {
         let path = folder.root_path();
+        let takes_in = path.is_absolute() && folder.kind(NodeId::ROOT) == Kind::Dir;
         let mut plan = Vec::new();
         let mut carried = Vec::new();
         let tops = self.tops();
@@ -60,7 +63,7 @@ impl Explorer {
                 plan.push(Source::Scanned);
             }
             let top_path = self.tree.abs_path(top);
-            if path.is_absolute() && top_path.starts_with(path) {
+            if takes_in && top_path.starts_with(path) {
                 // Taken in: its state carries over if the scan lists it.
                 carried.extend(folder.find_abs(&top_path).map(|node| (top, node)));
             } else {

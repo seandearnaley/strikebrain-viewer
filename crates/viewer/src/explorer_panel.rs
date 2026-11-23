@@ -3,7 +3,7 @@
 //! Top to bottom, the spec's regions: toolbar (`toolbar.rs`), filter input
 //! and kind control (`filter_bar.rs`), column header (`header.rs`), the
 //! tree, and a selection bar floating over the tree (`selection_bar.rs`).
-//! With no folder the pane shows only "Open Folder".
+//! With no folder the pane shows only "Add Folder".
 
 mod filter_bar;
 mod header;
@@ -25,11 +25,12 @@ use gpui_kit::{
 };
 
 use crate::keys::{
-    ClearFilter, Collapse, EXPLORER, EXPLORER_BODY, Expand, FocusFirst, FocusLast, FocusNext,
-    FocusNextPage, FocusPrevious, FocusPreviousPage, OpenFolder, ShowFile, ToggleCheck,
+    AddFolder, ClearFilter, Collapse, EXPLORER, EXPLORER_BODY, Expand, FocusFirst, FocusLast,
+    FocusNext, FocusNextPage, FocusPrevious, FocusPreviousPage, RemoveFolder, ShowFile,
+    ToggleCheck,
 };
 use crate::row::TreeRow;
-use crate::state::{AppState, DrawnRow, Motion, RowAction, ScanStatus, StateEvent};
+use crate::state::{AppState, DrawnRow, Motion, RowAction, StateEvent};
 
 use selection_bar::SelectionBar;
 
@@ -56,6 +57,9 @@ pub(crate) struct ExplorerPanel {
     /// Whether the focus ring shows: set by a key press that moves or lands
     /// focus in the tree, cleared by any pointer press in the pane.
     ring: bool,
+    /// The row under the pointer, which shows its remove button if it is
+    /// a top-level folder's.
+    hovered: Option<NodeId>,
     _subscriptions: [Subscription; 3],
 }
 
@@ -110,6 +114,7 @@ impl ExplorerPanel {
             filter,
             scroll: UniformListScrollHandle::new(),
             ring: false,
+            hovered: None,
             _subscriptions: subscriptions,
         }
     }
@@ -127,7 +132,7 @@ impl ExplorerPanel {
         }
     }
 
-    /// Whether the filter input is on screen: anything but the "Open
+    /// Whether the filter input is on screen: anything but the "Add
     /// Folder" state.
     pub(crate) fn filter_on_screen(&self, cx: &App) -> bool {
         !self.state.read(cx).is_empty()
@@ -212,6 +217,13 @@ impl ExplorerPanel {
 
     fn show_file(&mut self, _: &ShowFile, _: &mut Window, cx: &mut Context<Self>) {
         self.state.update(cx, AppState::show_focus);
+        let row = self.state.read(cx).focus_index();
+        self.after_key(row, cx);
+    }
+
+    /// ⌘⌫ in the tree: removes the focused top-level folder.
+    fn remove_folder(&mut self, _: &RemoveFolder, _: &mut Window, cx: &mut Context<Self>) {
+        self.state.update(cx, AppState::remove_focus_folder);
         let row = self.state.read(cx).focus_index();
         self.after_key(row, cx);
     }
@@ -336,6 +348,19 @@ impl ExplorerPanel {
         }
     }
 
+    /// The pointer entered or left the row of `id`.
+    fn hover(&mut self, id: NodeId, hovered: bool, cx: &mut Context<Self>) {
+        let now = match (hovered, self.hovered) {
+            (true, _) => Some(id),
+            (false, Some(was)) if was == id => None,
+            (false, was) => was,
+        };
+        if now != self.hovered {
+            self.hovered = now;
+            cx.notify();
+        }
+    }
+
     /// Any pointer press in the pane hides the focus ring.
     fn pointer_down(&mut self, cx: &mut Context<Self>) {
         if self.ring {
@@ -357,12 +382,15 @@ impl ExplorerPanel {
             return Vec::new();
         };
         let ring = self.ring && self.focus_handle.is_focused(window);
-        let (current, focus) = (state.current(), state.focus());
+        let (current, focus, hovered) = (state.current(), state.focus(), self.hovered);
         range
             .filter_map(|ix| Some((ix, explorer.row(ix)?)))
             .map(|(ix, row)| {
                 let id = row.id;
                 let drawn = state.drawn_row(ix, id);
+                let folder = state.is_folder_row(id);
+                // Focused as the ring shows it: after a key press.
+                let shown = hovered == Some(id) || (ring && focus == Some(id));
                 TreeRow::new(
                     &row,
                     cx.listener(move |this, action: &RowAction, window, cx| {
@@ -371,6 +399,13 @@ impl ExplorerPanel {
                 )
                 .current(current == Some(id))
                 .focused(focus == Some(id), ring)
+                .when(folder, |row| {
+                    row.tooltip(state.folder_tooltip(id))
+                        .removable(shown)
+                        .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                            this.hover(id, *hovered, cx);
+                        }))
+                })
             })
             .collect()
     }
@@ -378,8 +413,13 @@ impl ExplorerPanel {
     /// The tree, with the selection bar floating over its bottom while
     /// anything is checked. The list gains bottom padding while the bar
     /// shows, so the last row can scroll clear of it; no row moves.
-    fn render_tree(&self, explorer: &Explorer, selected: usize, cx: &Context<Self>) -> AnyElement {
-        let label: SharedString = explorer.tree().name(NodeId::ROOT).to_owned().into();
+    fn render_tree(
+        &self,
+        explorer: &Explorer,
+        label: SharedString,
+        selected: usize,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         let tree = div()
             .id("tree")
             .test_support()
@@ -398,6 +438,7 @@ impl ExplorerPanel {
             .on_action(cx.listener(Self::toggle_check))
             .on_action(cx.listener(Self::show_file))
             .on_action(cx.listener(Self::clear_filter))
+            .on_action(cx.listener(Self::remove_folder))
             .relative()
             .size_full()
             .child(
@@ -443,24 +484,7 @@ impl ExplorerPanel {
             .into_any_element()
     }
 
-    /// The operating system's message when the folder cannot be read.
-    fn render_error(message: &SharedString, cx: &App) -> AnyElement {
-        div()
-            .id("scan-error")
-            .test_support()
-            .role(Role::Label)
-            .aria_label(message.clone())
-            .w_full()
-            .px_2()
-            .py_2()
-            .truncate()
-            .text_sm()
-            .text_color(cx.theme().muted_foreground)
-            .child(message.clone())
-            .into_any_element()
-    }
-
-    /// No folder: one "Open Folder" button, centred.
+    /// No folder: one "Add Folder" button, centred.
     fn render_empty() -> AnyElement {
         div()
             .size_full()
@@ -468,10 +492,10 @@ impl ExplorerPanel {
             .items_center()
             .justify_center()
             .child(
-                Button::new("open-folder")
+                Button::new("add-folder")
                     .primary()
-                    .label("Open Folder")
-                    .on_click(|_, window, cx| window.dispatch_action(Box::new(OpenFolder), cx)),
+                    .label("Add Folder")
+                    .on_click(|_, window, cx| window.dispatch_action(Box::new(AddFolder), cx)),
             )
             .into_any_element()
     }
@@ -489,16 +513,12 @@ impl Render for ExplorerPanel {
             return panel.child(self.render_without_tree(Some(Self::render_empty())));
         }
         // The header labels rows, so it shows only with a tree.
-        let (header, body) = match (state.status(), state.explorer()) {
-            (ScanStatus::Failed(message), _) => (
-                None,
-                self.render_without_tree(Some(Self::render_error(message, cx))),
-            ),
-            (_, Some(explorer)) => (
+        let (header, body) = match state.explorer() {
+            Some(explorer) => (
                 Some(Self::render_header(explorer.sort(), cx)),
-                self.render_tree(explorer, state.selected_count(), cx),
+                self.render_tree(explorer, state.title(), state.selected_count(), cx),
             ),
-            (_, None) => (None, self.render_without_tree(None)),
+            None => (None, self.render_without_tree(None)),
         };
 
         panel

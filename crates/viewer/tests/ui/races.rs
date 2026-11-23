@@ -16,7 +16,7 @@ use viewer::{AppState, AppView, Launch, ScanStatus};
 
 use crate::{
     click_without_frame, current, filter_value, folder, node, open_app, read, row, rows_now, state,
-    write,
+    under, write,
 };
 
 /// The rows' names in an explorer.
@@ -102,7 +102,7 @@ fn a_click_drawn_before_a_refresh_does_nothing(cx: &mut TestAppContext) {
         ("c.txt", "c"),
         ("d.txt", "d"),
     ]);
-    let (handle, view) = open_app(cx, Launch::Folder(dir.path().to_owned()));
+    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
 
     // d.txt's id is past the end of the next tree, which holds a and b.
     let (_, d_check) = drawn_at(cx, handle, &view, "d.txt");
@@ -112,7 +112,7 @@ fn a_click_drawn_before_a_refresh_does_nothing(cx: &mut TestAppContext) {
     let _click = click_when_the_tree_swaps(cx, handle, &view, d_check);
     state(cx, &view).update(cx, AppState::refresh);
     cx.run_until_parked();
-    assert_eq!(rows_now(cx, handle), ["a.txt", "b.txt"]);
+    assert_eq!(rows_now(cx, handle), under(dir.path(), &["a.txt", "b.txt"]));
     assert_eq!(read(cx, &view, AppState::selected_count), 0);
 
     // a.txt's id names b.txt in the next tree.
@@ -121,37 +121,41 @@ fn a_click_drawn_before_a_refresh_does_nothing(cx: &mut TestAppContext) {
     let _click = click_when_the_tree_swaps(cx, handle, &view, a_row);
     state(cx, &view).update(cx, AppState::refresh);
     cx.run_until_parked();
-    assert_eq!(rows_now(cx, handle), ["b.txt"]);
+    assert_eq!(rows_now(cx, handle), under(dir.path(), &["b.txt"]));
     assert_eq!(current(cx, &view), None);
     assert_eq!(read(cx, &view, AppState::selected_count), 0);
 }
 
 #[gpui_kit::test]
-fn opening_a_second_folder_before_the_first_lands_shows_only_the_second(cx: &mut TestAppContext) {
-    let first = folder(&[("from-first.txt", "1")]);
+fn a_second_folder_added_before_the_first_lands_keeps_its_place(cx: &mut TestAppContext) {
+    // The first is larger, so its scan lands last.
+    let mut owned: Vec<(String, String)> = (0..400)
+        .map(|i| (format!("deep/f{i}.txt"), String::new()))
+        .collect();
+    owned.push(("from-first.txt".into(), "1".into()));
+    let files: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(path, text)| (path.as_str(), text.as_str()))
+        .collect();
+    let first = folder(&files);
     let second = folder(&[("from-second.txt", "2")]);
     let (handle, view) = open_app(cx, Launch::Empty);
-    let (seen, _log) = log_rows(cx, &view);
 
     let state = state(cx, &view);
     state.update(cx, |state, cx| {
-        state.open_folder(first.path().to_owned(), cx);
+        state.add_folders(vec![first.path().to_owned()], Vec::new(), cx);
     });
     state.update(cx, |state, cx| {
-        state.open_folder(second.path().to_owned(), cx);
+        state.add_folders(vec![second.path().to_owned()], Vec::new(), cx);
     });
     cx.run_until_parked();
 
-    assert_eq!(rows_now(cx, handle), ["from-second.txt"]);
-    assert!(
-        seen.borrow()
-            .iter()
-            .flatten()
-            .all(|name| name != "from-first.txt")
-    );
+    // Adding never replaces: both show, in the order added.
+    let mut rows = under(first.path(), &["deep", "from-first.txt"]);
+    rows.extend(under(second.path(), &["from-second.txt"]));
+    assert_eq!(rows_now(cx, handle), rows);
     let title = cx.update(|cx| view.read(cx).title().cloned());
-    let second_name = second.path().file_name().unwrap().to_string_lossy();
-    assert_eq!(title.as_deref(), Some(&*second_name));
+    assert_eq!(title.as_deref(), Some("Strikebrain Viewer"));
     assert_eq!(
         read(cx, &view, |state| state.status().clone()),
         ScanStatus::Idle
@@ -165,7 +169,9 @@ fn a_query_typed_during_the_first_scan_applies_when_the_tree_lands(cx: &mut Test
     let (seen, _log) = log_rows(cx, &view);
 
     // The scan has not run: the filter is on screen, the tree is not.
-    state(cx, &view).update(cx, |state, cx| state.open_folder(dir.path().to_owned(), cx));
+    state(cx, &view).update(cx, |state, cx| {
+        state.add_folders(vec![dir.path().to_owned()], Vec::new(), cx);
+    });
     cx.update_window(handle, |_, window, cx| {
         window.click("filter", cx);
         window.input("main", cx);
@@ -174,16 +180,17 @@ fn a_query_typed_during_the_first_scan_applies_when_the_tree_lands(cx: &mut Test
     assert!(read(cx, &view, |state| state.explorer().is_none()));
     cx.run_until_parked();
 
-    assert_eq!(rows_now(cx, handle), ["main.rs"]);
+    let rows = under(dir.path(), &["main.rs"]);
+    assert_eq!(rows_now(cx, handle), rows);
     assert_eq!(filter_value(cx, handle), "main");
     // The tree never showed unfiltered.
-    assert!(seen.borrow().iter().all(|rows| *rows == ["main.rs"]));
+    assert!(seen.borrow().iter().all(|seen| *seen == rows));
 }
 
 #[gpui_kit::test]
 fn a_refresh_while_a_filter_job_is_pending_shows_the_new_tree_filtered(cx: &mut TestAppContext) {
     let dir = folder(&[("main.rs", ""), ("notes.md", "")]);
-    let (handle, view) = open_app(cx, Launch::Folder(dir.path().to_owned()));
+    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
     let (seen, _log) = log_rows(cx, &view);
     write(dir.path(), "main2.rs", "");
 
@@ -196,7 +203,10 @@ fn a_refresh_while_a_filter_job_is_pending_shows_the_new_tree_filtered(cx: &mut 
     .unwrap();
     cx.run_until_parked();
 
-    assert_eq!(rows_now(cx, handle), ["main.rs", "main2.rs"]);
+    assert_eq!(
+        rows_now(cx, handle),
+        under(dir.path(), &["main.rs", "main2.rs"])
+    );
     assert_eq!(filter_value(cx, handle), "main");
     // The new tree never showed unfiltered.
     for rows in seen.borrow().iter() {
@@ -211,7 +221,7 @@ fn show_ignored_clicked_twice_before_a_scan_lands_shows_them_hidden(cx: &mut Tes
         ("secret.txt", "s"),
         ("keep.txt", "k"),
     ]);
-    let (handle, view) = open_app(cx, Launch::Folder(dir.path().to_owned()));
+    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
     let (seen, _log) = log_rows(cx, &view);
 
     cx.update_window(handle, |_, window, cx| {
@@ -222,7 +232,10 @@ fn show_ignored_clicked_twice_before_a_scan_lands_shows_them_hidden(cx: &mut Tes
     cx.run_until_parked();
 
     assert!(!read(cx, &view, AppState::shows_ignored));
-    assert_eq!(rows_now(cx, handle), [".gitignore", "keep.txt"]);
+    assert_eq!(
+        rows_now(cx, handle),
+        under(dir.path(), &[".gitignore", "keep.txt"])
+    );
     assert!(
         seen.borrow()
             .iter()
@@ -264,7 +277,9 @@ fn sizes_read_for_a_replaced_tree_never_land(cx: &mut TestAppContext) {
         })
     });
 
-    state.update(cx, |state, cx| state.open_folder(dir.path().to_owned(), cx));
+    state.update(cx, |state, cx| {
+        state.add_folders(vec![dir.path().to_owned()], Vec::new(), cx);
+    });
     cx.run_until_parked();
 
     assert!(!armed.get(), "the opened tree landed before its sizes");
@@ -290,7 +305,9 @@ fn a_scan_slower_than_200_ms_shows_the_progress_bar_until_it_lands(cx: &mut Test
     let (handle, view) = open_app(cx, Launch::Empty);
     let status = |cx: &mut TestAppContext| read(cx, &view, |state| state.status().clone());
 
-    state(cx, &view).update(cx, |state, cx| state.open_folder(dir.path().to_owned(), cx));
+    state(cx, &view).update(cx, |state, cx| {
+        state.add_folders(vec![dir.path().to_owned()], Vec::new(), cx);
+    });
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         assert!(window.try_find("scan-progress").is_none());
@@ -314,7 +331,7 @@ fn a_scan_slower_than_200_ms_shows_the_progress_bar_until_it_lands(cx: &mut Test
 
     cx.run_until_parked();
     assert_eq!(status(cx), ScanStatus::Idle);
-    assert_eq!(rows_now(cx, handle), ["a.txt"]);
+    assert_eq!(rows_now(cx, handle), under(dir.path(), &["a.txt"]));
     cx.update_window(handle, |_, window, _| {
         assert!(window.try_find("scan-progress").is_none());
     })
@@ -331,17 +348,19 @@ fn a_fast_scan_never_shows_the_progress_bar(cx: &mut TestAppContext) {
     let seen = Rc::clone(&slow_seen);
     let _watch = cx.update(|cx| {
         cx.observe(&state, move |state, cx| {
-            if *state.read(cx).status() == (ScanStatus::Scanning { slow: true }) {
+            if state.read(cx).status() == (ScanStatus::Scanning { slow: true }) {
                 seen.set(true);
             }
         })
     });
 
-    state.update(cx, |state, cx| state.open_folder(dir.path().to_owned(), cx));
+    state.update(cx, |state, cx| {
+        state.add_folders(vec![dir.path().to_owned()], Vec::new(), cx);
+    });
     cx.run_until_parked();
 
     assert!(!slow_seen.get());
-    assert_eq!(rows_now(cx, handle), ["a.txt"]);
+    assert_eq!(rows_now(cx, handle), under(dir.path(), &["a.txt"]));
 }
 
 /// A Size sort chosen before the sizes are read: when they land the rows
@@ -368,12 +387,17 @@ fn sizes_landing_under_a_size_sort_keep_the_focus_row_on_screen(cx: &mut TestApp
                 .is_some_and(|explorer| !explorer.tree().has_sizes());
             if fired.get() && landed {
                 fired.set(false);
+                // Focus on f00, the first row in the folder by name.
+                cx.update_window(handle, |_, window, cx| window.press("down", cx))
+                    .expect("press in the test window");
                 state.update(cx, |state, cx| state.sort_by(SortKey::Size, cx));
             }
         })
     });
 
-    state.update(cx, |state, cx| state.open_folder(dir.path().to_owned(), cx));
+    state.update(cx, |state, cx| {
+        state.add_folders(vec![dir.path().to_owned()], Vec::new(), cx);
+    });
     cx.run_until_parked();
 
     assert!(!armed.get(), "the tree landed before its sizes");

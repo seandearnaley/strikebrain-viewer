@@ -27,11 +27,11 @@ use gpui_kit::{
 
 use crate::explorer_panel::{ExplorerFocus, ExplorerPanel};
 use crate::keys::{
-    FocusExplorer, FocusFilter, Minimize, NextPane, OpenFolder, PreviousPane, Refresh,
+    AddFolder, FocusExplorer, FocusFilter, Minimize, NextPane, PreviousPane, Refresh,
     StartPresenting, ToggleShowIgnored, Zoom,
 };
 use crate::menus;
-use crate::persist::{FolderView, SavedFolder, SavedWindow, Snapshot, StateStore};
+use crate::persist::{SavedView, SavedWindow, Snapshot, StateStore};
 use crate::stage::{Stage, StageProbe};
 use crate::state::{AppState, Launch, StateOptions};
 use crate::theme;
@@ -50,19 +50,16 @@ pub const STAGE_MIN_WIDTH: f32 = 220.0;
 pub const SAVE_DELAY: Duration = Duration::from_millis(500);
 
 /// What a window brings back from a saved state, where it saves, and
-/// whether it follows its folder on disk. The default does none of these.
+/// whether it follows its folders on disk. The default does none of these.
 #[derive(Debug, Default)]
 pub struct Session {
-    /// The saved view of the folder being opened.
-    pub view: Option<FolderView>,
-    /// The saved folder, when this launch does not open it: saved as it
-    /// was until another folder opens.
-    pub kept: Option<SavedFolder>,
+    /// The saved view of the folders being opened.
+    pub view: Option<SavedView>,
     /// The explorer's saved width, in pixels.
     pub explorer_width: Option<f32>,
     /// Where to save. `None` saves nothing.
     pub store: Option<StateStore>,
-    /// Rescan when the folder changes on disk.
+    /// Rescan a folder when it changes on disk.
     pub watch: bool,
     /// The bounds the window opened with, as [`SavedWindow`] holds them:
     /// what a fullscreen window is saved with until it has been windowed.
@@ -89,9 +86,9 @@ enum Pane {
 }
 
 /// The root view: explorer on the left, stage on the right. Owns the
-/// [`AppState`] both observe, keeps the window title on the folder's name,
-/// handles ⌘O, ⌘F, moving between panes and the menu bar's commands,
-/// follows the presentation, and saves the state.
+/// [`AppState`] both observe, keeps the window title on the folder's name
+/// or the app's, handles ⌘O, ⌘F, moving between panes and the menu bar's
+/// commands, follows the presentation, and saves the state.
 pub struct AppView {
     state: Entity<AppState>,
     explorer: Entity<ExplorerPanel>,
@@ -132,14 +129,14 @@ impl std::fmt::Debug for AppView {
 
 impl AppView {
     /// Builds the window's content and starts what `launch` asks for. The
-    /// tree takes keyboard focus. Nothing is restored or saved, and the
-    /// folder is not followed on disk.
+    /// tree takes keyboard focus. Nothing is restored or saved, and no
+    /// folder is followed on disk.
     pub fn new(launch: Launch, window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self::with_session(launch, Session::default(), window, cx)
     }
 
     /// Builds the window's content as [`AppView::new`] does, restoring,
-    /// saving and following the folder as `session` says.
+    /// saving and following the folders as `session` says.
     pub fn with_session(
         launch: Launch,
         session: Session,
@@ -148,7 +145,6 @@ impl AppView {
     ) -> Self {
         let options = StateOptions {
             view: session.view,
-            kept: session.kept,
             watch: session.watch,
             quiet: session.store.as_ref().map_or_default(StateStore::own_files),
         };
@@ -225,7 +221,8 @@ impl AppView {
         self.stage.read(cx).probe(cx)
     }
 
-    /// The title this view gave the window: the open folder's name.
+    /// The title this view gave the window: the folder's name with one
+    /// folder open, the application's name otherwise.
     #[must_use]
     pub fn title(&self) -> Option<&SharedString> {
         self.title.as_ref()
@@ -245,20 +242,19 @@ impl AppView {
             .as_f32()
     }
 
-    /// Opens `folder` in place of the folder on screen: the system's
-    /// "Open With" and a folder dropped on the Dock icon.
-    pub fn open_folder(&mut self, folder: PathBuf, cx: &mut Context<Self>) {
-        self.state
-            .update(cx, |state, cx| state.open_folder(folder, cx));
+    /// Adds `folder` beside the folders on screen: the system's "Open
+    /// With" and a folder dropped on the Dock icon.
+    pub fn add_folder(&mut self, folder: PathBuf, cx: &mut Context<Self>) {
+        self.state.update(cx, |state, cx| {
+            state.add_folders(vec![folder], Vec::new(), cx);
+        });
     }
 
     fn sync_title(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let name = self.state.read(cx).folder_name();
-        if name.is_some() && name != self.title {
-            if let Some(name) = &name {
-                window.set_window_title(name);
-            }
-            self.title = name;
+        let title = self.state.read(cx).title();
+        if self.title.as_ref() != Some(&title) {
+            window.set_window_title(&title);
+            self.title = Some(title);
         }
     }
 
@@ -375,11 +371,8 @@ impl AppView {
     pub fn save(&mut self, cx: &mut Context<Self>) -> Option<Task<()>> {
         let store = self.store.clone()?;
         let top_row = self.explorer.read(cx).top_row(cx);
-        let (root, view) = self
-            .state
-            .update(cx, |state, _| state.take_snapshot(top_row));
+        let view = self.state.read(cx).take_snapshot(top_row);
         let snapshot = Snapshot {
-            root,
             view,
             explorer_width: Some(self.explorer_width(cx)),
             window: self.window.clone(),
@@ -394,9 +387,9 @@ impl AppView {
 
     // Actions
 
-    fn open_folder_picker(&mut self, _: &OpenFolder, _: &mut Window, cx: &mut Context<Self>) {
+    fn add_folder_picker(&mut self, _: &AddFolder, _: &mut Window, cx: &mut Context<Self>) {
         self.state
-            .update(cx, |_, cx| AppState::prompt_for_folder(cx));
+            .update(cx, |_, cx| AppState::prompt_for_folders(cx));
     }
 
     fn start_presenting(
@@ -511,11 +504,11 @@ impl Render for AppView {
             .on_action(|_: &Minimize, window, _| window.minimize_window())
             .on_action(|_: &Zoom, window, _| window.zoom_window());
         if self.presenting {
-            // No Open Folder while presenting, from a key or the menu bar,
+            // No Add Folder while presenting, from a key or the menu bar,
             // whose item then shows disabled.
             return root.child(self.stage.clone().cached(pane()));
         }
-        root.on_action(cx.listener(Self::open_folder_picker)).child(
+        root.on_action(cx.listener(Self::add_folder_picker)).child(
             h_resizable("panes")
                 .with_state(&self.split)
                 .child(

@@ -133,9 +133,10 @@ fn an_unreadable_folder_shows_a_warning_and_never_opens(cx: &mut TestAppContext)
     let Some(_lock) = Locked::new(&dir.path().join("locked")) else {
         return;
     };
-    let (handle, view) = open_app(cx, Launch::Folder(dir.path().to_owned()));
+    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
     let locked = node(cx, &view, "locked");
-    assert_eq!(rows_now(cx, handle), ["locked", "open.txt"]);
+    let rows = crate::under(dir.path(), &["locked", "open.txt"]);
+    assert_eq!(rows_now(cx, handle), rows);
 
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
@@ -148,11 +149,11 @@ fn an_unreadable_folder_shows_a_warning_and_never_opens(cx: &mut TestAppContext)
         window.within(row(locked)).click("chevron", cx);
     })
     .unwrap();
-    assert_eq!(rows_now(cx, handle), ["locked", "open.txt"]);
+    assert_eq!(rows_now(cx, handle), rows);
     assert_eq!(focus(cx, &view), Some(locked));
 
     press(cx, handle, "right");
-    assert_eq!(rows_now(cx, handle), ["locked", "open.txt"]);
+    assert_eq!(rows_now(cx, handle), rows);
     assert_eq!(focus(cx, &view), Some(locked));
 }
 
@@ -160,10 +161,11 @@ fn an_unreadable_folder_shows_a_warning_and_never_opens(cx: &mut TestAppContext)
 fn a_symlink_is_a_file_row_that_never_opens(cx: &mut TestAppContext) {
     let dir = folder(&[("real/inside.txt", "x")]);
     std::os::unix::fs::symlink(dir.path().join("real"), dir.path().join("link")).unwrap();
-    let (handle, view) = open_app(cx, Launch::Folder(dir.path().to_owned()));
+    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
     let link = node(cx, &view, "link");
     // Folders first; the link to a folder sorts with the files.
-    assert_eq!(rows_now(cx, handle), ["real", "link"]);
+    let rows = crate::under(dir.path(), &["real", "link"]);
+    assert_eq!(rows_now(cx, handle), rows);
 
     cx.update_window(handle, |_, window, cx| {
         let row_facts = window.find(row(link));
@@ -174,11 +176,11 @@ fn a_symlink_is_a_file_row_that_never_opens(cx: &mut TestAppContext) {
     .unwrap();
     // A press where a chevron would be is a press on the row: it shows the
     // link on the stage, as any file.
-    assert_eq!(rows_now(cx, handle), ["real", "link"]);
+    assert_eq!(rows_now(cx, handle), rows);
     assert_eq!(current(cx, &view), Some(link));
 
     press(cx, handle, "right");
-    assert_eq!(rows_now(cx, handle), ["real", "link"]);
+    assert_eq!(rows_now(cx, handle), rows);
     press(cx, handle, "space");
     assert_eq!(read(cx, &view, AppState::selected_count), 1);
 }

@@ -7,6 +7,7 @@
 mod checks;
 mod filter;
 mod flick;
+mod folders;
 mod header;
 mod keyboard;
 mod launch;
@@ -140,15 +141,59 @@ fn read<R>(cx: &mut TestAppContext, view: &Entity<AppView>, f: impl FnOnce(&AppS
     cx.update(|cx| f(view.read(cx).state().read(cx)))
 }
 
-/// The node at `path` in the tree on screen.
+/// The node at `path` in the tree on screen: from the root of a tree
+/// built in memory, or inside the first folder of a tree of folders, where
+/// `""` is that folder.
 fn node(cx: &mut TestAppContext, view: &Entity<AppView>, path: &str) -> NodeId {
     read(cx, view, |state| {
-        let explorer = state.explorer().expect("a tree is on screen");
-        explorer
-            .tree()
-            .find(path)
+        let tree = state.explorer().expect("a tree is on screen").tree();
+        let from = if tree.is_joined() {
+            tree.folders().next().expect("a folder is open")
+        } else {
+            NodeId::ROOT
+        };
+        tree.find_from(from, path)
             .expect("the path is in the fixture")
     })
+}
+
+/// The node at `path` on disk in the tree on screen.
+fn node_at(cx: &mut TestAppContext, view: &Entity<AppView>, path: &Path) -> NodeId {
+    read(cx, view, |state| {
+        let tree = state.explorer().expect("a tree is on screen").tree();
+        tree.find_abs(&std::fs::canonicalize(path).expect("the path exists"))
+            .expect("the path is on screen")
+    })
+}
+
+/// The checked files, each by its path inside its folder.
+fn checked(cx: &mut TestAppContext, view: &Entity<AppView>) -> Vec<String> {
+    read(cx, view, |state| {
+        let explorer = state.explorer().expect("a tree is on screen");
+        let tree = explorer.tree();
+        explorer
+            .selection()
+            .iter()
+            .map(|id| tree.path_from(tree.folder_of(id).expect("a file is in a folder"), id))
+            .collect()
+    })
+}
+
+/// A folder's name: what its row and the window title show.
+fn name_of(folder: &Path) -> String {
+    folder
+        .file_name()
+        .expect("a folder has a name")
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// `rows` under the row of `folder`, as a tree of that one folder shows
+/// them.
+fn under(folder: &Path, rows: &[&str]) -> Vec<String> {
+    std::iter::once(name_of(folder))
+        .chain(rows.iter().map(|&row| row.to_owned()))
+        .collect()
 }
 
 fn row(id: NodeId) -> ElementId {

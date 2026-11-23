@@ -1,62 +1,119 @@
 //! Bringing a saved view back, and taking the view out for saving.
 //!
-//! A saved view applies in two steps. Its filter and Show ignored apply
-//! before the folder is scanned, so the first tree on screen is already
-//! filtered and listed by the saved rules. The rest applies once that
-//! scan lands: the sort, the open folders, the checks, the file on the
-//! stage, and the row at the top of the tree's scroll. Under a Size sort
-//! the rows reorder once sizes are read, so the top row waits for them.
+//! A saved view applies in steps. Its filter and Show ignored apply before
+//! any folder is scanned, so the first trees on screen are already filtered
+//! and listed by the saved rules. The sort applies to the first tree. Each
+//! folder's open folders and checks apply when that folder's first scan
+//! lands. The file on the stage and the row at the top of the tree's scroll
+//! apply once every folder is on screen; under a Size sort the rows reorder
+//! once sizes are read, so the top row waits for them.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use explorer::SortKey;
+use explorer::{Explorer, SavedFolder, Sort, SortKey};
 use gpui_kit::Context;
 
 use super::{AppState, StateEvent};
-use crate::persist::{FolderView, SnapshotView};
+use crate::persist::{FolderSnapshot, SavedView, SnapshotView};
+
+/// The parts of a saved view that wait for the folders to land.
+#[derive(Clone, Debug)]
+pub(super) struct Pending {
+    sort: Sort,
+    current: Option<PathBuf>,
+    top_row: Option<PathBuf>,
+}
 
 impl AppState {
-    /// The filter and the rules of `view`: they apply from the first scan.
-    pub(super) fn take_filter(&mut self, view: &FolderView) {
-        self.query.clone_from(&view.query);
+    /// Takes the filter and the rules of `view`, which apply from the first
+    /// scan, and keeps what waits for the folders. Returns each folder's
+    /// part, to wait for its folder.
+    pub(super) fn take_view(&mut self, view: SavedView) -> Vec<SavedFolder> {
+        self.query = view.query;
         self.kind = view.kind;
         self.show_ignored = view.show_ignored;
+        self.restore = Some(Pending {
+            sort: view.sort,
+            current: view.current,
+            top_row: view.top_row,
+        });
+        view.folders
     }
 
-    /// Applies the view waiting to be restored to the tree just put on
-    /// screen. Paths that no longer exist are skipped; a file on the stage
-    /// that is gone gives way to the first checked file.
-    pub(super) fn restore_view(&mut self, cx: &mut Context<Self>) {
-        let Some(view) = self.restore.take() else {
-            return;
-        };
+    /// The explorer the first tree joins: with the sort a saved view waits
+    /// with, and the filter asked for.
+    pub(super) fn new_explorer(&self) -> Explorer {
+        let mut explorer = Explorer::empty();
+        if let Some(pending) = &self.restore {
+            explorer.set_sort(pending.sort);
+        }
+        if self.filter_asked() {
+            explorer.set_filter(&self.query, self.kind);
+        }
+        explorer
+    }
+
+    /// One folder's saved part, onto the tree on screen.
+    pub(super) fn restore_folder(&mut self, saved: &SavedFolder) {
+        if let Some(explorer) = self.explorer.as_mut() {
+            explorer.restore_folder(saved);
+        }
+        self.selection_changed();
+    }
+
+    /// After a folder landed or left: once every folder is on screen, what
+    /// a saved view waits with applies, and a top row waiting for sizes
+    /// shows once they are in. Either way the views hear that the rows
+    /// were rebuilt.
+    pub(super) fn landed(&mut self, cx: &mut Context<Self>) {
+        if self.folders.iter().any(|folder| !folder.shown) {
+            return self.rows_replaced(cx);
+        }
+        if let Some(pending) = self.restore.take() {
+            return self.finish_restore(pending, cx);
+        }
+        let sized = self
+            .explorer
+            .as_ref()
+            .is_some_and(|explorer| explorer.tree().has_sizes());
+        match self.restore_top.take_if(|_| sized) {
+            Some(top) => self.show_saved_top(Some(&top), cx),
+            None => self.rows_replaced(cx),
+        }
+    }
+
+    /// Applies the sort, the file on the stage and the top row of a saved
+    /// view once every folder is on screen. A file on the stage that is
+    /// gone gives way to the first checked file.
+    fn finish_restore(&mut self, pending: Pending, cx: &mut Context<Self>) {
         let Some(explorer) = self.explorer.as_mut() else {
-            return;
+            return self.rows_replaced(cx);
         };
-        explorer.set_sort(view.sort);
-        explorer.restore_open(&view.expanded);
-        explorer.restore_saved_selection(&view.selected);
+        explorer.set_sort(pending.sort);
         let tree = explorer.tree();
-        self.current = view
+        let current = pending
             .current
             .as_deref()
-            .and_then(|path| tree.find(path))
+            .and_then(|path| tree.find_abs(path))
             .filter(|&id| tree.is_file(id));
-        let waits_for_sizes = view.sort.key == SortKey::Size && !tree.has_sizes();
+        let waits_for_sizes = pending.sort.key == SortKey::Size && !tree.has_sizes();
+        if current.is_some() {
+            self.current = current;
+        }
         self.selection_changed();
         if waits_for_sizes {
-            self.restore_top = view.top_row;
+            self.restore_top = pending.top_row;
             self.rows_replaced(cx);
         } else {
-            self.show_saved_top(view.top_row.as_deref(), cx);
+            self.show_saved_top(pending.top_row.as_deref(), cx);
         }
     }
 
     /// Scrolls the saved top row to the top of the tree, with keyboard
     /// focus on it, and tells the views the rows were rebuilt.
-    pub(super) fn show_saved_top(&mut self, top: Option<&str>, cx: &mut Context<Self>) {
+    pub(super) fn show_saved_top(&mut self, top: Option<&Path>, cx: &mut Context<Self>) {
         let found = self.explorer.as_ref().and_then(|explorer| {
-            let id = explorer.tree().find(top?)?;
+            let id = explorer.tree().find_abs(top?)?;
             Some((id, explorer.row_of(id)?))
         });
         if let Some((id, row)) = found {
@@ -68,66 +125,61 @@ impl AppState {
         }
     }
 
-    /// The folder to save: the scanned folder; with no tree on screen, the
-    /// one asked for while its saved view waits for it, else the one kept
-    /// (see `kept`), else the one asked for. `None` for a tree built in
-    /// memory.
-    pub(super) fn saved_root(&self) -> Option<PathBuf> {
-        if let Some(explorer) = &self.explorer {
-            let root = explorer.tree().root_path();
-            return (!root.as_os_str().is_empty()).then(|| root.to_path_buf());
-        }
-        match &self.kept {
-            Some((root, _)) if self.restore.is_none() => Some(root.clone()),
-            _ => self.root.clone(),
-        }
-    }
-
-    /// The folder and its view to save, given the row at the top of the
-    /// tree's scroll. Remembers that row, for a view kept once the tree
-    /// is gone (see `keep_view`).
-    pub(crate) fn take_snapshot(
-        &mut self,
-        top_row: Option<usize>,
-    ) -> (Option<PathBuf>, Option<SnapshotView>) {
-        let top = self.restore_top.clone().or_else(|| {
-            let explorer = self.explorer.as_ref()?;
-            let id = *explorer.rows().get(top_row?)?;
-            Some(explorer.tree().path(id))
-        });
-        if self.explorer.is_some() {
-            self.saved_top.clone_from(&top);
-        }
-        (self.saved_root(), self.saved_view(top))
-    }
-
-    /// The view to save, given the path of the row at the top of the
-    /// tree's scroll: the tree on screen; else the saved view still
-    /// waiting for its scan, with the filter and the rules as they are
-    /// now; else the view kept. Cheap: the open folders and the checks are
-    /// copied as bit sets and named later, off the UI thread.
-    pub(super) fn saved_view(&self, top_row: Option<String>) -> Option<SnapshotView> {
-        let Some(explorer) = &self.explorer else {
-            if let Some(waiting) = &self.restore {
-                return Some(SnapshotView::Waiting(FolderView {
-                    show_ignored: self.show_ignored,
-                    query: self.query.clone(),
-                    kind: self.kind,
-                    ..waiting.clone()
-                }));
-            }
-            return self.kept.as_ref().map(|(_, view)| view.clone());
+    /// The view to save, given the row at the top of the tree's scroll.
+    /// Cheap: the open folders and the checks of the tree on screen are
+    /// copied as bit sets and named later, off the UI thread. A folder not
+    /// on screen as it was seen saves the view waiting for it; one still
+    /// scanning for the first time saves as open, as it will show. A tree
+    /// built in memory has no folder to save.
+    pub(crate) fn take_snapshot(&self, top_row: Option<usize>) -> SnapshotView {
+        let explorer = self.explorer.as_ref();
+        let on_disk = |path: PathBuf| path.is_absolute().then_some(path);
+        let pending = self.restore.as_ref();
+        let top_row = self
+            .restore_top
+            .clone()
+            .or_else(|| pending.and_then(|pending| pending.top_row.clone()))
+            .or_else(|| {
+                let explorer = explorer?;
+                let id = *explorer.rows().get(top_row?)?;
+                on_disk(explorer.tree().abs_path(id))
+            });
+        let current = match (explorer, self.current) {
+            (Some(explorer), Some(id)) => on_disk(explorer.tree().abs_path(id)),
+            _ => pending.and_then(|pending| pending.current.clone()),
         };
-        let tree = explorer.tree();
-        let rest = FolderView {
-            show_ignored: self.show_ignored,
-            current: self.current.map(|id| tree.path(id)),
-            query: self.query.clone(),
-            kind: self.kind,
-            sort: explorer.sort(),
-            top_row,
-            ..FolderView::default()
-        };
-        Some(SnapshotView::Live(explorer.snapshot(), rest))
+        let sort = explorer
+            .map(Explorer::sort)
+            .or(pending.map(|pending| pending.sort))
+            .unwrap_or_default();
+        let folders: Vec<FolderSnapshot> = self
+            .folders
+            .iter()
+            .map(|folder| match (&folder.waiting, folder.shown) {
+                (Some(waiting), _) => FolderSnapshot::Waiting(waiting.clone()),
+                (None, true) => FolderSnapshot::Live(folder.path.clone()),
+                (None, false) => FolderSnapshot::Waiting(SavedFolder {
+                    path: folder.path.clone(),
+                    open: vec![String::new()],
+                    ..SavedFolder::default()
+                }),
+            })
+            .collect();
+        let live = folders
+            .iter()
+            .any(|folder| matches!(folder, FolderSnapshot::Live(_)));
+        SnapshotView {
+            live: explorer.filter(|_| live).map(Explorer::snapshot),
+            folders,
+            rest: SavedView {
+                folders: Vec::new(),
+                show_ignored: self.show_ignored,
+                current,
+                query: self.query.clone(),
+                kind: self.kind,
+                sort,
+                top_row,
+            },
+        }
     }
 }

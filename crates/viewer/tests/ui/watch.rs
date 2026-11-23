@@ -19,12 +19,20 @@ use crate::{folder, node, read, row, write};
 
 /// Opens the app over `dir`, following it on disk, in a 1000 x 700 window.
 fn open_watching(cx: &mut TestAppContext, dir: &Path) -> (AnyWindowHandle, Entity<AppView>) {
+    open_watching_all(cx, &[dir])
+}
+
+/// Opens the app over `dirs`, following each on disk.
+fn open_watching_all(
+    cx: &mut TestAppContext,
+    dirs: &[&Path],
+) -> (AnyWindowHandle, Entity<AppView>) {
     cx.executor().allow_parking();
     cx.update(|cx| {
         gpui_kit::init(cx);
         viewer::init(cx);
     });
-    let launch = Launch::Folder(dir.to_owned());
+    let launch = Launch::Folders(dirs.iter().map(|dir| dir.to_path_buf()).collect());
     let opened = cx.update(|cx| {
         gpui_kit::open_window(
             WindowOptions {
@@ -79,11 +87,16 @@ async fn pause(cx: &mut TestAppContext, duration: Duration) {
     }
 }
 
-/// The tree's paths, every node below the root.
+/// The tree's paths, every node below each folder, inside its folder.
 fn paths(cx: &mut TestAppContext, view: &Entity<AppView>) -> Vec<String> {
     read(cx, view, |state| {
         let tree = state.explorer().expect("a tree is on screen").tree();
-        tree.ids().skip(1).map(|id| tree.path(id)).collect()
+        tree.ids()
+            .filter_map(|id| {
+                let folder = tree.folder_of(id).filter(|&folder| folder != id)?;
+                Some(tree.path_from(folder, id))
+            })
+            .collect()
     })
 }
 
@@ -94,7 +107,8 @@ fn has(cx: &mut TestAppContext, view: &Entity<AppView>, path: &str) -> bool {
 fn current(cx: &mut TestAppContext, view: &Entity<AppView>) -> Option<String> {
     read(cx, view, |state| {
         let tree = state.explorer()?.tree();
-        Some(tree.path(state.current()?))
+        let current = state.current()?;
+        Some(tree.path_from(tree.folder_of(current)?, current))
     })
 }
 
@@ -112,7 +126,7 @@ fn code(cx: &mut TestAppContext, handle: AnyWindowHandle) -> Option<String> {
 /// Waits until no scan runs and a quiet spell shows nothing more coming.
 async fn settled(cx: &mut TestAppContext, view: &Entity<AppView>) -> u64 {
     until(cx, "the scans settle", |cx| {
-        read(cx, view, |state| *state.status() == ScanStatus::Idle)
+        read(cx, view, |state| state.status() == ScanStatus::Idle)
     })
     .await;
     loop {
@@ -181,13 +195,21 @@ async fn files_created_deleted_renamed_and_changed_on_disk_show(cx: &mut TestApp
     // Checks carried across every rescan by path; with every file checked,
     // the files that appeared are checked too.
     assert_eq!(
-        read(cx, &view, |state| state
-            .explorer()
-            .unwrap()
-            .selected_paths()
-            .collect::<Vec<_>>()),
+        crate::checked(cx, &view),
         ["sub/moved.txt", "c.txt", "new.txt"]
     );
+}
+
+#[gpui_kit::test]
+async fn a_change_rescans_only_the_folder_it_is_in(cx: &mut TestAppContext) {
+    let (one, two) = (folder(&[("a.txt", "a")]), folder(&[("b.txt", "b")]));
+    let (_, view) = open_watching_all(cx, &[one.path(), two.path()]);
+    let scans = settled(cx, &view).await;
+    assert_eq!(scans, 2, "one scan per folder");
+
+    write(two.path(), "new.txt", "n");
+    until(cx, "the new file shows", |cx| has(cx, &view, "new.txt")).await;
+    assert_eq!(settled(cx, &view).await, scans + 1, "one folder rescanned");
 }
 
 #[gpui_kit::test]
@@ -267,7 +289,7 @@ async fn rapid_changes_while_clicking_rows_never_panic(cx: &mut TestAppContext) 
         }
         until(cx, "the rescan lands", |cx| {
             read(cx, &view, |state| {
-                state.scans() > scans && *state.status() == ScanStatus::Idle
+                state.scans() > scans && state.status() == ScanStatus::Idle
             })
         })
         .await;
@@ -324,7 +346,7 @@ fn a_watcher_that_cannot_start_shows_on_the_refresh_button(cx: &mut TestAppConte
 fn changes_during_a_scan_rescan_exactly_once_after_it(cx: &mut TestAppContext) {
     // No watcher: the changes are reported by hand, deterministically.
     let dir = folder(&[("a.txt", "a")]);
-    let (_, view) = crate::open_app(cx, Launch::Folder(dir.path().to_owned()));
+    let (_, view) = crate::open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
     let state = crate::state(cx, &view);
     let scans = read(cx, &view, AppState::scans);
 
