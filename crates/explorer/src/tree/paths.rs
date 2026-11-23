@@ -1,15 +1,20 @@
 //! [`Tree::from_paths`]: a tree from path strings, for tests and fixtures.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::Path;
 
 use super::{Kind, RawTree, Tree, TreeError};
 
 /// Builds a tree from `(path, size)` pairs. A trailing `/` marks a folder.
+/// The root is the folder at `root`, named after its last part.
 pub(super) fn build<'a>(
+    root: &Path,
     paths: impl IntoIterator<Item = (&'a str, u64)>,
 ) -> Result<Tree, TreeError> {
-    let mut raw = RawTree::new("", true)?;
+    let root_name = root
+        .file_name()
+        .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+    let mut raw = RawTree::new(&root_name, true)?;
     // Every node so far by its path without the trailing slash; "" is the root.
     let mut nodes: HashMap<&'a str, u32> = HashMap::from([("", 0)]);
     for (path, size) in paths {
@@ -36,7 +41,7 @@ pub(super) fn build<'a>(
         raw.set_size(node, size);
         nodes.insert(body, node);
     }
-    raw.build(PathBuf::new())
+    raw.build(root.to_path_buf())
 }
 
 /// The raw index of the folder at `path`, creating it and any missing

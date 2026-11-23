@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use proptest::prelude::*;
 
@@ -95,7 +95,7 @@ fn folder_sizes_sum_their_files() {
     assert_eq!(tree.size(id(&tree, "a")), Some(7));
     assert_eq!(tree.size(NodeId::ROOT), Some(17));
     // Sizes are set once; a second set changes nothing.
-    assert!(!tree.set_sizes(vec![1; tree.node_count()]));
+    assert!(!tree.set_sizes(&vec![1; tree.node_count()]));
     assert_eq!(tree.size(NodeId::ROOT), Some(17));
 }
 
@@ -388,5 +388,190 @@ proptest! {
                 prop_assert_eq!(tree.size(node), set.get(&tree.path(node)).copied());
             }
         }
+    }
+}
+
+/// A tree from `paths` as if scanned from the folder at `root`.
+pub(crate) fn folder_at(root: &str, paths: &[(&str, u64)]) -> Tree {
+    Tree::from_paths_at(Path::new(root), paths).unwrap()
+}
+
+#[test]
+fn a_join_lays_its_folders_out_in_order_under_a_root_of_its_own() {
+    let b = folder_at("/work/b", &[("z.txt", 1), ("src/x.rs", 2)]);
+    let a = folder_at("/work/a", &[("readme.md", 4)]);
+    let tree = Tree::join(&[(&b, NodeId::ROOT), (&a, NodeId::ROOT)]).unwrap();
+    // The folders keep the order they were given in, not name order.
+    assert_eq!(
+        paths(&tree),
+        [
+            "",
+            "b",
+            "b/src",
+            "b/src/x.rs",
+            "b/z.txt",
+            "a",
+            "a/readme.md"
+        ]
+    );
+    assert!(tree.is_joined());
+    assert!(!a.is_joined());
+    assert_eq!(tree.name(NodeId::ROOT), "");
+    assert!(tree.root_path().as_os_str().is_empty());
+    let (top_b, top_a) = (id(&tree, "b"), id(&tree, "a"));
+    assert_eq!(tree.folders().collect::<Vec<_>>(), [top_b, top_a]);
+    assert_eq!(tree.children(NodeId::ROOT), [top_b, top_a]);
+    assert_eq!(tree.subtree(top_b), 1..5);
+    assert_eq!(tree.subtree(NodeId::ROOT), 0..7);
+    assert_eq!(tree.depth(top_b), 1);
+    assert_eq!(tree.depth(id(&tree, "b/src/x.rs")), 3);
+    assert_eq!(
+        tree.parent(id(&tree, "b/src/x.rs")),
+        Some(id(&tree, "b/src"))
+    );
+    assert_eq!(tree.parent(top_a), Some(NodeId::ROOT));
+    assert_eq!(tree.folder_of(id(&tree, "b/z.txt")), Some(top_b));
+    assert_eq!(tree.folder_of(NodeId::ROOT), None);
+    assert_eq!(
+        tree.files().ones().collect::<Vec<_>>(),
+        [3, 4, 6],
+        "files keep their bits"
+    );
+    assert_eq!(tree.file_count(tree.subtree(top_b)), 2);
+    assert_eq!(tree.extension(id(&tree, "a/readme.md")), "md");
+    assert_eq!(tree.lower_name(id(&tree, "a/readme.md")), "readme.md");
+}
+
+#[test]
+fn a_joined_node_knows_its_place_on_disk() {
+    let b = folder_at("/work/b", &[("src/x.rs", 2)]);
+    let a = folder_at("/work/a", &[("readme.md", 4)]);
+    let tree = Tree::join(&[(&b, NodeId::ROOT), (&a, NodeId::ROOT)]).unwrap();
+    let x = id(&tree, "b/src/x.rs");
+    assert_eq!(tree.abs_path(x), PathBuf::from("/work/b/src/x.rs"));
+    assert_eq!(tree.abs_path(id(&tree, "a")), PathBuf::from("/work/a"));
+    assert_eq!(tree.abs_path(NodeId::ROOT), PathBuf::new());
+    assert_eq!(tree.find_abs(Path::new("/work/b/src/x.rs")), Some(x));
+    assert_eq!(tree.find_abs(Path::new("/work/a")), Some(id(&tree, "a")));
+    assert_eq!(tree.find_abs(Path::new("/work/a/missing")), None);
+    assert_eq!(tree.find_abs(Path::new("/work/c")), None);
+    assert_eq!(tree.find_abs(Path::new("/work/b/../a")), None);
+    let top_b = id(&tree, "b");
+    assert_eq!(tree.path_from(top_b, x), "src/x.rs");
+    assert_eq!(tree.path_from(top_b, top_b), "");
+    assert_eq!(tree.find_from(top_b, "src/x.rs"), Some(x));
+    assert_eq!(tree.find_from(top_b, ""), Some(top_b));
+}
+
+#[test]
+fn a_part_inside_a_folder_takes_its_path_and_a_copy_of_its_sizes() {
+    let scan = folder_at(
+        "/work/p",
+        &[("inner/a.txt", 3), ("inner/b.txt", 4), ("c.txt", 5)],
+    );
+    let inner = id(&scan, "inner");
+    let tree = Tree::join(&[(&scan, inner)]).unwrap();
+    let top = id(&tree, "inner");
+    assert_eq!(tree.abs_path(top), PathBuf::from("/work/p/inner"));
+    assert_eq!(tree.size(top), Some(7));
+    assert_eq!(tree.size(NodeId::ROOT), Some(7));
+    // From a tree of paths, a part's path stays relative.
+    let memory = Tree::from_paths(&["docs/a.md"]).unwrap();
+    let tree = Tree::join(&[(&memory, id(&memory, "docs"))]).unwrap();
+    assert_eq!(
+        tree.abs_path(id(&tree, "docs/a.md")),
+        PathBuf::from("docs/a.md")
+    );
+}
+
+#[test]
+fn a_joined_folder_shares_its_sizes_with_its_scan() {
+    let mut raw = super::RawTree::new("late", false).unwrap();
+    let file = raw.push(0, "f.txt", Kind::File).unwrap();
+    raw.set_size(file, 9);
+    let scanned = raw.build(PathBuf::from("/work/late")).unwrap();
+    let known = folder_at("/work/known", &[("k.txt", 2)]);
+    let tree = Tree::join(&[(&known, NodeId::ROOT), (&scanned, NodeId::ROOT)]).unwrap();
+    assert!(!tree.has_sizes());
+    assert_eq!(tree.sized_folders(), 1);
+    assert_eq!(tree.size(id(&tree, "known/k.txt")), Some(2));
+    assert_eq!(tree.size(id(&tree, "late/f.txt")), None);
+    assert_eq!(tree.size(NodeId::ROOT), None);
+    assert_eq!(tree.size_list(), [0, 2, 2, 0, 0]);
+    // Sizes read into the scan land in the joined tree too.
+    assert!(scanned.set_sizes(&[0, 9]));
+    assert!(tree.has_sizes());
+    assert_eq!(tree.size(id(&tree, "late")), Some(9));
+    assert_eq!(tree.size(NodeId::ROOT), Some(11));
+    assert!(!tree.set_sizes(&vec![1; tree.node_count()]));
+}
+
+#[test]
+fn an_empty_join_is_a_root_alone() {
+    let tree = Tree::join(&[]).unwrap();
+    assert_eq!(tree.node_count(), 1);
+    assert!(tree.is_joined());
+    assert_eq!(tree.folders().len(), 0);
+    assert!(tree.has_sizes());
+    assert_eq!(tree.size(NodeId::ROOT), Some(0));
+    assert_eq!(tree.children(NodeId::ROOT), NO_NODES);
+}
+
+#[test]
+fn an_unreadable_folder_is_one_node_at_its_path() {
+    let tree = Tree::unreadable(Path::new("/work/locked"));
+    assert_eq!(tree.node_count(), 1);
+    assert_eq!(tree.kind(NodeId::ROOT), Kind::Unreadable);
+    assert_eq!(tree.name(NodeId::ROOT), "locked");
+    assert_eq!(tree.root_path(), Path::new("/work/locked"));
+    assert_eq!(tree.size(NodeId::ROOT), Some(0));
+    let joined = Tree::join(&[(&tree, NodeId::ROOT)]).unwrap();
+    assert_eq!(joined.kind(NodeId::new(1)), Kind::Unreadable);
+    assert_eq!(joined.subtree(NodeId::new(1)), 1..2);
+}
+
+#[test]
+fn a_join_past_the_depth_limit_fails() {
+    let mut raw = super::RawTree::new("deep", false).unwrap();
+    let mut parent = 0;
+    for _ in 0..u16::MAX {
+        parent = raw.push(parent, "d", Kind::Dir).unwrap();
+    }
+    let tree = raw.build(PathBuf::from("/deep")).unwrap();
+    assert_eq!(
+        Tree::join(&[(&tree, NodeId::ROOT)]).unwrap_err(),
+        TreeError::TooDeep
+    );
+}
+
+proptest! {
+    #[test]
+    fn a_join_matches_one_tree_of_the_same_paths(a in path_sets(), b in path_sets()) {
+        // Folders named in canonical order, joined in that order: the same
+        // tree as building every path at once under them.
+        let first = folder_at("/r/a", &a.iter().map(|(p, &s)| (p.as_str(), s)).collect::<Vec<_>>());
+        let second = folder_at("/r/b", &b.iter().map(|(p, &s)| (p.as_str(), s)).collect::<Vec<_>>());
+        let joined = Tree::join(&[(&first, NodeId::ROOT), (&second, NodeId::ROOT)]).unwrap();
+        let mut all: Vec<(String, u64)> = vec![("a/".into(), 0), ("b/".into(), 0)];
+        all.extend(a.iter().map(|(p, &s)| (format!("a/{p}"), s)));
+        all.extend(b.iter().map(|(p, &s)| (format!("b/{p}"), s)));
+        let list: Vec<(&str, u64)> = all.iter().map(|(p, s)| (p.as_str(), *s)).collect();
+        let whole = Tree::from_paths_with_sizes(&list).unwrap();
+        prop_assert_eq!(joined.node_count(), whole.node_count());
+        for node in whole.ids() {
+            prop_assert_eq!(joined.path(node), whole.path(node));
+            prop_assert_eq!(joined.parent(node), whole.parent(node));
+            prop_assert_eq!(joined.subtree(node), whole.subtree(node));
+            prop_assert_eq!(joined.depth(node), whole.depth(node));
+            prop_assert_eq!(joined.kind(node), whole.kind(node));
+            prop_assert_eq!(joined.extension(node), whole.extension(node));
+            prop_assert_eq!(joined.size(node), whole.size(node));
+            prop_assert_eq!(joined.children(node), whole.children(node));
+            prop_assert_eq!(
+                joined.extensions()[usize::from(joined.ext_id(node))].as_ref(),
+                whole.extensions()[usize::from(whole.ext_id(node))].as_ref()
+            );
+        }
+        prop_assert_eq!(joined.files(), whole.files());
     }
 }

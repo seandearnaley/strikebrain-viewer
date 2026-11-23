@@ -748,7 +748,7 @@ fn a_size_sort_is_redone_when_sizes_arrive() {
         direction: Direction::Descending,
     });
     assert_eq!(rows(&explorer), ["a", "b"]);
-    tree.set_sizes(vec![0, 1, 2]);
+    tree.set_sizes(&[0, 1, 2]);
     explorer.sizes_loaded();
     assert_eq!(rows(&explorer), ["b", "a"]);
     explorer.set_sort(Sort::default());
@@ -775,7 +775,7 @@ fn a_size_sort_catches_up_on_the_next_change_without_being_told() {
     });
     assert_eq!(rows(&explorer), ["dir", "a", "b"]);
     // Ids: root 0, dir 1, inner 2, a 3, b 4.
-    tree.set_sizes(vec![0, 0, 1, 2, 3]);
+    tree.set_sizes(&[0, 0, 1, 2, 3]);
     // The app forgot `sizes_loaded`; any change to the view catches up.
     explorer.toggle_folder(id(&explorer, "dir"));
     assert_eq!(rows(&explorer), ["dir", "dir/inner", "b", "a"]);
@@ -840,4 +840,5 @@ fn next_and_previous_work_from_any_node() {
     assert_eq!(explorer.gallery_next(NodeId::ROOT), Some(c));
 }
 
+mod folders;
 mod props;

@@ -26,11 +26,12 @@ const CANCEL_EVERY: usize = 256;
 /// The most threads worth starting; see the module notes.
 const MAX_SIZE_THREADS: usize = 5;
 
-/// Measures every file of a scanned tree and stores the sizes in it, so
-/// [`Tree::size`] answers from then on. Call it off the UI thread, after
-/// [`super::scan`]. Each call measures every file again unless the tree
-/// already has sizes, such as one from [`Tree::from_paths_with_sizes`]; then
-/// it returns at once.
+/// Measures every file of each folder of the tree that has no sizes yet
+/// and stores the sizes in it, so [`Tree::size`] answers from then on. Call
+/// it off the UI thread, after [`super::scan`]. A folder that already has
+/// sizes, such as one from [`Tree::from_paths_with_sizes`] or one read
+/// before through another tree that holds it, is not measured again; with
+/// every folder sized it returns at once.
 ///
 /// A file's size is its `lstat` size: a symlink counts as the link itself.
 /// A file that cannot be measured, for example because it was deleted
@@ -40,13 +41,16 @@ const MAX_SIZE_THREADS: usize = 5;
 ///
 /// [`ScanError::Cancelled`] if `cancel` was set; the tree then has no sizes.
 pub fn read_sizes(tree: &Tree, cancel: &AtomicBool) -> Result<(), ScanError> {
-    if tree.has_sizes() {
+    let unmeasured = tree.unsized_ranges();
+    if unmeasured.is_empty() {
         return Ok(());
     }
     // Folders with at least one file. Files come after folders among a
     // folder's children, so the last child tells.
-    let folders: Vec<NodeId> = tree
-        .ids()
+    let folders: Vec<NodeId> = unmeasured
+        .into_iter()
+        .flatten()
+        .map(NodeId::from_index)
         .filter(|&id| {
             tree.children(id)
                 .last()
@@ -76,7 +80,8 @@ pub fn read_sizes(tree: &Tree, cancel: &AtomicBool) -> Result<(), ScanError> {
     if cancel.load(Ordering::Relaxed) {
         return Err(ScanError::Cancelled);
     }
-    tree.set_sizes(sizes.into_iter().map(AtomicU64::into_inner).collect());
+    let sizes: Vec<u64> = sizes.into_iter().map(AtomicU64::into_inner).collect();
+    tree.set_sizes(&sizes);
     Ok(())
 }
 
@@ -152,6 +157,21 @@ mod tests {
         let err = read_sizes(&tree, &AtomicBool::new(true)).unwrap_err();
         assert!(matches!(err, ScanError::Cancelled), "{err:?}");
         assert!(!tree.has_sizes());
+    }
+
+    #[test]
+    fn only_folders_without_sizes_are_measured() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("new.txt"), "12345").unwrap();
+        let scanned = scan(dir.path(), ScanOptions::default(), &AtomicBool::new(false)).unwrap();
+        let known = Tree::from_paths_at(std::path::Path::new("/nowhere"), &[("a", 7)]).unwrap();
+        let joined = Tree::join(&[(&known, NodeId::ROOT), (&scanned, NodeId::ROOT)]).unwrap();
+        assert!(!joined.has_sizes());
+        assert_eq!(joined.size(NodeId::ROOT), None);
+        read_sizes(&joined, &AtomicBool::new(false)).unwrap();
+        assert_eq!(joined.size(NodeId::ROOT), Some(12));
+        // The scan shares the sizes read through the joined tree.
+        assert_eq!(scanned.size(NodeId::ROOT), Some(5));
     }
 
     #[test]

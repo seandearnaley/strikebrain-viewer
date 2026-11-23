@@ -5,12 +5,17 @@
 //! in natural, case-insensitive order ([`compare_names`]). So a folder's
 //! subtree is one contiguous id range, and a folder's state over its subtree
 //! is a ranged bit count rather than a walk.
+//!
+//! A scan makes a tree of one folder, its root. A joined tree (`Tree::join`)
+//! holds several scanned folders under a root of its own:
+//! each is a top-level folder, in the order given, laid out one after
+//! another, so ids stay pre-order and every subtree stays one range.
 
 use std::cmp::Ordering;
 use std::fmt;
 use std::ops::Range;
-use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, OnceLock};
+use std::path::{Component, Path, PathBuf};
+use std::sync::{Arc, LazyLock, OnceLock};
 
 use fixedbitset::FixedBitSet;
 use icu_collator::options::{CollatorOptions, Strength};
@@ -21,6 +26,7 @@ use crate::NodeId;
 use crate::bits::Ranks;
 
 mod build;
+mod join;
 mod names;
 mod paths;
 #[cfg(test)]
@@ -111,8 +117,9 @@ impl std::error::Error for TreeError {}
 /// cloneable::<explorer::Tree>();
 /// ```
 pub struct Tree {
-    /// Absolute path of the root folder; empty for [`Tree::from_paths`].
-    root_path: PathBuf,
+    /// The scanned folders the tree holds, in id order: the root alone for
+    /// a scan or a tree from paths, each top-level folder for a joined tree.
+    folders: Box<[Folder]>,
     names: NameArena,
     /// Lowercased names, each followed by `'\0'`, for the filter.
     haystack: NameArena,
@@ -122,10 +129,6 @@ pub struct Tree {
     end: Vec<u32>,
     depth: Vec<u16>,
     kind: Vec<Kind>,
-    /// A file's bytes; a folder's is the sum over the files in its subtree.
-    /// Set once: at build for [`Tree::from_paths_with_sizes`], or later by
-    /// [`crate::read_sizes`] for a scanned tree.
-    sizes: OnceLock<Box<[u64]>>,
     /// Index into `extensions`; 0 is "no extension".
     ext: Vec<u16>,
     extensions: Vec<Box<str>>,
@@ -139,10 +142,27 @@ pub struct Tree {
     child_ids: Vec<NodeId>,
 }
 
+/// One scanned folder inside a [`Tree`]: its top node, where it is on disk,
+/// and its sizes once they are read.
+#[derive(Clone, Debug)]
+struct Folder {
+    /// The folder's node; the folder is this node's subtree.
+    top: NodeId,
+    /// The top node's absolute path; for a tree from paths, its path
+    /// relative to that tree's root, `""` for the root.
+    path: PathBuf,
+    /// A file's bytes, a folder's the sum over its files, by `id - top`.
+    /// Set once: at build for [`Tree::from_paths_with_sizes`], or by
+    /// [`crate::read_sizes`]. Shared by every tree joined from the same
+    /// scan, so sizes read into one reach them all.
+    sizes: Arc<OnceLock<Box<[u64]>>>,
+}
+
 impl fmt::Debug for Tree {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Tree")
-            .field("root_path", &self.root_path)
+            .field("root_path", &self.root_path())
+            .field("folders", &self.folders.len())
             .field("nodes", &self.node_count())
             .field("files", &self.files.count_ones(..))
             .field("sizes", &self.has_sizes())
@@ -167,7 +187,7 @@ impl Tree {
     /// [`TreeError::InvalidPath`] or [`TreeError::Conflict`] for a bad path,
     /// [`TreeError::TooLarge`] or [`TreeError::TooDeep`] past the id limits.
     pub fn from_paths(paths: &[&str]) -> Result<Self, TreeError> {
-        paths::build(paths.iter().map(|&path| (path, 0)))
+        paths::build(Path::new(""), paths.iter().map(|&path| (path, 0)))
     }
 
     /// Like [`Tree::from_paths`], with a byte size for each file. Sizes given
@@ -177,13 +197,69 @@ impl Tree {
     ///
     /// As [`Tree::from_paths`].
     pub fn from_paths_with_sizes(paths: &[(&str, u64)]) -> Result<Self, TreeError> {
-        paths::build(paths.iter().copied())
+        paths::build(Path::new(""), paths.iter().copied())
     }
 
-    /// Absolute path of the root folder. Empty for a tree built from paths.
+    /// Like [`Tree::from_paths_with_sizes`], as if scanned from the folder at
+    /// `root`: the root is named after it and [`Tree::abs_path`] starts
+    /// there. Nothing touches the disk; for tests of several folders.
+    #[cfg(test)]
+    pub(crate) fn from_paths_at(root: &Path, paths: &[(&str, u64)]) -> Result<Self, TreeError> {
+        paths::build(root, paths.iter().copied())
+    }
+
+    /// A folder that could not be read, as a tree of one node: an
+    /// [`Kind::Unreadable`] root named after the folder's last part, at
+    /// `path`, of size 0. Joined with the folders that could be read, it
+    /// keeps the folder's place in the tree.
+    #[must_use]
+    pub fn unreadable(path: &Path) -> Self {
+        let name = path
+            .file_name()
+            .unwrap_or(path.as_os_str())
+            .to_string_lossy();
+        one_node(&name, Kind::Unreadable, path)
+    }
+
+    /// Absolute path of the root folder. Empty for a tree built from paths,
+    /// and for a joined tree, whose root is no folder on disk.
     #[must_use]
     pub fn root_path(&self) -> &Path {
-        &self.root_path
+        match self.folders.first() {
+            Some(folder) if folder.top == NodeId::ROOT => &folder.path,
+            _ => Path::new(""),
+        }
+    }
+
+    /// Whether the tree joins scanned folders under a root of its own, as
+    /// [`crate::Explorer::add_folder`] makes it: its top-level folders keep
+    /// the order they were joined in, and its root is no folder on disk.
+    #[must_use]
+    pub fn is_joined(&self) -> bool {
+        self.folders
+            .first()
+            .is_none_or(|folder| folder.top != NodeId::ROOT)
+    }
+
+    /// The top node of each scanned folder the tree holds, in id order: the
+    /// root for a scan or a tree from paths; each top-level folder for a
+    /// joined tree.
+    pub fn folders(&self) -> impl ExactSizeIterator<Item = NodeId> + '_ {
+        self.folders.iter().map(|folder| folder.top)
+    }
+
+    /// The top node of the scanned folder holding `id`. `None` for the root
+    /// of a joined tree, which no folder holds.
+    #[must_use]
+    pub fn folder_of(&self, id: NodeId) -> Option<NodeId> {
+        self.folder_holding(id).map(|folder| folder.top)
+    }
+
+    /// The scanned folder whose subtree holds `id`.
+    fn folder_holding(&self, id: NodeId) -> Option<&Folder> {
+        let after = self.folders.partition_point(|folder| folder.top <= id);
+        let folder = self.folders.get(after.checked_sub(1)?)?;
+        (id.index() < self.end[folder.top.index()] as usize).then_some(folder)
     }
 
     /// Number of nodes, the root included. Never zero.
@@ -247,49 +323,89 @@ impl Tree {
     }
 
     /// A file's size in bytes; a folder's is the sum over its files. `None`
-    /// until the sizes are known: a scanned tree has none until
-    /// [`crate::read_sizes`] runs.
+    /// until the sizes are known: a scanned folder has none until
+    /// [`crate::read_sizes`] runs. The root of a joined tree has a size once
+    /// every folder has.
     #[must_use]
     pub fn size(&self, id: NodeId) -> Option<u64> {
-        self.sizes().map(|sizes| sizes[id.index()])
+        match self.folder_holding(id) {
+            Some(folder) => folder
+                .sizes
+                .get()
+                .map(|sizes| sizes[id.index() - folder.top.index()]),
+            None => self.folders.iter().try_fold(0_u64, |sum, folder| {
+                Some(sum.saturating_add(*folder.sizes.get()?.first()?))
+            }),
+        }
     }
 
-    /// Whether [`Tree::size`] has values.
+    /// Whether [`Tree::size`] has values for every node.
     #[must_use]
     pub fn has_sizes(&self) -> bool {
-        self.sizes.get().is_some()
+        self.sized_folders() == self.folders.len()
     }
 
-    /// Every node's size in id order, once known. Sizes are written once,
-    /// so a caller that needs many takes this one snapshot.
-    pub(crate) fn sizes(&self) -> Option<&[u64]> {
-        self.sizes.get().map(|sizes| &sizes[..])
+    /// How many of the tree's folders have their sizes. It only grows.
+    pub(crate) fn sized_folders(&self) -> usize {
+        self.folders
+            .iter()
+            .filter(|folder| folder.sizes.get().is_some())
+            .count()
     }
 
-    /// Stores sizes given for files (folders' entries are ignored) and sums
-    /// each folder. Returns `false`, changing nothing, if sizes were already
-    /// set.
+    /// The id ranges of the folders that have no sizes yet.
+    pub(crate) fn unsized_ranges(&self) -> Vec<Range<usize>> {
+        self.folders
+            .iter()
+            .filter(|folder| folder.sizes.get().is_none())
+            .map(|folder| self.subtree(folder.top))
+            .collect()
+    }
+
+    /// Every node's size in id order, 0 where not yet known. A caller that
+    /// needs many sizes takes this one copy, so it never mixes sizes read
+    /// at different times.
+    pub(crate) fn size_list(&self) -> Vec<u64> {
+        let mut list = vec![0; self.node_count()];
+        for folder in &self.folders {
+            if let Some(sizes) = folder.sizes.get() {
+                let start = folder.top.index();
+                list[start..start + sizes.len()].copy_from_slice(sizes);
+            }
+        }
+        list
+    }
+
+    /// Stores sizes given for files (folders' entries are ignored) in every
+    /// folder that has none yet, and sums each folder. Returns `false`,
+    /// changing nothing, if every folder already had them.
     ///
     /// # Panics
     ///
     /// If `sizes` does not hold one entry per node.
-    pub(crate) fn set_sizes(&self, mut sizes: Vec<u64>) -> bool {
+    pub(crate) fn set_sizes(&self, sizes: &[u64]) -> bool {
         assert_eq!(sizes.len(), self.node_count(), "one size per node");
-        if self.has_sizes() {
-            return false;
-        }
-        for (id, size) in sizes.iter_mut().enumerate() {
-            if !self.files.contains(id) {
-                *size = 0;
+        let mut stored = false;
+        for folder in &self.folders {
+            if folder.sizes.get().is_some() {
+                continue;
             }
+            let range = self.subtree(folder.top);
+            let mut local = sizes[range.clone()].to_vec();
+            for (at, size) in range.clone().zip(local.iter_mut()) {
+                if !self.files.contains(at) {
+                    *size = 0;
+                }
+            }
+            // Children have larger ids than their parent, so one backwards
+            // pass completes every subtree before it reaches the parent.
+            for id in (range.start + 1..range.end).rev() {
+                let (parent, child) = (self.parent[id].index() - range.start, id - range.start);
+                local[parent] = local[parent].saturating_add(local[child]);
+            }
+            stored |= folder.sizes.set(local.into_boxed_slice()).is_ok();
         }
-        // Children have larger ids than their parent, so one backwards pass
-        // completes every subtree before it reaches the parent.
-        for id in (1..sizes.len()).rev() {
-            let parent = self.parent[id].index();
-            sizes[parent] = sizes[parent].saturating_add(sizes[id]);
-        }
-        self.sizes.set(sizes.into_boxed_slice()).is_ok()
+        stored
     }
 
     /// The node's index into [`Tree::extensions`]. 0 means no extension. A
@@ -352,10 +468,22 @@ impl Tree {
     }
 
     /// The node's path relative to the root, with `/` separators. The root's
-    /// is `""`.
+    /// is `""`. In a joined tree it starts with the top-level folder's name.
     #[must_use]
     pub fn path(&self, id: NodeId) -> String {
-        let chain = self.ancestry(id);
+        self.path_from(NodeId::ROOT, id)
+    }
+
+    /// The path of `id` relative to `from`, one of its ancestors or itself,
+    /// with `/` separators, as [`Tree::find_from`] reads it. `""` when they
+    /// are the same node.
+    ///
+    /// # Panics
+    ///
+    /// If `from` is not `id` or above it.
+    #[must_use]
+    pub fn path_from(&self, from: NodeId, id: NodeId) -> String {
+        let chain = self.ancestry(from, id);
         let mut path = String::new();
         for (i, &node) in chain.iter().rev().enumerate() {
             if i > 0 {
@@ -366,11 +494,17 @@ impl Tree {
         path
     }
 
-    /// The node's absolute path: [`Tree::root_path`] joined with each name.
+    /// The node's path on disk: its folder's path joined with each name
+    /// below the folder. For a tree from paths, which is not on disk, the
+    /// same relative path as [`Tree::path`]; for the root of a joined
+    /// tree, an empty path.
     #[must_use]
     pub fn abs_path(&self, id: NodeId) -> PathBuf {
-        let mut path = self.root_path.clone();
-        for &node in self.ancestry(id).iter().rev() {
+        let Some(folder) = self.folder_holding(id) else {
+            return PathBuf::new();
+        };
+        let mut path = folder.path.clone();
+        for &node in self.ancestry(folder.top, id).iter().rev() {
             path.push(self.name(node));
         }
         path
@@ -381,20 +515,47 @@ impl Tree {
     /// the number of siblings along the path.
     #[must_use]
     pub fn find(&self, path: &str) -> Option<NodeId> {
-        let mut node = NodeId::ROOT;
+        self.find_from(NodeId::ROOT, path)
+    }
+
+    /// The node at `path` below `from`, as [`Tree::path_from`] writes it.
+    /// `""` is `from` itself.
+    #[must_use]
+    pub fn find_from(&self, from: NodeId, path: &str) -> Option<NodeId> {
+        let mut node = from;
         for part in path.split('/').filter(|part| !part.is_empty()) {
             node = self.child_named(node, part)?;
         }
         Some(node)
     }
 
-    /// The node and its ancestors up to, but not including, the root.
-    fn ancestry(&self, id: NodeId) -> Vec<NodeId> {
+    /// The node at `path` as [`Tree::abs_path`] writes it: inside the
+    /// folder whose path holds it. `None` for a path in no folder of the
+    /// tree, or one the tree does not list.
+    #[must_use]
+    pub fn find_abs(&self, path: &Path) -> Option<NodeId> {
+        self.folders.iter().find_map(|folder| {
+            let below = path.strip_prefix(&folder.path).ok()?;
+            let mut node = folder.top;
+            for part in below.components() {
+                let Component::Normal(name) = part else {
+                    return None;
+                };
+                node = self.child_named(node, name.to_str()?)?;
+            }
+            Some(node)
+        })
+    }
+
+    /// The node and its ancestors up to, but not including, `from`.
+    fn ancestry(&self, from: NodeId, id: NodeId) -> Vec<NodeId> {
         let mut chain = Vec::with_capacity(usize::from(self.depth(id)));
         let mut node = id;
-        while let Some(parent) = self.parent(node) {
+        while node != from {
             chain.push(node);
-            node = parent;
+            node = self
+                .parent(node)
+                .expect("`from` is the node or one of its ancestors");
         }
         chain
     }
@@ -443,6 +604,14 @@ static COLLATOR: LazyLock<CollatorBorrowed<'static>> = LazyLock::new(|| {
     CollatorBorrowed::try_new(prefs, options)
         .expect("the root collation data is compiled into icu_collator")
 });
+
+/// A tree of one node, its root, with size 0.
+fn one_node(name: &str, kind: Kind, path: &Path) -> Tree {
+    let mut raw = RawTree::new(name, true).expect("one node fits in a tree");
+    raw.set_kind(0, kind);
+    raw.build(path.to_path_buf())
+        .expect("one node fits in a tree")
+}
 
 /// Converts an index the builder has already bounded to `u32`.
 fn to_u32(i: usize) -> u32 {

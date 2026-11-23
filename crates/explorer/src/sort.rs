@@ -104,13 +104,16 @@ pub(crate) fn sibling_order(a: Rank, b: Rank, direction: Direction) -> Ordering 
 
 /// Each folder's children in display order and, for any order but the
 /// tree's own, every node's position in the fully expanded display order.
+/// The top-level folders of a joined tree keep the order they were joined
+/// in, whatever the sort.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct DisplayOrder {
     /// `None` for the tree's own order, which needs no copy.
     permuted: Option<Permuted>,
-    /// A Size order built before the tree had sizes, so every size counted
-    /// as 0. It is stale once the sizes arrive.
-    awaiting_sizes: bool,
+    /// For a Size order built before every folder of the tree had sizes
+    /// (missing sizes count as 0): how many had them. It is stale once
+    /// more do.
+    awaiting_sizes: Option<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -129,10 +132,10 @@ impl DisplayOrder {
         if sort == Sort::default() {
             return Self::default();
         }
-        // One look at the sizes: another thread may store them meanwhile,
-        // and the keys must not mix zeros with real sizes.
-        let sizes = tree.sizes();
-        let keys = keys(tree, sort.key, sizes);
+        // Counted before the sizes are copied: sizes stored in between make
+        // the order stale, and it is built once more.
+        let sized = tree.sized_folders();
+        let keys = keys(tree, sort.key);
         let rank = |id: NodeId| Rank {
             folder: tree.kind(id).is_folder(),
             key: keys[id.index()],
@@ -142,8 +145,12 @@ impl DisplayOrder {
         let mut slices = Vec::new();
         let mut rest = children.as_mut_slice();
         let mut taken = 0;
+        let keeps_top_order = tree.is_joined();
         for folder in tree.ids() {
             let range = tree.child_range(folder);
+            if folder == NodeId::ROOT && keeps_top_order {
+                continue;
+            }
             if range.len() > 1 {
                 let (_, tail) = std::mem::take(&mut rest).split_at_mut(range.start - taken);
                 let (siblings, tail) = tail.split_at_mut(range.len());
@@ -167,14 +174,16 @@ impl DisplayOrder {
                 pre_order,
                 position,
             }),
-            awaiting_sizes: sort.key == SortKey::Size && sizes.is_none(),
+            awaiting_sizes: (sort.key == SortKey::Size && sized < tree.folders().len())
+                .then_some(sized),
         }
     }
 
-    /// Whether the order was built by size before `tree` had sizes, and
-    /// the sizes have since arrived.
+    /// Whether the order was built by size before some of `tree`'s folders
+    /// had sizes, and more have arrived since.
     pub(crate) fn is_stale(&self, tree: &Tree) -> bool {
-        self.awaiting_sizes && tree.has_sizes()
+        self.awaiting_sizes
+            .is_some_and(|sized| tree.sized_folders() > sized)
     }
 
     /// The folder's children in display order.
@@ -202,11 +211,11 @@ impl DisplayOrder {
     }
 }
 
-/// Each node's sort key: see [`Rank::key`]. Without `sizes`, every size is 0.
-fn keys(tree: &Tree, key: SortKey, sizes: Option<&[u64]>) -> Vec<u64> {
+/// Each node's sort key: see [`Rank::key`]. A size not yet read is 0.
+fn keys(tree: &Tree, key: SortKey) -> Vec<u64> {
     match key {
         SortKey::Name => (0..tree.node_count()).map(|i| i as u64).collect(),
-        SortKey::Size => sizes.map_or_else(|| vec![0; tree.node_count()], <[u64]>::to_vec),
+        SortKey::Size => tree.size_list(),
         SortKey::Type => type_keys(tree),
     }
 }

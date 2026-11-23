@@ -147,7 +147,7 @@ fn only_a_size_order_built_before_the_sizes_goes_stale_when_they_arrive() {
     let by_size = DisplayOrder::new(&tree, sort(SortKey::Size, DESCENDING));
     let by_type = DisplayOrder::new(&tree, sort(SortKey::Type, DESCENDING));
     assert!(!by_size.is_stale(&tree));
-    tree.set_sizes(vec![0, 1, 2]);
+    tree.set_sizes(&[0, 1, 2]);
     assert!(by_size.is_stale(&tree));
     assert!(!by_type.is_stale(&tree));
     assert!(!DisplayOrder::default().is_stale(&tree));

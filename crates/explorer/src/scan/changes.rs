@@ -17,8 +17,10 @@ use super::{ALWAYS_SKIPPED, ScanOptions, always_skipped, is_special, rules};
 use crate::{Kind, NodeId, Tree};
 
 /// Whether a change at any of `changed` can alter what [`super::scan`] of
-/// `tree`'s folder with `options` lists. `changed` holds paths as a file
-/// watcher on [`Tree::root_path`] reports them: absolute, under the root.
+/// the folder at `folder` in `tree` lists with `options`: the root of a
+/// scan, or a top-level folder of a joined tree. `changed` holds paths as a
+/// file watcher on that folder's [`Tree::abs_path`] reports them: absolute,
+/// under the folder.
 ///
 /// - A path inside `.git`, or a `.DS_Store`, never matters: the scan skips
 ///   both.
@@ -27,13 +29,19 @@ use crate::{Kind, NodeId, Tree};
 ///   about: if it is gone, nothing the tree shows changed; if it exists, it
 ///   matters when the scan would list it, so a new file shows and a file
 ///   the ignore rules hide does not.
-/// - The root itself, and a path outside it, matter: something larger
+/// - The folder itself, and a path outside it, matter: something larger
 ///   happened than one entry.
 ///
 /// Reads the disk: call it off the UI thread.
 #[must_use]
-pub fn changes_matter(tree: &Tree, options: ScanOptions, changed: &[PathBuf]) -> bool {
-    let root = tree.root_path();
+pub fn changes_matter(
+    tree: &Tree,
+    folder: NodeId,
+    options: ScanOptions,
+    changed: &[PathBuf],
+) -> bool {
+    let root = tree.abs_path(folder);
+    let root = root.as_path();
     let mut asked: HashSet<PathBuf> = HashSet::new();
     for path in changed {
         let Ok(relative) = path.strip_prefix(root) else {
@@ -48,7 +56,7 @@ pub fn changes_matter(tree: &Tree, options: ScanOptions, changed: &[PathBuf]) ->
         if names.iter().any(|name| ALWAYS_SKIPPED.contains(name)) {
             continue;
         }
-        let (deepest, listed) = deepest_listed(tree, &names);
+        let (deepest, listed) = deepest_listed(tree, folder, &names);
         if listed == names.len() {
             return true;
         }
@@ -77,10 +85,11 @@ fn names(relative: &Path) -> Option<Vec<&str>> {
         .collect()
 }
 
-/// The deepest node on the way down `names` and how many names it took to
-/// reach it: `names.len()` when the tree lists the whole path.
-fn deepest_listed(tree: &Tree, names: &[&str]) -> (NodeId, usize) {
-    let mut node = NodeId::ROOT;
+/// The deepest node on the way down `names` from `folder` and how many
+/// names it took to reach it: `names.len()` when the tree lists the whole
+/// path.
+fn deepest_listed(tree: &Tree, folder: NodeId, names: &[&str]) -> (NodeId, usize) {
+    let mut node = folder;
     for (depth, name) in names.iter().enumerate() {
         let child = tree
             .children(node)
@@ -125,8 +134,12 @@ mod tests {
 
     use tempfile::TempDir;
 
-    use super::changes_matter;
-    use crate::{ScanOptions, Tree, scan};
+    use crate::{NodeId, ScanOptions, Tree, scan};
+
+    /// Whether the changes matter to the scan `tree`, whose root is the folder.
+    fn changes_matter(tree: &Tree, options: ScanOptions, changed: &[PathBuf]) -> bool {
+        super::changes_matter(tree, NodeId::ROOT, options, changed)
+    }
 
     const RULES: ScanOptions = ScanOptions {
         show_ignored: false,
@@ -228,6 +241,26 @@ mod tests {
             assert!(!changes_matter(&tree, RULES, &at(&tree, "link/main.rs")));
         }
         assert!(!changes_matter(&tree, RULES, &at(&tree, "README.md/inner")));
+    }
+
+    #[test]
+    fn a_change_matters_to_the_joined_folder_it_is_in() {
+        let (dir, tree) = project();
+        let other = Tree::from_paths_at(Path::new("/elsewhere"), &[("x.txt", 1)]).unwrap();
+        let joined = Tree::join(&[(&other, NodeId::ROOT), (&tree, NodeId::ROOT)]).unwrap();
+        let folder = joined.find_abs(tree.root_path()).unwrap();
+        touch(dir.path(), "src/new.rs");
+        let changed = at(&tree, "src/new.rs");
+        assert!(super::changes_matter(&joined, folder, RULES, &changed));
+        assert!(!super::changes_matter(
+            &joined,
+            folder,
+            RULES,
+            &at(&tree, "target/debug/app")
+        ));
+        // To the other folder it is a path outside: something larger.
+        let first = joined.find_abs(Path::new("/elsewhere")).unwrap();
+        assert!(super::changes_matter(&joined, first, RULES, &changed));
     }
 
     #[cfg(unix)]

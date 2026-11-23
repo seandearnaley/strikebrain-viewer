@@ -7,12 +7,12 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::Arc;
 
 use fixedbitset::FixedBitSet;
 
 use super::names::{NameArena, extension_of};
-use super::{Kind, Tree, TreeError, canonical_order, to_u32};
+use super::{Folder, Kind, Tree, TreeError, canonical_order, to_u32};
 use crate::NodeId;
 use crate::bits::Ranks;
 use crate::parallel::sort_each;
@@ -217,14 +217,17 @@ impl RawTree {
 
         let (child_start, child_ids) = children_by_id(&parent);
         let tree = Tree {
-            root_path,
+            folders: Box::new([Folder {
+                top: NodeId::ROOT,
+                path: root_path,
+                sizes: Arc::default(),
+            }]),
             names,
             haystack,
             parent,
             end,
             depth,
             kind,
-            sizes: OnceLock::new(),
             ext,
             extensions: extensions.list,
             file_ranks: Ranks::new(files.as_slice().iter().copied()),
@@ -233,14 +236,14 @@ impl RawTree {
             child_ids,
         };
         if let Some(size) = size {
-            tree.set_sizes(size);
+            tree.set_sizes(&size);
         }
         Ok(tree)
     }
 }
 
 /// Each node's children in ascending id order, which is canonical order.
-fn children_by_id(parent: &[NodeId]) -> (Vec<u32>, Vec<NodeId>) {
+pub(super) fn children_by_id(parent: &[NodeId]) -> (Vec<u32>, Vec<NodeId>) {
     let n = parent.len();
     let mut start = vec![0_u32; n + 1];
     for p in parent.iter().skip(1) {
@@ -260,8 +263,8 @@ fn children_by_id(parent: &[NodeId]) -> (Vec<u32>, Vec<NodeId>) {
 }
 
 /// The interned extension table. Entry 0 is "no extension".
-struct Extensions {
-    list: Vec<Box<str>>,
+pub(super) struct Extensions {
+    pub(super) list: Vec<Box<str>>,
     index: HashMap<Box<str>, u16>,
 }
 
@@ -276,7 +279,7 @@ impl Default for Extensions {
 
 impl Extensions {
     /// The extension's index, adding it if new. A full table gives 0.
-    fn intern(&mut self, ext: &str) -> u16 {
+    pub(super) fn intern(&mut self, ext: &str) -> u16 {
         if ext.is_empty() {
             return 0;
         }

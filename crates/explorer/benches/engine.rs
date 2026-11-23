@@ -12,6 +12,7 @@
 //! | `filter` | keystroke to updated rows on 1 M names in 16 ms |
 //! | `check` | check or clear a folder of 1 M files in 1 ms |
 //! | `rows` | expand or collapse with 1 M visible rows in 16 ms |
+//! | `folders` | a 6,000-file folder added to a 1 M-entry tree, its rows on screen, in 100 ms |
 //! | `other` | none: sort, tree replacement, gallery questions (each first one after a change remakes the gallery list) |
 
 use std::hint::black_box;
@@ -189,6 +190,73 @@ fn rows(c: &mut Criterion) {
     group.finish();
 }
 
+/// Adding, removing and rescanning one small folder beside a million
+/// entries. The scan has landed, with its sizes: what is timed is joining
+/// the trees, carrying the view across and rebuilding the rows.
+fn folders(c: &mut Criterion) {
+    let mut group = c.benchmark_group("folders");
+    group.sample_size(20);
+    let generated = generated_folder();
+    let small = listed(generated.path(), false);
+    read_sizes(&small, &AtomicBool::new(false)).expect("never cancelled");
+    let mut base = Explorer::empty();
+    base.add_folder(&million(), 0, None)
+        .expect("a million entries fit");
+    let large = Arc::clone(base.tree());
+    base.add_folder(&small, 1, None)
+        .expect("a million entries and a few more fit");
+    let both = Arc::clone(base.tree());
+    let small_top = both.children(NodeId::ROOT)[1];
+
+    // Each run starts from a fresh view of the same tree; making it is
+    // not timed, and neither is dropping the result.
+    let fresh = |tree: &Arc<Tree>, open: bool| {
+        let mut explorer = Explorer::new(Arc::clone(tree));
+        if open {
+            explorer.expand_all();
+            explorer.select_all();
+        }
+        explorer
+    };
+    for (name, open) in [("closed", false), ("1M rows open and checked", true)] {
+        group.bench_function(format!("add 6,000 files to 1M, {name}"), |b| {
+            b.iter_batched(
+                || fresh(&large, open),
+                |mut explorer| {
+                    explorer
+                        .add_folder(&small, 1, None)
+                        .expect("a million entries and a few more fit");
+                    explorer
+                },
+                BatchSize::PerIteration,
+            );
+        });
+    }
+    group.bench_function("rescan 6,000 files beside 1M", |b| {
+        b.iter_batched(
+            || fresh(&both, false),
+            |mut explorer| {
+                explorer
+                    .replace_folder(small_top, &small, None)
+                    .expect("the same tree fits again");
+                explorer
+            },
+            BatchSize::PerIteration,
+        );
+    });
+    group.bench_function("remove 6,000 files beside 1M", |b| {
+        b.iter_batched(
+            || fresh(&both, false),
+            |mut explorer| {
+                explorer.remove_folder(small_top, None);
+                explorer
+            },
+            BatchSize::PerIteration,
+        );
+    });
+    group.finish();
+}
+
 fn other(c: &mut Criterion) {
     let mut group = c.benchmark_group("other");
     group.sample_size(20);
@@ -258,5 +326,5 @@ fn other(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, open, filter, check, rows, other);
+criterion_group!(benches, open, filter, check, rows, folders, other);
 criterion_main!(benches);

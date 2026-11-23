@@ -19,7 +19,7 @@ pub use content::{
     is_image_extension, viewer_for,
 };
 pub use explorer::{
-    Explorer, FilterJob, FilterResult, Gallery, RowView, SavedSelection, ViewSnapshot,
+    Explorer, FilterJob, FilterResult, Gallery, RowView, SavedFolder, SavedSelection, ViewSnapshot,
 };
 pub use filter::{KindFilter, Query, Visibility, filter};
 pub use fixedbitset::FixedBitSet;

@@ -34,6 +34,32 @@ impl NameArena {
         self.close_entry()
     }
 
+    /// Appends entries `range` of `other`, in one copy of their bytes.
+    pub(crate) fn extend_from(
+        &mut self,
+        other: &Self,
+        range: std::ops::Range<usize>,
+    ) -> Result<(), TreeError> {
+        if range.is_empty() {
+            return Ok(());
+        }
+        let bytes = other.span(range.start).start..other.span(range.end - 1).end;
+        let base = self.buf.len();
+        self.buf.push_str(
+            other
+                .buf
+                .get(bytes.clone())
+                .expect("entry offsets lie on char boundaries"),
+        );
+        u32::try_from(self.buf.len()).map_err(|_| TreeError::TooLarge)?;
+        let shift = |end: u32| {
+            u32::try_from(end as usize - bytes.start + base).expect("checked against the length")
+        };
+        self.ends
+            .extend(other.ends[range].iter().map(|&end| shift(end)));
+        Ok(())
+    }
+
     fn close_entry(&mut self) -> Result<(), TreeError> {
         let end = u32::try_from(self.buf.len()).map_err(|_| TreeError::TooLarge)?;
         self.ends.push(end);
@@ -128,6 +154,23 @@ mod tests {
         assert_eq!(arena.as_str(), "ab\0c\0def\0");
         assert_eq!(arena.ends(), [3, 5, 9]);
         assert_eq!(arena.get(2), "def\0");
+    }
+
+    #[test]
+    fn entries_copy_from_another_arena() {
+        let mut from = NameArena::default();
+        for s in ["skip", "é", "", "kept"] {
+            from.push(s).unwrap();
+        }
+        let mut arena = NameArena::default();
+        arena.push("first").unwrap();
+        arena.extend_from(&from, 1..4).unwrap();
+        arena.extend_from(&from, 2..2).unwrap();
+        assert_eq!(arena.as_str(), "firstékept");
+        assert_eq!(arena.get(1), "é");
+        assert_eq!(arena.get(2), "");
+        assert_eq!(arena.get(3), "kept");
+        assert_eq!(arena.ends().len(), 4);
     }
 
     #[test]

@@ -19,6 +19,7 @@ use crate::sort::DisplayOrder;
 use crate::{Check, Kind, KindFilter, NodeId, Query, Selection, Sort, Tree, Visibility, filter};
 
 mod filtering;
+mod folders;
 mod gallery;
 mod row;
 mod saved;
@@ -28,7 +29,7 @@ mod tests;
 pub use filtering::{FilterJob, FilterResult};
 pub use gallery::Gallery;
 pub use row::RowView;
-pub use saved::{SavedSelection, ViewSnapshot};
+pub use saved::{SavedFolder, SavedSelection, ViewSnapshot};
 
 /// A view of one tree: checks, open folders, filter, sort and rows.
 ///
@@ -335,8 +336,17 @@ impl Explorer {
         current: NodeId,
     ) -> (IdMap, Option<NodeId>) {
         let map = IdMap::new(&self.tree, &tree);
+        let carried = self.carry_current(&map, current);
+        self.install_tree(tree, &map);
+        (map, carried)
+    }
+
+    /// Where `current` goes across `map`, from the tree still on view: its
+    /// own new id if it maps, else the nearest gallery file that maps, the
+    /// first after it in display order, else the last before it.
+    fn carry_current(&self, map: &IdMap, current: NodeId) -> Option<NodeId> {
         let survives = |file: &NodeId| map.get(*file).is_some();
-        let carried = map.get(current).or_else(|| {
+        map.get(current).or_else(|| {
             let after =
                 std::iter::successors(self.gallery_next(current), |&file| self.gallery_next(file))
                     .find(survives);
@@ -347,9 +357,7 @@ impl Explorer {
                 .find(survives)
             });
             nearest.and_then(|old| map.get(old))
-        });
-        self.install_tree(tree, &map);
-        (map, carried)
+        })
     }
 
     /// Moves every piece of state to `tree` through `map`, and reruns the

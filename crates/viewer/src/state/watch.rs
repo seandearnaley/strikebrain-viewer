@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use explorer::{ScanOptions, Tree, changes_matter};
+use explorer::{NodeId, ScanOptions, Tree, changes_matter};
 use futures::StreamExt as _;
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use gpui_kit::{AppContext as _, AsyncApp, Context, Result, SharedString, WeakEntity};
@@ -175,7 +175,9 @@ async fn follow_changes(
                 Watched::Tree(tree, options) => {
                     let paths = std::mem::take(&mut batch.paths);
                     break cx
-                        .background_spawn(async move { changes_matter(&tree, options, &paths) })
+                        .background_spawn(async move {
+                            changes_matter(&tree, NodeId::ROOT, options, &paths)
+                        })
                         .await;
                 }
                 // The first scan runs: the batch waits for its tree, which

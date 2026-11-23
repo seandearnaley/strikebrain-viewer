@@ -1,15 +1,17 @@
 //! Saving and restoring a view by path: the open folders and the checked
-//! files as paths relative to the root, which outlive the tree's ids.
+//! files as paths relative to a folder, which outlive the tree's ids.
 //!
 //! Two forms. [`Explorer::open_paths`] and [`Explorer::selected_paths`] list
-//! every path. [`Explorer::snapshot`] copies the open folders and the checks
-//! out in constant time per word of bits, so a background thread can name
-//! them; its [`ViewSnapshot::selection`] writes a checked selection
-//! compactly ([`SavedSelection`]): a folder whose every file is checked is
-//! one entry, so "select all" over a million files saves as one path.
+//! every path from the root. [`Explorer::snapshot`] copies the open folders
+//! and the checks out in constant time per word of bits, so a background
+//! thread can name them; its [`ViewSnapshot::folders`] gives each scanned
+//! folder's part, [`SavedFolder`], with its checks written compactly
+//! ([`SavedSelection`]): a folder whose every file is checked is one entry,
+//! so "select all" over a million files saves as one path.
 
 use std::collections::HashSet;
 use std::fmt;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use fixedbitset::FixedBitSet;
@@ -39,6 +41,19 @@ impl SavedSelection {
     pub fn is_empty(&self) -> bool {
         self.folders.is_empty() && self.files.is_empty()
     }
+}
+
+/// One scanned folder's part of a saved view, by paths relative to it with
+/// `/` separators: `""` is the folder itself.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SavedFolder {
+    /// The folder, as [`Tree::abs_path`] gives it.
+    pub path: PathBuf,
+    /// Its open folders, itself included when it is a top-level folder of
+    /// a joined tree and open.
+    pub open: Vec<String>,
+    /// Its checked files, compactly.
+    pub selection: SavedSelection,
 }
 
 /// The open folders and the checks of an [`Explorer`], copied out so that
@@ -85,24 +100,75 @@ impl ViewSnapshot {
             files: files.into_iter().map(|id| tree.path(id)).collect(),
         }
     }
+
+    /// Each scanned folder's open folders and checks, by paths relative to
+    /// it, in id order: one entry per top-level folder of a joined tree,
+    /// or the root's alone.
+    #[must_use]
+    pub fn folders(&self) -> Vec<SavedFolder> {
+        let tree = &*self.tree;
+        tree.folders()
+            .map(|top| {
+                let range = tree.subtree(top);
+                let open = open_ids(tree, &self.open)
+                    .filter(|id| range.contains(&id.index()))
+                    .map(|id| tree.path_from(top, id))
+                    .collect();
+                let (mut folders, mut files) = (Vec::new(), Vec::new());
+                compact_from(tree, &self.selection, top, &mut folders, &mut files);
+                let relative = |ids: Vec<NodeId>| -> Vec<String> {
+                    ids.into_iter().map(|id| tree.path_from(top, id)).collect()
+                };
+                SavedFolder {
+                    path: tree.abs_path(top),
+                    open,
+                    selection: SavedSelection {
+                        folders: relative(folders),
+                        files: relative(files),
+                    },
+                }
+            })
+            .collect()
+    }
 }
 
 /// The checks of `selection` compactly, in id order: the folders whose
 /// every file is checked, none inside another (the root alone when every
-/// file is), then the other checked files. Opens only partly checked
-/// folders.
+/// file of a tree that is not joined is), then the other checked files.
+/// Each scanned folder counts on its own, so the root of a joined tree is
+/// never one. Opens only partly checked folders.
 pub(super) fn compact(tree: &Tree, selection: &Selection) -> (Vec<NodeId>, Vec<NodeId>) {
+    let (mut folders, mut files) = (Vec::new(), Vec::new());
+    for top in tree.folders() {
+        compact_from(tree, selection, top, &mut folders, &mut files);
+    }
+    (folders, files)
+}
+
+/// [`compact`] for the subtree of `top`, added to `folders` and `files`.
+fn compact_from(
+    tree: &Tree,
+    selection: &Selection,
+    top: NodeId,
+    folders: &mut Vec<NodeId>,
+    files: &mut Vec<NodeId>,
+) {
     let all = Visibility::all();
     let check = |id| selection.check(tree, &all, id);
-    let (mut folders, mut files) = (Vec::new(), Vec::new());
-    match check(NodeId::ROOT) {
-        Check::Off => return (folders, files),
-        Check::On => return (vec![NodeId::ROOT], files),
+    if tree.is_file(top) {
+        if selection.is_selected(top) {
+            files.push(top);
+        }
+        return;
+    }
+    match check(top) {
+        Check::Off => return,
+        Check::On => return folders.push(top),
         Check::Mixed => {}
     }
     // Depth first, children pushed in reverse so the first comes off
     // first: nodes leave the stack in id order.
-    let mut stack: Vec<NodeId> = tree.children(NodeId::ROOT).iter().rev().copied().collect();
+    let mut stack: Vec<NodeId> = tree.children(top).iter().rev().copied().collect();
     while let Some(id) = stack.pop() {
         if tree.is_file(id) {
             if selection.is_selected(id) {
@@ -116,15 +182,18 @@ pub(super) fn compact(tree: &Tree, selection: &Selection) -> (Vec<NodeId>, Vec<N
             Check::Mixed => stack.extend(tree.children(id).iter().rev()),
         }
     }
-    (folders, files)
+}
+
+/// The stored open folders among `open`, in id order.
+fn open_ids<'a>(tree: &'a Tree, open: &'a FixedBitSet) -> impl Iterator<Item = NodeId> + 'a {
+    open.ones()
+        .map(NodeId::from_index)
+        .filter(move |&id| id != NodeId::ROOT && tree.kind(id) == Kind::Dir)
 }
 
 /// The stored open folders among `open`, as relative paths in id order.
 fn open_paths<'a>(tree: &'a Tree, open: &'a FixedBitSet) -> impl Iterator<Item = String> + 'a {
-    open.ones()
-        .map(NodeId::from_index)
-        .filter(move |&id| id != NodeId::ROOT && tree.kind(id) == Kind::Dir)
-        .map(move |id| tree.path(id))
+    open_ids(tree, open).map(move |id| tree.path(id))
 }
 
 impl Explorer {
@@ -157,7 +226,7 @@ impl Explorer {
     pub fn restore_open<S: AsRef<str>>(&mut self, paths: impl IntoIterator<Item = S>) {
         self.catch_up();
         let mut open = FixedBitSet::with_capacity(self.tree.node_count());
-        for id in find_all(&self.tree, paths) {
+        for id in find_all(&self.tree, NodeId::ROOT, paths) {
             if self.tree.kind(id) == Kind::Dir {
                 open.insert(id.index());
             }
@@ -172,7 +241,7 @@ impl Explorer {
     pub fn restore_selection<S: AsRef<str>>(&mut self, paths: impl IntoIterator<Item = S>) {
         self.catch_up();
         let mut checked = FixedBitSet::with_capacity(self.tree.node_count());
-        for id in find_all(&self.tree, paths) {
+        for id in find_all(&self.tree, NodeId::ROOT, paths) {
             checked.insert(id.index());
         }
         self.selection = Selection::from_bits(&self.tree, checked);
@@ -185,33 +254,74 @@ impl Explorer {
     /// a folder listed as a file are ignored.
     pub fn restore_saved_selection(&mut self, saved: &SavedSelection) {
         self.catch_up();
-        let tree = &*self.tree;
-        let mut checked = FixedBitSet::with_capacity(tree.node_count());
-        let folders = saved.folders.iter().map(String::as_str);
-        let mut folder_ids = find_all(tree, folders);
-        if saved.folders.iter().any(String::is_empty) {
-            folder_ids.push(NodeId::ROOT);
+        let mut checked = FixedBitSet::with_capacity(self.tree.node_count());
+        check_saved(&self.tree, NodeId::ROOT, saved, &mut checked);
+        // Folder bits are dropped here, leaving the files.
+        self.selection = Selection::from_bits(&self.tree, checked);
+        self.forget_gallery();
+    }
+
+    /// Restores one scanned folder's part of a saved view, as
+    /// [`ViewSnapshot::folders`] wrote it, to the folder at `saved.path`:
+    /// opens exactly its open folders and checks exactly its checks, as
+    /// [`Explorer::restore_open`] and [`Explorer::restore_saved_selection`]
+    /// do, leaving every other folder as it is. Returns `false`, changing
+    /// nothing, when no folder of the tree is at that path.
+    pub fn restore_folder(&mut self, saved: &SavedFolder) -> bool {
+        self.catch_up();
+        let tree = Arc::clone(&self.tree);
+        let Some(top) = tree.folders().find(|&top| tree.abs_path(top) == saved.path) else {
+            return false;
+        };
+        let range = tree.subtree(top);
+        self.expanded.remove_range(range.clone());
+        let mut open: Vec<NodeId> = find_all(&tree, top, &saved.open);
+        if saved.open.iter().any(String::is_empty) {
+            open.push(top);
         }
-        for folder in folder_ids {
-            if !tree.is_file(folder) {
-                checked.insert_range(tree.subtree(folder));
+        for id in open {
+            if tree.kind(id) == Kind::Dir {
+                self.expanded.insert(id.index());
             }
         }
-        for file in find_all(tree, &saved.files) {
-            checked.insert(file.index());
-        }
-        // Folder bits are dropped here, leaving the files.
-        self.selection = Selection::from_bits(tree, checked);
+        let mut checked = self.selection.as_bitset().clone();
+        checked.remove_range(range);
+        check_saved(&tree, top, &saved.selection, &mut checked);
+        self.selection = Selection::from_bits(&tree, checked);
         self.forget_gallery();
+        self.rebuild_rows();
+        true
     }
 }
 
-/// The nodes of `tree` at `paths`: relative, `/`-separated, as
-/// [`Tree::path`] writes them; a trailing `/` is allowed. Paths that name no
-/// node, and the root's `""`, are skipped. One walk down only the folders on
-/// the way to some path, looking each child's path up in a hash set, so the
-/// cost is the children of those folders, not a search per path.
-fn find_all<S: AsRef<str>>(tree: &Tree, paths: impl IntoIterator<Item = S>) -> Vec<NodeId> {
+/// Sets in `checked` every file `saved` names below `from`: each file, and
+/// every file in each folder, `""` being `from` itself.
+fn check_saved(tree: &Tree, from: NodeId, saved: &SavedSelection, checked: &mut FixedBitSet) {
+    let mut folder_ids = find_all(tree, from, &saved.folders);
+    if saved.folders.iter().any(String::is_empty) {
+        folder_ids.push(from);
+    }
+    for folder in folder_ids {
+        if !tree.is_file(folder) {
+            checked.insert_range(tree.subtree(folder));
+        }
+    }
+    for file in find_all(tree, from, &saved.files) {
+        checked.insert(file.index());
+    }
+}
+
+/// The nodes below `from` at `paths`: relative to it, `/`-separated, as
+/// [`Tree::path_from`] writes them; a trailing `/` is allowed. Paths that
+/// name no node, and `from`'s own `""`, are skipped. One walk down only the
+/// folders on the way to some path, looking each child's path up in a hash
+/// set, so the cost is the children of those folders, not a search per
+/// path.
+fn find_all<S: AsRef<str>>(
+    tree: &Tree,
+    from: NodeId,
+    paths: impl IntoIterator<Item = S>,
+) -> Vec<NodeId> {
     let paths: Vec<S> = paths.into_iter().collect();
     let wanted: HashSet<&str> = paths
         .iter()
@@ -225,7 +335,7 @@ fn find_all<S: AsRef<str>>(tree: &Tree, paths: impl IntoIterator<Item = S>) -> V
         }
     }
     let mut found = Vec::new();
-    let mut folders = vec![(NodeId::ROOT, String::new())];
+    let mut folders = vec![(from, String::new())];
     let mut path = String::new();
     while let Some((folder, folder_path)) = folders.pop() {
         for &child in tree.children(folder) {

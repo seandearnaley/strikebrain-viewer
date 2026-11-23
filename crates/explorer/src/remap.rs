@@ -11,7 +11,7 @@ use crate::{NodeId, Tree};
 /// An old id with no node in the new tree.
 const GONE: u32 = u32::MAX;
 
-/// Old ids to new ids between two scans of the same folder. A node maps
+/// Old ids to new ids between two scans of the same folders. A node maps
 /// when the new tree has a node at the same path that is also a folder, or
 /// also a file; a file that became a folder, or the reverse, does not.
 #[derive(Clone, PartialEq, Eq)]
@@ -30,17 +30,73 @@ impl fmt::Debug for IdMap {
 }
 
 impl IdMap {
-    /// Pairs up `old` and `new` in one walk. Both trees list each folder's
-    /// children in canonical order, so a matched pair of folders merges its
-    /// children like two sorted lists: equal names (byte for byte) of the
-    /// same folderness match, and [`canonical_order`] decides which side
-    /// steps past a name the other lacks. Most pairs are equal, and those
-    /// cost a byte comparison, not a collation. No recursion.
+    /// Pairs up `old` and `new` by path, in one walk. The roots pair, or,
+    /// when either tree is joined, each old top-level node pairs with the
+    /// new node at its place on disk ([`Tree::find_abs`]); then every pair
+    /// of folders merges its children (see [`IdMap::merge`]).
     pub(crate) fn new(old: &Tree, new: &Tree) -> Self {
-        let mut new_of_old = vec![GONE; old.node_count()];
-        new_of_old[NodeId::ROOT.index()] = 0;
-        let mut pairs = vec![(NodeId::ROOT, NodeId::ROOT)];
-        while let Some((a, b)) = pairs.pop() {
+        let mut map = Self::gone(old);
+        map.new_of_old[NodeId::ROOT.index()] = 0;
+        let pairs = if old.is_joined() || new.is_joined() {
+            old.children(NodeId::ROOT)
+                .iter()
+                .filter_map(|&top| Some((top, new.find_abs(&old.abs_path(top))?)))
+                .collect()
+        } else {
+            vec![(NodeId::ROOT, NodeId::ROOT)]
+        };
+        map.merge(old, new, pairs);
+        map
+    }
+
+    /// The map across a join made from `old`: each subtree in `kept`, given
+    /// by its old and new top, moved whole; each node in `merged` paired
+    /// with its new node, and the folders below merged by name. Everything
+    /// else is gone.
+    pub(crate) fn rejoined(
+        old: &Tree,
+        new: &Tree,
+        kept: &[(NodeId, NodeId)],
+        merged: Vec<(NodeId, NodeId)>,
+    ) -> Self {
+        let mut map = Self::gone(old);
+        map.new_of_old[NodeId::ROOT.index()] = 0;
+        for &(from, to) in kept {
+            let range = old.subtree(from);
+            let shift =
+                |id: usize| u32::try_from(id - from.index() + to.index()).expect("ids fit in u32");
+            for id in range.clone() {
+                map.new_of_old[id] = shift(id);
+            }
+        }
+        map.merge(old, new, merged);
+        map
+    }
+
+    /// A map of every old node to nothing.
+    fn gone(old: &Tree) -> Self {
+        Self {
+            new_of_old: vec![GONE; old.node_count()],
+        }
+    }
+
+    /// Maps each pair whose nodes are both folders or both files, then
+    /// merges their children by name. Both trees list a folder's children
+    /// in canonical order, so a matched pair of folders merges its children
+    /// like two sorted lists: equal names (byte for byte) of the same
+    /// folderness match, and [`canonical_order`] decides which side steps
+    /// past a name the other lacks. Most pairs are equal, and those cost a
+    /// byte comparison, not a collation. No recursion.
+    fn merge(&mut self, old: &Tree, new: &Tree, pairs: Vec<(NodeId, NodeId)>) {
+        let new_id = |id: NodeId| u32::try_from(id.index()).expect("ids fit in u32");
+        let mut stack = Vec::with_capacity(pairs.len());
+        for (a, b) in pairs {
+            if old.kind(a).is_folder() == new.kind(b).is_folder() {
+                self.new_of_old[a.index()] = new_id(b);
+                stack.push((a, b));
+            }
+        }
+        while let Some((a, b)) = stack.pop() {
             let (xs, ys) = (old.children(a), new.children(b));
             let (mut i, mut j) = (0, 0);
             while let (Some(&x), Some(&y)) = (xs.get(i), ys.get(j)) {
@@ -48,9 +104,9 @@ impl IdMap {
                     Ordering::Less => i += 1,
                     Ordering::Greater => j += 1,
                     Ordering::Equal => {
-                        new_of_old[x.index()] = u32::try_from(y.index()).expect("ids fit in u32");
+                        self.new_of_old[x.index()] = new_id(y);
                         if !old.children(x).is_empty() && !new.children(y).is_empty() {
-                            pairs.push((x, y));
+                            stack.push((x, y));
                         }
                         i += 1;
                         j += 1;
@@ -58,7 +114,6 @@ impl IdMap {
                 }
             }
         }
-        Self { new_of_old }
     }
 
     /// The new id of `old`, or `None` if it is gone or not an id of the old
