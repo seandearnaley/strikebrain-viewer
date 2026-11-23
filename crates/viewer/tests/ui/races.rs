@@ -126,18 +126,12 @@ fn a_click_drawn_before_a_refresh_does_nothing(cx: &mut TestAppContext) {
     assert_eq!(read(cx, &view, AppState::selected_count), 0);
 }
 
+/// Both added before either scan lands. Which lands first is the
+/// scheduler's to choose; the order the scans land in is forced in
+/// `state/scan.rs`'s unit test.
 #[gpui_kit::test]
 fn a_second_folder_added_before_the_first_lands_keeps_its_place(cx: &mut TestAppContext) {
-    // The first is larger, so its scan lands last.
-    let mut owned: Vec<(String, String)> = (0..400)
-        .map(|i| (format!("deep/f{i}.txt"), String::new()))
-        .collect();
-    owned.push(("from-first.txt".into(), "1".into()));
-    let files: Vec<(&str, &str)> = owned
-        .iter()
-        .map(|(path, text)| (path.as_str(), text.as_str()))
-        .collect();
-    let first = folder(&files);
+    let first = folder(&[("deep/f.txt", ""), ("from-first.txt", "1")]);
     let second = folder(&[("from-second.txt", "2")]);
     let (handle, view) = open_app(cx, Launch::Empty);
 

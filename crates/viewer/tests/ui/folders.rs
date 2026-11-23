@@ -519,3 +519,64 @@ fn a_folder_readable_again_shows_before_its_sizes_are_read(cx: &mut TestAppConte
         Some(3)
     );
 }
+
+#[gpui_kit::test]
+fn a_folder_removed_while_its_rescan_runs_stays_gone(cx: &mut TestAppContext) {
+    let (one, two) = (folder(&[("a.txt", "a")]), folder(&[("b.txt", "b")]));
+    let launch = Launch::Folders(vec![one.path().to_owned(), two.path().to_owned()]);
+    let (handle, view) = open_app(cx, launch);
+    let first = node_at(cx, &view, one.path());
+    // Both rescans start; the first folder goes before either lands.
+    crate::state(cx, &view).update(cx, |state, cx| {
+        state.refresh(cx);
+        state.remove_folder(first, cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(rows_now(cx, handle), under(two.path(), &["b.txt"]));
+    assert_eq!(title(cx, &view), name_of(two.path()));
+}
+
+#[gpui_kit::test]
+fn a_folder_removed_while_its_sizes_are_read_stays_gone(cx: &mut TestAppContext) {
+    let dir = folder(&[("a.txt", "a")]);
+    let (_, view) = open_app(cx, Launch::Empty);
+    let state = crate::state(cx, &view);
+    // The moment its tree lands, before its sizes are read, it goes.
+    let fired = std::rc::Rc::new(std::cell::Cell::new(false));
+    let once = std::rc::Rc::clone(&fired);
+    let _remove = cx.update(|cx| {
+        cx.observe(&state, move |state, cx| {
+            let landed = state.read(cx).explorer().and_then(|explorer| {
+                let tree = explorer.tree();
+                let top = tree.folders().next()?;
+                tree.size(top).is_none().then_some(top)
+            });
+            if let Some(top) = landed.filter(|_| !once.get()) {
+                once.set(true);
+                state.update(cx, |state, cx| state.remove_folder(top, cx));
+            }
+        })
+    });
+    add(cx, &view, &[dir.path()]);
+    assert!(fired.get(), "the tree landed before its sizes");
+    assert!(read(cx, &view, AppState::is_empty));
+}
+
+#[gpui_kit::test]
+fn a_size_sort_over_a_folder_that_cannot_be_read_settles(cx: &mut TestAppContext) {
+    let dir = folder(&[("big.txt", "xxxxxxxx"), ("small.txt", "x")]);
+    let missing = dir.path().join("gone");
+    let launch = Launch::Folders(vec![dir.path().to_owned(), missing]);
+    let (handle, view) = open_app(cx, launch);
+    crate::click(cx, handle, "header-size");
+    // Sorted inside the readable folder; the folders keep their order, and
+    // every size is known, the unreadable folder's included.
+    let mut rows = under(dir.path(), &["small.txt", "big.txt"]);
+    rows.push("gone".to_owned());
+    assert_eq!(rows_now(cx, handle), rows);
+    assert!(read(cx, &view, |state| state
+        .explorer()
+        .unwrap()
+        .tree()
+        .has_sizes()));
+}
