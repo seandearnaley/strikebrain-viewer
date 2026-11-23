@@ -6,11 +6,15 @@ use std::path::Path;
 
 use explorer::NodeId;
 use gpui_kit::test::{TestQueryExt as _, TestWindowExt as _};
-use gpui_kit::{AnyWindowHandle, AppContext as _, Entity, Role, TestAppContext};
+use gpui_kit::{
+    AnyWindowHandle, AppContext as _, Entity, Pixels, Role, ScrollDelta, TestAppContext, point, px,
+};
 use viewer::{AppState, AppView, GalleryProbe, Launch, StageView};
 
 use crate::stage::{Shown, numbered, png, position, shown};
-use crate::{click, current, is_focused, node, open_app, press, read, row, state, tree, write};
+use crate::{
+    click, current, drag_divider, is_focused, node, open_app, press, read, row, state, tree, write,
+};
 
 /// The tiles on screen, by the names they carry, top left to bottom right.
 fn tiles(cx: &mut TestAppContext, handle: AnyWindowHandle) -> Vec<String> {
@@ -564,4 +568,108 @@ fn the_tiles_content_stays_within_its_budget_and_tiles_passed_over_are_not_read(
         after.thumbnails()
     );
     assert_eq!(after.loading(), 0);
+}
+
+/// The tiles on screen with where each stands: its name and its top.
+fn placed(cx: &mut TestAppContext, handle: AnyWindowHandle) -> Vec<(String, Pixels)> {
+    cx.run_until_parked();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window
+            .find_all_by_role(Role::GridCell)
+            .iter()
+            .filter(|tile| tile.visible())
+            .map(|tile| {
+                let name = tile.label().expect("a tile names its file").to_owned();
+                (name, tile.bounds().top())
+            })
+            .collect()
+    })
+    .expect("read the tiles")
+}
+
+/// Where the tile named `name` stands, if it is on screen.
+fn top_of(placed: &[(String, Pixels)], name: &str) -> Option<Pixels> {
+    placed
+        .iter()
+        .find(|(each, _)| each == name)
+        .map(|(_, top)| *top)
+}
+
+#[gpui_kit::test]
+fn resizing_far_down_a_long_gallery_keeps_the_focused_tile_where_it_stood(cx: &mut TestAppContext) {
+    let dir = files(3000);
+    let (handle, view) = gallery_of(cx, dir.path());
+    press(cx, handle, "end");
+    for _ in 0..80 {
+        press(cx, handle, "pageup");
+    }
+    let focus = focused_tile(cx, &view).expect("a tile has focus");
+    assert!(number(&focus) > 1000, "{focus}");
+    let before = top_of(&placed(cx, handle), &focus).expect("the focused tile is on screen");
+    // Wider and narrower, within three columns: every tile changes size.
+    for x in [280., 260., 300.] {
+        drag_divider(cx, handle, x);
+        assert_eq!(probe(cx, &view).columns(), 3);
+        let top = top_of(&placed(cx, handle), &focus);
+        let top = top.unwrap_or_else(|| panic!("{focus} left the screen at {x}"));
+        assert!(
+            (top - before).abs() < px(1.),
+            "{focus} moved from {before:?} to {top:?}"
+        );
+    }
+}
+
+#[gpui_kit::test]
+fn resizing_keeps_the_first_tile_on_screen_when_the_focused_one_is_not(cx: &mut TestAppContext) {
+    let dir = files(3000);
+    let (handle, view) = gallery_of(cx, dir.path());
+    // Focus stays on the first tile; the wheel goes far down, a row and a
+    // half into one.
+    cx.update_window(handle, |_, window, cx| {
+        let delta = ScrollDelta::Pixels(point(px(0.), px(-120_000.)));
+        window.scroll("gallery", delta, cx);
+    })
+    .unwrap();
+    let before = placed(cx, handle);
+    let (first, top) = before.first().cloned().expect("tiles on screen");
+    assert!(number(&first) > 1000, "{first}");
+    assert_eq!(focused_tile(cx, &view).as_deref(), Some("f000.rs"));
+    drag_divider(cx, handle, 280.);
+    let after = placed(cx, handle);
+    let (first_after, top_after) = after.first().cloned().expect("tiles on screen");
+    assert_eq!(first_after, first);
+    // The same share of its row is above the top as before: a row starts
+    // 16 px above its tiles.
+    let row = |placed: &[(String, Pixels)]| {
+        let second_row = placed.iter().find(|(_, each)| *each > placed[0].1).unwrap();
+        second_row.1 - placed[0].1
+    };
+    let share = |top: Pixels, row: Pixels| (px(16.) - top) / row;
+    let (was, now) = (share(top, row(&before)), share(top_after, row(&after)));
+    assert!(
+        (was - now).abs() < 0.01,
+        "{was} of a row above the top, then {now}"
+    );
+}
+
+#[gpui_kit::test]
+fn a_change_of_columns_keeps_the_focused_tile_on_screen(cx: &mut TestAppContext) {
+    let dir = files(120);
+    let (handle, view) = gallery_of(cx, dir.path());
+    for _ in 0..20 {
+        press(cx, handle, "down");
+    }
+    let focus = focused_tile(cx, &view).expect("a tile has focus");
+    assert_eq!(probe(cx, &view).columns(), 3);
+    assert!(top_of(&placed(cx, handle), &focus).is_some());
+    // One column, then back to three.
+    for (x, columns) in [(760., 1), (300., 3)] {
+        drag_divider(cx, handle, x);
+        assert_eq!(probe(cx, &view).columns(), columns);
+        assert!(
+            top_of(&placed(cx, handle), &focus).is_some(),
+            "{focus} left the screen at {columns} columns"
+        );
+    }
 }

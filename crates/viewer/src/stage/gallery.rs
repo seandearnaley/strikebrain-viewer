@@ -34,8 +34,8 @@ use gpui_kit::{
     AnyElement, App, AppContext as _, Context, Entity, FocusHandle, IntoElement,
     ParentElement as _, Render, Result, Role, ScrollStrategy, SharedString,
     StatefulInteractiveElement as _, Styled as _, Subscription, SvgRenderer, Task,
-    TestSupportExt as _, UniformListScrollHandle, Window, container_query, div, prelude::*,
-    uniform_list,
+    TestSupportExt as _, UniformListScrollHandle, Window, container_query, div, point, prelude::*,
+    px, uniform_list,
 };
 
 use crate::state::{AppState, StateEvent, TileMotion};
@@ -290,25 +290,54 @@ impl Gallery {
 
     // Layout and drawing
 
-    /// The grid as this frame lays it out: kept for the keys, and the
-    /// focused tile scrolled into view when asked, or when the columns
-    /// changed under it.
+    /// The grid as this frame lays it out: kept for the keys, the scroll
+    /// held on what was on screen when the tiles' size or the columns
+    /// changed, and the focused tile scrolled into view when asked.
     fn laid_out(&mut self, grid: Grid, cx: &mut Context<Self>) {
-        let reflowed = self.grid.is_some_and(|was| was.columns != grid.columns);
+        let focused = {
+            let state = self.state.read(cx);
+            state
+                .explorer()
+                .zip(state.tile())
+                .and_then(|(explorer, tile)| explorer.gallery_position(tile))
+        };
+        if let Some(was) = self.grid
+            && (was.row_height != grid.row_height || was.columns != grid.columns)
+        {
+            self.reanchor(was, grid, focused);
+        }
         self.grid = Some(grid);
-        if !(self.reveal || reflowed) {
-            return;
+        if self.reveal {
+            self.reveal = false;
+            if let Some(index) = focused {
+                self.scroll
+                    .scroll_to_item(grid.row_of(index), ScrollStrategy::Nearest);
+            }
         }
-        self.reveal = false;
-        let state = self.state.read(cx);
-        let index = state
-            .explorer()
-            .zip(state.tile())
-            .and_then(|(explorer, tile)| explorer.gallery_position(tile));
-        if let Some(index) = index {
-            self.scroll
-                .scroll_to_item(grid.row_of(index), ScrollStrategy::Nearest);
-        }
+    }
+
+    /// After a resize changed the tiles' size or the columns: the list
+    /// keeps its scroll in pixels, which would now show other rows. The
+    /// focused tile, if it was on screen, goes back to where it stood;
+    /// otherwise the first tile on screen keeps its place, the same share
+    /// of its row above the top.
+    fn reanchor(&self, was: Grid, now: Grid, focused: Option<usize>) {
+        let handle = &self.scroll.0.borrow().base_handle;
+        let offset = handle.offset();
+        let scrolled = (-offset.y).max(px(0.));
+        let row_top = |grid: Grid, index: usize| grid.row_height * count(grid.row_of(index));
+        let on_screen = |index: usize| {
+            let top = row_top(was, index) - scrolled;
+            top + was.row_height > px(0.) && top < was.viewport
+        };
+        let scrolled = if let Some(index) = focused.filter(|&index| on_screen(index)) {
+            row_top(now, index) - (row_top(was, index) - scrolled)
+        } else {
+            let first = whole_rows(scrolled / was.row_height);
+            let into = (scrolled - was.row_height * count(first)) / was.row_height;
+            row_top(now, first * was.columns) + now.row_height * into
+        };
+        handle.set_offset(point(offset.x, -scrolled.max(px(0.))));
     }
 
     /// The rows of tiles in `range`.
@@ -481,6 +510,25 @@ impl Gallery {
         }
         cx.notify();
     }
+}
+
+/// A count of rows or tiles as a multiplier of pixels.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "a row count past 2^24 only blurs a fraction of a row"
+)]
+fn count(n: usize) -> f32 {
+    n as f32
+}
+
+/// The whole rows in a number of rows.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "the value is floored and clamped to zero; rows number far below usize::MAX"
+)]
+fn whole_rows(rows: f32) -> usize {
+    rows.floor().max(0.) as usize
 }
 
 /// A tile to read.
