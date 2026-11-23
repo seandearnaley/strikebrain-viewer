@@ -8,9 +8,11 @@
 //! its cost then ([`Lru::set_cost`]), which may evict others, but never the
 //! image on the stage. Making room evicts the entries used longest ago and
 //! hands them back, so the caller can release what they hold (an image's
-//! GPU texture).
+//! GPU texture). The gallery's tiles keep tens of thousands of entries, so
+//! the keys are also kept in the order of use: finding the oldest is a
+//! lookup, not a pass over every entry.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::hash::Hash;
 
 /// See the module docs.
@@ -23,6 +25,8 @@ pub(crate) struct Lru<K, V> {
     /// Counts uses; an entry's stamp is the count at its last use.
     clock: u64,
     entries: HashMap<K, Slot<V>>,
+    /// Every key by its entry's stamp: oldest first.
+    order: BTreeMap<u64, K>,
 }
 
 #[derive(Debug)]
@@ -47,6 +51,7 @@ impl<K: Hash + Eq + Clone, V> Lru<K, V> {
             used: 0,
             clock: 0,
             entries: HashMap::new(),
+            order: BTreeMap::new(),
         }
     }
 
@@ -54,6 +59,8 @@ impl<K: Hash + Eq + Clone, V> Lru<K, V> {
     pub(crate) fn get(&mut self, key: &K) -> Option<&mut V> {
         self.clock += 1;
         let slot = self.entries.get_mut(key)?;
+        self.order.remove(&slot.last_used);
+        self.order.insert(self.clock, key.clone());
         slot.last_used = self.clock;
         Some(&mut slot.value)
     }
@@ -103,6 +110,7 @@ impl<K: Hash + Eq + Clone, V> Lru<K, V> {
         }
         self.clock += 1;
         self.used += cost;
+        self.order.insert(self.clock, key.clone());
         self.entries.insert(
             key,
             Slot {
@@ -136,16 +144,13 @@ impl<K: Hash + Eq + Clone, V> Lru<K, V> {
 
     /// The key used longest ago, other than `keep`.
     fn oldest(&self, keep: Option<&K>) -> Option<K> {
-        self.entries
-            .iter()
-            .filter(|(key, _)| Some(*key) != keep)
-            .min_by_key(|(_, slot)| slot.last_used)
-            .map(|(key, _)| key.clone())
+        self.order.values().find(|key| Some(*key) != keep).cloned()
     }
 
     /// Takes the entry for `key` out.
     pub(crate) fn remove(&mut self, key: &K) -> Option<V> {
         let slot = self.entries.remove(key)?;
+        self.order.remove(&slot.last_used);
         self.used -= slot.cost;
         Some(slot.value)
     }
@@ -153,6 +158,7 @@ impl<K: Hash + Eq + Clone, V> Lru<K, V> {
     /// Takes every entry out.
     pub(crate) fn drain(&mut self) -> impl Iterator<Item = V> + '_ {
         self.used = 0;
+        self.order.clear();
         self.entries.drain().map(|(_, slot)| slot.value)
     }
 
@@ -261,6 +267,38 @@ mod tests {
         // Another 10 MB evicts the oldest until it fits.
         assert_eq!(cache.insert(101, 101, 10 * MB), [7]);
         assert_eq!(cache.used(), 31 * MB);
+    }
+
+    #[test]
+    fn eviction_follows_use_over_a_long_run() {
+        // A naive model: keys from least to most recently used.
+        let mut cache = Lru::new(50);
+        let mut model: Vec<u32> = Vec::new();
+        let mut seed = 7_u32;
+        for _ in 0..5_000 {
+            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            let key = (seed >> 16) % 80;
+            if seed.is_multiple_of(3) {
+                if cache.get(&key).is_some() {
+                    model.retain(|&each| each != key);
+                    model.push(key);
+                }
+                continue;
+            }
+            let mut evicted = cache.insert(key, key, 1);
+            model.retain(|&each| each != key);
+            let mut expected = Vec::new();
+            if evicted.first() == Some(&key) {
+                // The value it replaced.
+                evicted.remove(0);
+            }
+            while model.len() + 1 > 50 {
+                expected.push(model.remove(0));
+            }
+            model.push(key);
+            assert_eq!(evicted, expected);
+            assert_eq!(cache.len(), model.len());
+        }
     }
 
     #[test]
