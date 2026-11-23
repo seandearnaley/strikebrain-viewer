@@ -99,6 +99,9 @@ struct File {
     /// The extension, or the name for a file without one: the code view's
     /// language.
     language: SharedString,
+    /// Plain prose rather than code: the code view wraps it and numbers no
+    /// lines.
+    prose: bool,
     /// A tree built in memory, with no folder behind it: nothing is read.
     in_memory: bool,
 }
@@ -161,6 +164,7 @@ pub struct StageProbe {
     texts: usize,
     text_bytes: usize,
     scroll: f32,
+    wraps: bool,
 }
 
 impl StageProbe {
@@ -198,6 +202,12 @@ impl StageProbe {
     #[must_use]
     pub fn text_bytes(&self) -> usize {
         self.text_bytes
+    }
+
+    /// Whether the code view shows prose: lines wrapped, none numbered.
+    #[must_use]
+    pub fn wraps(&self) -> bool {
+        self.wraps
     }
 
     /// How far the text on the stage is scrolled down, in pixels; 0 at
@@ -280,6 +290,7 @@ impl Stage {
         };
         StageProbe {
             scroll: scroll.as_f32(),
+            wraps: self.text_views.code_wraps(),
             renders: self.renders,
             loads: self.loads,
             images: self.images.read(cx).len(),
@@ -328,6 +339,7 @@ impl Stage {
             name: name.to_owned().into(),
             size: tree.size(id),
             language: language.to_owned().into(),
+            prose: text::is_prose(name, extension),
             in_memory: tree.root_path().as_os_str().is_empty(),
         })
     }
@@ -421,8 +433,15 @@ impl Stage {
                     self.text_views.show_markdown(&file.path, stamp, &text, cx);
                     (Content::Markdown(file), showing)
                 } else {
-                    self.text_views
-                        .show_code(&file.path, stamp, &text, &file.language, window, cx);
+                    self.text_views.show_code(
+                        &file.path,
+                        stamp,
+                        &text,
+                        &file.language,
+                        file.prose,
+                        window,
+                        cx,
+                    );
                     (Content::Code(file), showing)
                 }
             }
@@ -599,6 +618,11 @@ impl Stage {
             .into_any_element()
     }
 
+    /// Whether the presentation shows a picture.
+    fn presents_image(&self) -> bool {
+        self.asked.presenting && matches!(self.content, Content::Image(..))
+    }
+
     /// The file's place in the gallery, quiet and centred.
     fn render_position(at: usize, of: usize, cx: &App) -> impl IntoElement {
         let text: SharedString = format!("{at} / {of}").into();
@@ -708,7 +732,13 @@ impl Render for Stage {
                 this.scroll(Scroll::Bottom, cx);
             }))
             .size_full()
-            .bg(theme.background)
+            // A presented picture sits on black in either mode, as in a
+            // photo viewer; everything else on the stage's surface.
+            .bg(if self.presents_image() {
+                gpui_kit::black()
+            } else {
+                theme.background
+            })
             .text_color(theme.foreground)
             .child(
                 div()

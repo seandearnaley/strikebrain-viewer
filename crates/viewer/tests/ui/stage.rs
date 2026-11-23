@@ -191,6 +191,20 @@ fn each_file_gets_its_viewer(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn prose_wraps_with_no_line_numbers_and_code_does_not(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "a.rs", "fn main() {}\n");
+    write(dir.path(), "b.txt", "Some prose.\n");
+    write(dir.path(), "c.rs", "fn other() {}\n");
+    let (handle, view) = open_checked(cx, dir.path());
+    for (name, wraps) in [("a.rs", false), ("b.txt", true), ("c.rs", false)] {
+        assert_eq!(shown(cx, handle), Some(Shown::Code(name.into())));
+        assert_eq!(probe(cx, &view).wraps(), wraps, "{name}");
+        press(cx, handle, "right");
+    }
+}
+
+#[gpui_kit::test]
 fn the_code_view_holds_the_text_and_decodes_invalid_utf8_lossily(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     mixed(dir.path());

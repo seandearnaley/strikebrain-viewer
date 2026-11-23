@@ -4,7 +4,8 @@
 //!
 //! The code view is read-only, with line numbers, `syntect` highlighting
 //! picked by the file's extension (or its name, for `Makefile` and the
-//! like) and no soft wrap: long lines scroll sideways. Search and the
+//! like) and no soft wrap: long lines scroll sideways. Plain prose (`.txt`,
+//! `.log`, `LICENSE`) is wrapped instead, with no line numbers. Search and the
 //! context menu are off: the stage shows code, it does not edit it.
 //! Folding stays on: blocks fold from chevrons that show only while the
 //! pointer is over the gutter, and their column is the gap that keeps the
@@ -86,6 +87,8 @@ pub(crate) struct TextViews {
     markdown: Entity<TextViewState>,
     code_holds: Option<Holds>,
     markdown_holds: Option<Holds>,
+    /// Whether the code view shows prose: wrapped, with no line numbers.
+    code_prose: bool,
 }
 
 impl std::fmt::Debug for TextViews {
@@ -112,18 +115,30 @@ impl TextViews {
             markdown,
             code_holds: None,
             markdown_holds: None,
+            code_prose: false,
         }
     }
 
+    /// Whether the code view shows prose: wrapped, with no line numbers.
+    pub(crate) fn code_wraps(&self) -> bool {
+        self.code_prose
+    }
+
     /// Puts `text`, the file at `path` as stamped, in the code view, with
-    /// highlighting for `language`: an extension or a file name. Showing
-    /// the version it holds again keeps where it was scrolled.
+    /// highlighting for `language`: an extension or a file name. `prose`
+    /// wraps the lines and numbers none. Showing the version it holds again
+    /// keeps where it was scrolled.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one call site; the file's parts travel together from the read"
+    )]
     pub(crate) fn show_code<T: 'static>(
         &mut self,
         path: &Arc<Path>,
         stamp: Stamp,
         text: &SharedString,
         language: &str,
+        prose: bool,
         window: &mut Window,
         cx: &mut Context<T>,
     ) {
@@ -136,7 +151,13 @@ impl TextViews {
         }
         self.code_holds = Some(holds);
         let language: SharedString = language.to_owned().into();
+        let wrap_changes = prose != self.code_prose;
+        self.code_prose = prose;
         self.code.update(cx, |editor, cx| {
+            if wrap_changes {
+                editor.set_line_number(!prose, window, cx);
+                editor.set_soft_wrap(prose, window, cx);
+            }
             // The text goes in as plain text, then the language: the Kit's
             // editor parses a document of up to 64 KB at once, on this
             // thread, both when the text is set and on the next frame, so
@@ -267,6 +288,37 @@ impl TextViews {
     }
 }
 
+/// Whether a file is plain prose rather than code, by its name and its
+/// lowercase extension: `.txt`, `.text` and `.log` files, and files with no
+/// extension other than the build files the code view highlights by name
+/// (`Makefile`, `Dockerfile` and the like). The code view wraps prose and
+/// numbers none of its lines.
+pub(crate) fn is_prose(name: &str, extension: &str) -> bool {
+    const CODE_NAMES: [&str; 10] = [
+        "makefile",
+        "gnumakefile",
+        "dockerfile",
+        "justfile",
+        "rakefile",
+        "gemfile",
+        "podfile",
+        "procfile",
+        "vagrantfile",
+        "jenkinsfile",
+    ];
+    match extension {
+        "txt" => !name.eq_ignore_ascii_case("cmakelists.txt"),
+        "text" | "log" => true,
+        "" => {
+            !name.starts_with('.')
+                && !CODE_NAMES
+                    .iter()
+                    .any(|code| name.eq_ignore_ascii_case(code))
+        }
+        _ => false,
+    }
+}
+
 /// A click on a Markdown link: opens it as the Kit would by default, but
 /// only a web or mail link. A file can hold any URL, and a `file://` URL
 /// or an app's own scheme would open whatever it names, a script included.
@@ -310,8 +362,32 @@ fn scroll_list(list: &ListState, delta: Pixels) {
 
 #[cfg(test)]
 mod tests {
-    use super::{STEP, Scroll, is_web_or_mail};
+    use super::{STEP, Scroll, is_prose, is_web_or_mail};
     use gpui_kit::{Pixels, px};
+
+    #[test]
+    fn prose_is_plain_text_and_names_without_an_extension() {
+        for (name, extension) in [
+            ("notes.txt", "txt"),
+            ("README.TEXT", "text"),
+            ("build.log", "log"),
+            ("LICENSE", ""),
+            ("README", ""),
+        ] {
+            assert!(is_prose(name, extension), "{name}");
+        }
+        for (name, extension) in [
+            ("main.rs", "rs"),
+            ("notes.md", "md"),
+            ("CMakeLists.txt", "txt"),
+            ("Makefile", ""),
+            ("Dockerfile", ""),
+            (".gitignore", ""),
+            ("data.json", "json"),
+        ] {
+            assert!(!is_prose(name, extension), "{name}");
+        }
+    }
 
     #[test]
     fn only_web_and_mail_links_are_opened() {
