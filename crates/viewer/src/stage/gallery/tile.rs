@@ -2,8 +2,8 @@
 //! in a 4:3 frame, its name under it.
 //!
 //! A picture is fitted inside the frame, scaled down and never up. Text is
-//! the monospace font at 9 px on 12 px lines, clipped to the frame, with no
-//! highlighting. A tile shows nothing until its content is read. The tile
+//! the monospace font at 9 px on 12 px lines, clipped to the frame at the
+//! last whole line, with no highlighting. A tile shows nothing until its content is read. The tile
 //! of the file on the stage has the accent background; the focused tile
 //! has the focus ring, outside the frame, after a key press.
 
@@ -125,7 +125,14 @@ impl Tile {
                 .test_support()
                 .aria_value(head.clone())
                 .absolute()
-                .inset(INSET)
+                .top(INSET)
+                .left(INSET)
+                .right(INSET)
+                // Whole lines only: none cut through at the bottom.
+                .h(TEXT_LINE
+                    * ((self.size.height - INSET * 2.) / TEXT_LINE)
+                        .floor()
+                        .max(0.))
                 .overflow_hidden()
                 .font_family(theme.mono_font_family.clone())
                 .text_size(TEXT_SIZE)

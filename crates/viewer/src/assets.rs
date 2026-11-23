@@ -1,6 +1,6 @@
 //! The icons the app draws: the Kit's default set plus the few it leaves
 //! out: the picture, code and symlink files, Collapse all, Select all,
-//! Clear and Add Folder.
+//! Clear, Add Folder and the stage's grid button.
 
 use std::borrow::Cow;
 
@@ -16,7 +16,8 @@ icon_assets!(
         ChevronsDownUp,
         ListChecks,
         ListX,
-        FolderPlus
+        FolderPlus,
+        LayoutGrid
     ]
 );
 
@@ -56,6 +57,7 @@ mod tests {
             IconName::ListChecks,
             IconName::ListX,
             IconName::FolderPlus,
+            IconName::LayoutGrid,
         ] {
             assert!(AppAssets.load(&icon.path()).unwrap().is_some());
         }

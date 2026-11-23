@@ -642,8 +642,8 @@ fn main() {
             &format!("special-rows-{suffix}"),
         ));
 
-        // The stage, one file of each kind, in a gallery of seven: the
-        // position shows under each.
+        // The gallery of seven files, one of each kind: pictures, text and
+        // a file the stage cannot show.
         let (_stage, stage) = stage_folder();
         let mut cx = context();
         let (handle, _) = open_sized(
@@ -652,8 +652,51 @@ fn main() {
             size(px(1200.), px(760.)),
         );
         click(&mut cx, handle, "select-all");
-        cx.update_window(handle, |_, window, cx| window.press("tab", cx))
-            .expect("focus the stage");
+        written.push(save(
+            &mut cx,
+            handle,
+            mode,
+            &dir,
+            &format!("gallery-{suffix}"),
+        ));
+        // Keyboard focus on a tile that is not current: its ring.
+        cx.update_window(handle, |_, window, cx| {
+            for key in ["tab", "right", "down"] {
+                window.press(key, cx);
+            }
+        })
+        .expect("move tile focus");
+        written.push(save(
+            &mut cx,
+            handle,
+            mode,
+            &dir,
+            &format!("gallery-focus-{suffix}"),
+        ));
+        // A narrow stage: one column of tiles.
+        drag_divider(&mut cx, handle, 960.);
+        written.push(save(
+            &mut cx,
+            handle,
+            mode,
+            &dir,
+            &format!("gallery-narrow-{suffix}"),
+        ));
+
+        // The stage, one file of each kind, opened from the first tile: the
+        // position and the grid button show under each.
+        let mut cx = context();
+        let (handle, _) = open_sized(
+            &mut cx,
+            Launch::Folders(vec![stage.clone()]),
+            size(px(1200.), px(760.)),
+        );
+        click(&mut cx, handle, "select-all");
+        cx.update_window(handle, |_, window, cx| {
+            window.press("tab", cx);
+            window.press("enter", cx);
+        })
+        .expect("open the first tile");
         for name in [
             "stage-landscape",
             "stage-portrait",
