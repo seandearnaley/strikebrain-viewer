@@ -479,6 +479,114 @@ fn replacing_the_tree_reruns_the_filter_last_asked_for() {
 }
 
 #[test]
+fn saved_paths_restore_open_folders_and_checks() {
+    let mut saved = explorer(&SAMPLE);
+    saved.toggle_folder(id(&saved, "docs"));
+    saved.toggle_folder(id(&saved, "docs/deep"));
+    saved.toggle_check(id(&saved, "docs/deep/c.png"));
+    saved.toggle_check(id(&saved, "top.txt"));
+    let open: Vec<String> = saved.open_paths().collect();
+    let selected: Vec<String> = saved.selected_paths().collect();
+    assert_eq!(open, ["docs", "docs/deep"]);
+    assert_eq!(selected, ["docs/deep/c.png", "top.txt"]);
+
+    // The folder changed meanwhile: `top.txt` is gone, `src` became a file.
+    let mut restored = explorer(&["docs/a.md", "docs/deep/c.png", "src", "new.txt"]);
+    restored.toggle_check(id(&restored, "new.txt"));
+    let mut open = open;
+    open.extend(["src".to_owned(), "missing/".to_owned(), "../x".to_owned()]);
+    let mut selected = selected;
+    selected.extend(["docs".to_owned(), String::new()]);
+    restored.restore_open(&open);
+    restored.restore_selection(selected.iter().map(String::as_str));
+    assert_eq!(gallery(&restored), ["docs/deep/c.png"]);
+    assert_eq!(
+        rows(&restored),
+        [
+            "docs",
+            "docs/deep",
+            "docs/deep/c.png",
+            "docs/a.md",
+            "new.txt",
+            "src"
+        ]
+    );
+    assert_eq!(
+        restored.open_paths().collect::<Vec<_>>(),
+        ["docs", "docs/deep"]
+    );
+}
+
+#[test]
+fn open_paths_are_the_stored_open_folders_only() {
+    use std::path::PathBuf;
+
+    use crate::tree::RawTree;
+
+    let mut raw = RawTree::new("root", true).unwrap();
+    let dir = raw.push(0, "dir", Kind::Dir).unwrap();
+    raw.push(dir, "f.txt", Kind::File).unwrap();
+    let locked = raw.push(0, "locked", Kind::Dir).unwrap();
+    raw.set_kind(locked, Kind::Unreadable);
+    let mut explorer = Explorer::new(Arc::new(raw.build(PathBuf::from("/root")).unwrap()));
+    explorer.expand_all();
+    assert_eq!(explorer.open_paths().collect::<Vec<_>>(), ["dir"]);
+    // Closing under a filter is temporary and not saved.
+    explorer.set_filter("f", KindFilter::All);
+    explorer.collapse_all();
+    assert_eq!(explorer.open_paths().collect::<Vec<_>>(), ["dir"]);
+}
+
+#[test]
+fn the_file_on_the_stage_follows_its_path_or_the_nearest_surviving_gallery_file() {
+    const PATHS: [&str; 5] = ["a.txt", "b.txt", "c.txt", "d.txt", "e.txt"];
+    /// Replaces the tree with `left` and returns where `current` went.
+    fn replace(view: &mut Explorer, current: &str, left: &[&str]) -> Option<String> {
+        let current = id(view, current);
+        let new = Arc::new(Tree::from_paths(left).unwrap());
+        let (map, carried) = view.replace_tree_carrying(new, current);
+        if let Some(same) = map.get(current) {
+            assert_eq!(carried, Some(same));
+        }
+        carried.map(|node| view.tree().path(node))
+    }
+
+    // Still there, checked or not: the same path.
+    let mut view = explorer(&PATHS);
+    assert_eq!(
+        replace(&mut view, "c.txt", &PATHS).as_deref(),
+        Some("c.txt")
+    );
+
+    // Display order e d c b a; everything but `c` checked.
+    let mut view = explorer(&PATHS);
+    for path in ["a.txt", "b.txt", "d.txt", "e.txt"] {
+        view.toggle_check(id(&view, path));
+    }
+    view.set_sort(Sort {
+        key: SortKey::Name,
+        direction: Direction::Descending,
+    });
+    // An unchecked file goes to the next gallery file after it.
+    assert_eq!(
+        replace(&mut view, "c.txt", &["a.txt", "b.txt", "d.txt", "e.txt"]).as_deref(),
+        Some("b.txt")
+    );
+    // `d` is deleted with `b`: the next survivor after it is `a`.
+    assert_eq!(
+        replace(&mut view, "d.txt", &["a.txt", "e.txt"]).as_deref(),
+        Some("a.txt")
+    );
+    // Nothing after `a` survives: the last survivor before it.
+    assert_eq!(
+        replace(&mut view, "a.txt", &["e.txt", "z.txt"]).as_deref(),
+        Some("e.txt")
+    );
+    // No gallery file survives: `z` is not checked.
+    assert_eq!(replace(&mut view, "e.txt", &["z.txt"]), None);
+}
+
+#[test]
 fn a_size_sort_is_redone_when_sizes_arrive() {
     use std::path::PathBuf;
 

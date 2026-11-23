@@ -21,6 +21,7 @@ use crate::{Check, Kind, KindFilter, NodeId, Query, Selection, Sort, Tree, Visib
 mod filtering;
 mod gallery;
 mod row;
+mod saved;
 #[cfg(test)]
 mod tests;
 
@@ -316,6 +317,41 @@ impl Explorer {
     /// on the stage.
     pub fn replace_tree(&mut self, tree: Arc<Tree>) -> IdMap {
         let map = IdMap::new(&self.tree, &tree);
+        self.install_tree(tree, &map);
+        map
+    }
+
+    /// [`Explorer::replace_tree`] for a view with a file on the stage:
+    /// also returns where `current` goes. It keeps its path when that is
+    /// still a file. Otherwise it moves to the nearest gallery file that
+    /// still exists: the first after it in the old display order, else the
+    /// last before it; else `None`. `current` need not be checked.
+    pub fn replace_tree_carrying(
+        &mut self,
+        tree: Arc<Tree>,
+        current: NodeId,
+    ) -> (IdMap, Option<NodeId>) {
+        let map = IdMap::new(&self.tree, &tree);
+        let survives = |file: &NodeId| map.get(*file).is_some();
+        let carried = map.get(current).or_else(|| {
+            let after =
+                std::iter::successors(self.gallery_next(current), |&file| self.gallery_next(file))
+                    .find(survives);
+            let nearest = after.or_else(|| {
+                std::iter::successors(self.gallery_previous(current), |&file| {
+                    self.gallery_previous(file)
+                })
+                .find(survives)
+            });
+            nearest.and_then(|old| map.get(old))
+        });
+        self.install_tree(tree, &map);
+        (map, carried)
+    }
+
+    /// Moves every piece of state to `tree` through `map`, and reruns the
+    /// filter asked for on it.
+    fn install_tree(&mut self, tree: Arc<Tree>, map: &IdMap) {
         let n = tree.node_count();
         self.selection = Selection::from_bits(&tree, map.carry(self.selection.as_bitset(), n));
         self.expanded = map.carry(&self.expanded, n);
@@ -328,7 +364,6 @@ impl Explorer {
         self.tree = tree;
         let (text, kind) = self.requested.clone();
         self.install(text, kind, visibility);
-        map
     }
 
     /// Shows a filter result for `text` and `kind`. A change of either
