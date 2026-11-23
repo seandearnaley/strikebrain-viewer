@@ -79,7 +79,3 @@ Not available. The trial on 2026-11-22 stopped before a live run:
 - `gpui-kit` 0.10.0 does not re-export that feature. Enabling it needs the Dioxus CLI and a direct `gpui-pre` dependency. The Rules forbid the direct dependency.
 
 Neither was added. Rebuild and restart instead.
-
-## Known gaps
-
-- Closing the window does not quit the app, so `cargo run -p viewer` does not return; stop it with Ctrl-C. Quit handling arrives with key bindings in milestone 2.
