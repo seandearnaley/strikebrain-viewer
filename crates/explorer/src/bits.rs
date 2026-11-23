@@ -110,6 +110,25 @@ pub(crate) fn next_one(set: &FixedBitSet, from: usize) -> Option<usize> {
     }
 }
 
+/// The set bit with `n` set bits below it, if any: a word's population at
+/// a time, then the bits of the one word that holds it.
+pub(crate) fn nth_one(set: &FixedBitSet, mut n: usize) -> Option<usize> {
+    for (w, &word) in set.as_slice().iter().enumerate() {
+        let ones = word.count_ones() as usize;
+        if n >= ones {
+            n -= ones;
+            continue;
+        }
+        let mut word = word;
+        for _ in 0..n {
+            // Clears the lowest set bit.
+            word &= word - 1;
+        }
+        return Some(w * WORD + word.trailing_zeros() as usize);
+    }
+    None
+}
+
 /// The highest set bit below `before`, if any.
 ///
 /// # Panics
@@ -140,7 +159,7 @@ mod tests {
     use fixedbitset::FixedBitSet;
     use proptest::prelude::*;
 
-    use super::{Ranks, next_one, or_range, prev_one};
+    use super::{Ranks, next_one, nth_one, or_range, prev_one};
 
     fn set(len: usize, bits: &[bool]) -> FixedBitSet {
         let mut set = FixedBitSet::with_capacity(len);
@@ -188,6 +207,16 @@ mod tests {
         ) {
             let set = set(len, &bits);
             prop_assert_eq!(next_one(&set, from), (from..len).find(|&i| set.contains(i)));
+        }
+
+        #[test]
+        fn nth_one_matches_a_bit_loop(
+            len in 0_usize..300,
+            bits in prop::collection::vec(any::<bool>(), 300),
+            n in 0_usize..310,
+        ) {
+            let set = set(len, &bits);
+            prop_assert_eq!(nth_one(&set, n), set.ones().nth(n));
         }
 
         #[test]

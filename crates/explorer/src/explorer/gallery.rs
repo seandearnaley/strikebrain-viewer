@@ -11,7 +11,7 @@
 use std::fmt;
 use std::slice;
 
-use fixedbitset::Ones;
+use fixedbitset::FixedBitSet;
 
 use super::Explorer;
 use crate::{NodeId, bits};
@@ -22,8 +22,8 @@ pub struct Gallery<'a> {
 }
 
 enum Files<'a> {
-    /// Display order is id order.
-    InIdOrder(Ones<'a>),
+    /// Display order is id order: the selection's set bits from `at` on.
+    InIdOrder { set: &'a FixedBitSet, at: usize },
     /// The explorer's list in display order.
     Listed(slice::Iter<'a, NodeId>),
 }
@@ -39,7 +39,11 @@ impl Iterator for Gallery<'_> {
 
     fn next(&mut self) -> Option<NodeId> {
         match &mut self.files {
-            Files::InIdOrder(ones) => ones.next().map(NodeId::from_index),
+            Files::InIdOrder { set, at } => {
+                let found = bits::next_one(set, *at)?;
+                *at = found + 1;
+                Some(NodeId::from_index(found))
+            }
             Files::Listed(files) => files.next().copied(),
         }
     }
@@ -50,9 +54,24 @@ impl Explorer {
     /// filter and closed folders do not affect it.
     #[must_use]
     pub fn gallery(&self) -> Gallery<'_> {
+        self.gallery_from(0)
+    }
+
+    /// The gallery from its file at `start` on: what a grid of tiles
+    /// scrolled down to `start` draws. Empty past the end. Under the tree's
+    /// own order this finds the file a word of the selection at a time,
+    /// some 15,000 words for a million nodes; under another sort it is an
+    /// index into the list.
+    #[must_use]
+    pub fn gallery_from(&self, start: usize) -> Gallery<'_> {
         let files = match self.listed() {
-            None => Files::InIdOrder(self.selection.as_bitset().ones()),
-            Some(list) => Files::Listed(list.iter()),
+            None => {
+                let set = self.selection.as_bitset();
+                // Past the end, the search starts past the last bit.
+                let at = bits::nth_one(set, start).unwrap_or(set.len());
+                Files::InIdOrder { set, at }
+            }
+            Some(list) => Files::Listed(list.get(start..).unwrap_or_default().iter()),
         };
         Gallery { files }
     }

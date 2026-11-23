@@ -325,8 +325,28 @@ fn other(c: &mut Criterion) {
             b.iter(|| explorer.gallery_position(black_box(last)));
         });
     }
-    // The first question after a click remakes the gallery list.
+    // A screen of tiles from the middle of the gallery: what the grid asks
+    // on every frame.
     explorer.select_all();
+    for (name, sort) in [
+        ("name sort", Sort::default()),
+        (
+            "type sort",
+            Sort {
+                key: SortKey::Type,
+                direction: Direction::Ascending,
+            },
+        ),
+    ] {
+        explorer.set_sort(sort);
+        group.bench_function(
+            format!("gallery tiles 500,000..500,040 of 1M, {name}"),
+            |b| {
+                b.iter(|| explorer.gallery_from(black_box(500_000)).take(40).count());
+            },
+        );
+    }
+    // The first question after a click remakes the gallery list.
     group.bench_function("click, then gallery position, 1M checked, type sort", |b| {
         b.iter(|| {
             explorer.toggle_check(black_box(first));

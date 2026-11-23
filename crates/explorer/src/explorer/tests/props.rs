@@ -303,6 +303,10 @@ proptest! {
         let got: Vec<NodeId> = explorer.gallery().collect();
         prop_assert_eq!(&got, &expected);
         prop_assert_eq!(explorer.gallery_len(), expected.len());
+        for start in 0..=expected.len() + 1 {
+            let from: Vec<NodeId> = explorer.gallery_from(start).collect();
+            prop_assert_eq!(&from[..], expected.get(start..).unwrap_or_default(), "{}", start);
+        }
         let mut all = Vec::new();
         naive_pre_order(&explorer, &order, NodeId::ROOT, &mut all);
         for (at, &node) in all.iter().enumerate() {
