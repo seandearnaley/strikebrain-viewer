@@ -613,6 +613,51 @@ fn a_rescan_leaves_focus_scroll_and_the_editor_alone(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn only_web_and_mail_links_open(cx: &mut TestAppContext) {
+    let urls = [
+        // Never opened: a file, an app's scheme, a relative path, script.
+        ("1.md", "file:///tmp/evil.command", false),
+        ("2.md", "vscode://file/tmp/evil", false),
+        ("3.md", "other.md", false),
+        ("4.md", "javascript:alert(1)", false),
+        ("5.md", "ftp://example.com/x", false),
+        // Opened in the browser or the mail app.
+        ("6.md", "https://example.com/a", true),
+        ("7.md", "HTTP://example.com/b", true),
+        ("8.md", "mailto:someone@example.com", true),
+    ];
+    let dir = tempfile::tempdir().unwrap();
+    for (name, url, _) in urls {
+        write(
+            dir.path(),
+            name,
+            format!("[a link long enough to click on]({url})\n"),
+        );
+    }
+    let (handle, view) = open_app(cx, Launch::Folder(dir.path().to_owned()));
+    for (name, url, opens) in urls {
+        let id = node(cx, &view, name);
+        show(cx, handle, id);
+        assert_eq!(shown(cx, handle), Some(Shown::Markdown(name.into())));
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            let column = window.find("stage-markdown").bounds();
+            // The link starts the text: the column's inset, then a word in.
+            let at = point(column.left() + px(60.), column.top() + px(36.));
+            crate::click_without_frame(window, at, cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        let opened = cx.opened_url();
+        if opens {
+            assert_eq!(opened.as_deref(), Some(url), "{url} opens");
+        } else {
+            assert_eq!(opened, None, "{url} must not open");
+        }
+    }
+}
+
+#[gpui_kit::test]
 fn the_tree_follows_the_stage_into_view(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     for ix in 0..60 {

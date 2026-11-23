@@ -10,6 +10,9 @@
 //! pointer is over the gutter, and their column is the gap that keeps the
 //! line numbers off the code.
 //!
+//! A link in the Markdown view opens only when it is a web or mail link
+//! (`http`, `https`, `mailto`); any other link does nothing.
+//!
 //! The Markdown view is the text view's own scrolling mode, which lays out
 //! only the blocks on screen: laying out every block each frame took 23 ms
 //! a frame at 86 KB and 0.6 s at 345 KB. The text keeps to a centred
@@ -23,9 +26,10 @@ use gpui_kit::component::Sizable as _;
 use gpui_kit::component::input::{Editor, EditorState};
 use gpui_kit::component::text::{TextView, TextViewState};
 use gpui_kit::{
-    App, AppContext as _, Context, Entity, IntoElement, ListOffset, ListState, ParentElement as _,
-    Pixels, Rems, Role, SharedString, StatefulInteractiveElement as _, Styled as _,
-    TestSupportExt as _, Window, div, point, prelude::*, px,
+    App, AppContext as _, ClickEvent, Context, Entity, IntoElement, ListOffset, ListState,
+    MouseButton, ParentElement as _, Pixels, Rems, Role, SharedString,
+    StatefulInteractiveElement as _, Styled as _, TestSupportExt as _, Window, div, point,
+    prelude::*, px,
 };
 
 use super::load::Stamp;
@@ -249,6 +253,7 @@ impl TextViews {
                 TextView::new(&self.markdown)
                     .scrollable(true)
                     .selectable(true)
+                    .on_link_click(open_link)
                     // In place of the language label the Kit puts in each
                     // code block's corner: the stage adds no words of its
                     // own.
@@ -262,6 +267,38 @@ impl TextViews {
     }
 }
 
+/// A click on a Markdown link: opens it as the Kit would by default, but
+/// only a web or mail link. A file can hold any URL, and a `file://` URL
+/// or an app's own scheme would open whatever it names, a script included.
+fn open_link(url: &SharedString, event: &ClickEvent, _: &mut Window, cx: &mut App) {
+    if is_activation(event) && is_web_or_mail(url) {
+        cx.open_url(url);
+    }
+}
+
+/// Whether a click activates a link: the clicks the Kit's own handler
+/// opens a link on.
+fn is_activation(event: &ClickEvent) -> bool {
+    match event {
+        ClickEvent::Mouse(click) => {
+            matches!(click.up.button, MouseButton::Left | MouseButton::Middle)
+        }
+        ClickEvent::Keyboard(_) => true,
+        ClickEvent::Touch(click) => !click.long_press,
+    }
+}
+
+/// Whether `url` is an `http`, `https` or `mailto` link, the scheme in any
+/// case.
+fn is_web_or_mail(url: &str) -> bool {
+    url.split_once(':').is_some_and(|(scheme, rest)| {
+        !rest.is_empty()
+            && ["http", "https", "mailto"]
+                .iter()
+                .any(|allowed| scheme.eq_ignore_ascii_case(allowed))
+    })
+}
+
 /// Moves a list's scroll offset by `delta` (negative is down the text),
 /// stopping at its top and its end.
 fn scroll_list(list: &ListState, delta: Pixels) {
@@ -273,8 +310,34 @@ fn scroll_list(list: &ListState, delta: Pixels) {
 
 #[cfg(test)]
 mod tests {
-    use super::{STEP, Scroll};
+    use super::{STEP, Scroll, is_web_or_mail};
     use gpui_kit::{Pixels, px};
+
+    #[test]
+    fn only_web_and_mail_links_are_opened() {
+        for url in [
+            "https://example.com",
+            "http://example.com/a?b",
+            "HTTPS://EXAMPLE.COM",
+            "mailto:someone@example.com",
+        ] {
+            assert!(is_web_or_mail(url), "{url}");
+        }
+        for url in [
+            "file:///Applications/Calculator.app",
+            "file:///tmp/x.command",
+            "vscode://file/etc/passwd",
+            "javascript:alert(1)",
+            "ftp://example.com",
+            "other.md",
+            "#heading",
+            "https:",
+            " https://example.com",
+            "",
+        ] {
+            assert!(!is_web_or_mail(url), "{url}");
+        }
+    }
 
     #[test]
     fn keys_scroll_by_a_step_or_a_page_and_stop_at_the_top() {
