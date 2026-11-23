@@ -5,12 +5,15 @@
 //! scan. Views read it in `render` and change it only through its methods,
 //! each of which notifies once.
 //!
-//! Scanning lives in `state/scan.rs`, filtering in `state/filter.rs`,
-//! following the folder on disk in `state/watch.rs`, and restoring a saved
-//! view in `state/restore.rs`.
+//! Moving over the rows lives in `state/rows.rs`, checks and the stage in
+//! `state/checks.rs`, scanning in `state/scan.rs`, filtering in
+//! `state/filter.rs`, following the folder on disk in `state/watch.rs`,
+//! and restoring a saved view in `state/restore.rs`.
 
+mod checks;
 mod filter;
 mod restore;
+mod rows;
 mod scan;
 mod watch;
 
@@ -18,7 +21,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use explorer::{Explorer, KindFilter, NodeId, SortKey, Tree};
+use explorer::{Explorer, KindFilter, NodeId, Tree};
 use gpui_kit::{Context, EventEmitter, Result, SharedString, Task};
 
 use crate::persist::{FolderView, SavedFolder, SnapshotView};
@@ -365,261 +368,6 @@ impl AppState {
         Some(self.explorer.as_ref()?.tree().name(id))
     }
 
-    // Rows
-
-    /// The row at `ix`, showing `id`, as the frame being drawn shows it.
-    pub(crate) fn drawn_row(&self, ix: usize, id: NodeId) -> DrawnRow {
-        DrawnRow {
-            tree: self.tree_generation,
-            ix,
-            id,
-        }
-    }
-
-    /// A press on a drawn row: focuses the row, then does `action` on it.
-    /// Does nothing and returns false when the row is no longer on screen
-    /// as it was drawn: the tree was replaced, or the rows changed under it.
-    pub(crate) fn row_action(
-        &mut self,
-        row: DrawnRow,
-        action: RowAction,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        let still_drawn = row.tree == self.tree_generation
-            && self
-                .explorer
-                .as_ref()
-                .is_some_and(|explorer| explorer.rows().get(row.ix) == Some(&row.id));
-        if !still_drawn {
-            return false;
-        }
-        self.set_focus(row.id, row.ix);
-        match action {
-            RowAction::Show => self.show(row.id, cx),
-            RowAction::ToggleCheck => self.toggle_check(row.id, cx),
-            RowAction::ToggleOpen => self.toggle_folder(row.id, cx),
-        }
-        cx.notify();
-        true
-    }
-
-    /// Moves keyboard focus; returns the new focus row.
-    pub(crate) fn move_focus(&mut self, motion: Motion, cx: &mut Context<Self>) -> Option<usize> {
-        let explorer = self.explorer.as_ref()?;
-        let last = explorer.rows().len().checked_sub(1)?;
-        let from = self.focus_index().unwrap_or(0);
-        let to = match motion {
-            Motion::Up(n) => from.saturating_sub(n),
-            Motion::Down(n) => from.saturating_add(n).min(last),
-            Motion::First => 0,
-            Motion::Last => last,
-        };
-        let id = explorer.rows()[to];
-        self.set_focus(id, to);
-        cx.notify();
-        Some(to)
-    }
-
-    /// → on the focus row: opens a closed folder, or focuses the first
-    /// child of an open one. Returns the new focus row.
-    pub fn expand(&mut self, cx: &mut Context<Self>) -> Option<usize> {
-        let row = self.focus_index()?;
-        let explorer = self.explorer.as_mut()?;
-        let id = explorer.rows()[row];
-        if !explorer.can_open(id) {
-            return Some(row);
-        }
-        if !explorer.is_open(id) {
-            explorer.set_open(id, true);
-            cx.notify();
-            return Some(row);
-        }
-        let child = explorer.rows().get(row + 1).copied();
-        match child {
-            Some(child) if explorer.tree().parent(child) == Some(id) => {
-                self.set_focus(child, row + 1);
-                cx.notify();
-                Some(row + 1)
-            }
-            _ => Some(row),
-        }
-    }
-
-    /// ← on the focus row: closes an open folder, or focuses the parent
-    /// folder. Returns the new focus row.
-    pub fn collapse(&mut self, cx: &mut Context<Self>) -> Option<usize> {
-        let row = self.focus_index()?;
-        let explorer = self.explorer.as_mut()?;
-        let id = explorer.rows()[row];
-        if explorer.can_open(id) && explorer.is_open(id) {
-            explorer.set_open(id, false);
-            cx.notify();
-            return Some(row);
-        }
-        let parent = explorer.tree().parent(id).filter(|&p| p != NodeId::ROOT);
-        let Some((parent, parent_row)) =
-            parent.and_then(|parent| Some((parent, explorer.row_of(parent)?)))
-        else {
-            return Some(row);
-        };
-        self.set_focus(parent, parent_row);
-        cx.notify();
-        Some(parent_row)
-    }
-
-    /// Opens or closes a folder: its chevron. Focus is already on it, and
-    /// the rows above it do not move.
-    fn toggle_folder(&mut self, id: NodeId, cx: &mut Context<Self>) {
-        if let Some(explorer) = self.explorer.as_mut() {
-            explorer.toggle_folder(id);
-            cx.notify();
-        }
-    }
-
-    /// Opens every folder: the toolbar's Expand all.
-    pub fn expand_all(&mut self, cx: &mut Context<Self>) {
-        if let Some(explorer) = self.explorer.as_mut() {
-            explorer.expand_all();
-            self.rows_replaced(cx);
-        }
-    }
-
-    /// Closes every folder: the toolbar's Collapse all. Focus inside a
-    /// folder moves to its top-level folder.
-    pub fn collapse_all(&mut self, cx: &mut Context<Self>) {
-        if let Some(explorer) = self.explorer.as_mut() {
-            explorer.collapse_all();
-            self.rows_replaced(cx);
-        }
-    }
-
-    /// A click on a column header: sorts by `key`, or flips the direction
-    /// when the tree is already sorted by it.
-    pub fn sort_by(&mut self, key: SortKey, cx: &mut Context<Self>) {
-        if let Some(explorer) = self.explorer.as_mut() {
-            let sort = explorer.sort().clicked(key);
-            explorer.set_sort(sort);
-            self.rows_replaced(cx);
-        }
-    }
-
-    // Checks and the stage
-
-    /// Toggles a checkbox and applies the rules for `current`: checking a
-    /// single file shows it; unchecking the file on the stage moves the stage
-    /// to the next checked file, else the previous one, else nothing; an
-    /// empty stage takes the first checked file.
-    fn toggle_check(&mut self, id: NodeId, cx: &mut Context<Self>) {
-        let Some(explorer) = self.explorer.as_mut() else {
-            return;
-        };
-        let current_was_checked = self.current.is_some_and(|c| explorer.is_selected(c));
-        explorer.toggle_check(id);
-
-        if explorer.tree().is_file(id) && explorer.is_selected(id) {
-            self.current = Some(id);
-        } else {
-            self.leave_unchecked_current(current_was_checked);
-        }
-        self.selection_changed();
-        cx.notify();
-    }
-
-    /// Checks every file the filter shows: the toolbar's Select all.
-    pub fn select_all(&mut self, cx: &mut Context<Self>) {
-        let Some(explorer) = self.explorer.as_mut() else {
-            return;
-        };
-        explorer.select_all();
-        self.selection_changed();
-        cx.notify();
-    }
-
-    /// Unchecks every file, hidden ones included: Clear.
-    pub fn clear_selection(&mut self, cx: &mut Context<Self>) {
-        let Some(explorer) = self.explorer.as_mut() else {
-            return;
-        };
-        let current_was_checked = self.current.is_some_and(|c| explorer.is_selected(c));
-        explorer.clear_selection();
-        self.leave_unchecked_current(current_was_checked);
-        self.selection_changed();
-        cx.notify();
-    }
-
-    /// Shows `id` on the stage if it is a file, checked or not. Does
-    /// nothing on a folder.
-    fn show(&mut self, id: NodeId, cx: &mut Context<Self>) {
-        let Some(explorer) = &self.explorer else {
-            return;
-        };
-        if explorer.tree().is_file(id) {
-            self.current = Some(id);
-            cx.notify();
-        }
-    }
-
-    /// → on the stage: the next gallery file. From a file that is not
-    /// checked, the first gallery file after it in display order. Stays
-    /// put at the end of the gallery, and with nothing on the stage.
-    pub fn show_next(&mut self, cx: &mut Context<Self>) {
-        self.step(true, cx);
-    }
-
-    /// ← on the stage: the previous gallery file. From a file that is not
-    /// checked, the last gallery file before it in display order.
-    pub fn show_previous(&mut self, cx: &mut Context<Self>) {
-        self.step(false, cx);
-    }
-
-    fn step(&mut self, forward: bool, cx: &mut Context<Self>) {
-        let (Some(explorer), Some(current)) = (&self.explorer, self.current) else {
-            return;
-        };
-        let to = if forward {
-            explorer.gallery_next(current)
-        } else {
-            explorer.gallery_previous(current)
-        };
-        if let Some(to) = to {
-            self.current = Some(to);
-            cx.emit(StateEvent::CurrentMoved);
-            cx.notify();
-        }
-    }
-
-    /// Space or Enter on the stage: starts the presentation of the file on
-    /// the stage. Does nothing with no file there.
-    pub fn start_presenting(&mut self, cx: &mut Context<Self>) {
-        if self.current.is_some() && !self.presenting {
-            self.presenting = true;
-            cx.notify();
-        }
-    }
-
-    /// Esc in the presentation: back to the explorer and the stage, on the
-    /// same file.
-    pub fn stop_presenting(&mut self, cx: &mut Context<Self>) {
-        if self.presenting {
-            self.presenting = false;
-            cx.notify();
-        }
-    }
-
-    /// Space on the focus row.
-    pub fn toggle_focus_check(&mut self, cx: &mut Context<Self>) {
-        if let Some(focus) = self.focus {
-            self.toggle_check(focus, cx);
-        }
-    }
-
-    /// Enter on the focus row.
-    pub fn show_focus(&mut self, cx: &mut Context<Self>) {
-        if let Some(focus) = self.focus {
-            self.show(focus, cx);
-        }
-    }
-
     // Shared steps
 
     /// Call whenever the tree on screen is replaced or removed.
@@ -630,78 +378,5 @@ impl AppState {
     fn set_focus(&mut self, id: NodeId, row: usize) {
         self.focus = Some(id);
         self.focus_row = row;
-    }
-
-    /// After checks were removed: a `current` that was checked and no
-    /// longer is moves to the next checked file, else the previous one,
-    /// else nothing.
-    fn leave_unchecked_current(&mut self, current_was_checked: bool) {
-        let Some(explorer) = &self.explorer else {
-            return;
-        };
-        if let Some(current) = self.current
-            && current_was_checked
-            && !explorer.is_selected(current)
-        {
-            self.current = explorer
-                .gallery_next(current)
-                .or_else(|| explorer.gallery_previous(current));
-        }
-    }
-
-    /// After any change to the checks: recount, and give an empty stage the
-    /// first checked file.
-    fn selection_changed(&mut self) {
-        let Some(explorer) = &self.explorer else {
-            self.selected = 0;
-            return;
-        };
-        self.selected = explorer.selection().count();
-        if self.current.is_none() {
-            self.current = explorer.gallery().next();
-        }
-    }
-
-    /// After a command rebuilt the rows: keep focus on a row and tell the
-    /// views.
-    fn rows_replaced(&mut self, cx: &mut Context<Self>) {
-        self.settle_focus();
-        cx.emit(StateEvent::RowsReplaced);
-        cx.notify();
-    }
-
-    /// Keeps `focus` on a row on screen after the rows changed. A focus row
-    /// that is gone moves to its deepest folder still on screen, else to
-    /// the first row. One pass over the rows, stopping at the focus row.
-    fn settle_focus(&mut self) {
-        let Some(explorer) = &self.explorer else {
-            return;
-        };
-        let rows = explorer.rows();
-        let Some(focus) = self.focus else {
-            self.focus = rows.first().copied();
-            self.focus_row = 0;
-            return;
-        };
-        if rows.get(self.focus_row) == Some(&focus) {
-            return;
-        }
-        let tree = explorer.tree();
-        let mut nearest = None;
-        for (row, &id) in rows.iter().enumerate() {
-            if id == focus {
-                self.focus_row = row;
-                return;
-            }
-            if tree.subtree(id).contains(&focus.index()) {
-                nearest = Some((row, id));
-            }
-        }
-        if let Some((row, id)) = nearest {
-            self.set_focus(id, row);
-        } else {
-            self.focus = rows.first().copied();
-            self.focus_row = 0;
-        }
     }
 }
