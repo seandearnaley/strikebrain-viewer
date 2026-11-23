@@ -1,6 +1,6 @@
 # Strikebrain Viewer design
 
-Status: design approved by Sean on 2026-11-22. Nothing is built yet.
+Status: design approved by Sean on 2026-11-22. Milestones 0 to 5 are built (2026-11-23); where the build settled a question the design left open, the section below says so.
 Companion page: https://claude.ai/artifact/4PaAcuEDiMKYJKyEFCpkD3
 
 ## Purpose
@@ -33,7 +33,8 @@ Platform: macOS on Apple silicon. GPUI also targets Windows and Linux. Nothing h
 | `memchr` | latest | Substring search for the filter. |
 | `fixedbitset` | 0.5 | Selection, expansion and visibility sets. |
 | `icu_collator` | 2 | Natural, case-insensitive name order. Matches brainstrike's `Intl.Collator(undefined, { numeric: true, sensitivity: "base" })`. |
-| `notify` 9, `directories` 6, `serde` 1, `serde_json` latest | | Milestone 5 only. |
+| `notify` 9, `directories` 6, `serde` 1, `serde_json` latest | | Milestone 5. No debouncer crate: the 150 ms window runs on GPUI's timer, which tests drive. |
+| `futures` 0.3 | | Milestone 5: the channel from the file watcher's thread into a GPUI task. GPUI exposes none and already builds this crate. |
 | `criterion` 0.8, `proptest` latest, `tempfile` latest | | Dev-dependencies of the engine. |
 
 Rules for every dependency:
@@ -47,17 +48,20 @@ Rules for every dependency:
 
 ```
 strikebrain-viewer/
-├─ Cargo.toml             workspace: pinned versions, lints, dev profile
+├─ Cargo.toml             workspace: pinned versions, lints, dev and release profiles
 ├─ rust-toolchain.toml
-├─ AGENTS.md
+├─ AGENTS.md, README.md
 ├─ docs/superpowers/specs/
 └─ crates/
    ├─ explorer/           library, no GPUI
    │  ├─ src/{tree,scan,selection,filter,sort,rows,content}.rs
+   │  ├─ src/scan/changes.rs   which changes on disk a rescan would show
    │  └─ benches/
    └─ viewer/             binary `strikebrain-viewer`
       ├─ src/{main,app,explorer_panel,stage,keys,theme}.rs
-      └─ tests/ui.rs
+      ├─ src/{persist,launch,menus}.rs, src/state/{scan,filter,restore,watch}.rs
+      ├─ bundle/          Info.plist template and icon source for `just bundle`
+      └─ tests/ui/*.rs, tests/shots.rs, tests/icon.rs
 ```
 
 `explorer` never depends on `gpui-kit`. Its tests must compile and run without building the UI stack.
@@ -200,10 +204,12 @@ Rules for `current`:
 
 ### Launch
 
-- `strikebrain-viewer <folder>` opens that folder.
-- With no argument it reopens the last folder (milestone 5) or shows the empty state.
-- ⌘O opens the system folder picker.
+- `strikebrain-viewer <folder>` opens that folder. It takes the saved view only if it is the folder saved (compared after canonicalizing).
+- With no argument it reopens the last folder with its saved view; if that folder no longer exists, or there is no usable saved state, it shows the empty state.
+- The window's bounds and the explorer's width are restored either way.
+- ⌘O opens the system folder picker. A folder given by the system ("Open With", or dropped on the Dock icon; the bundle declares `public.folder`) arrives as a `file://` URL and opens in place of the folder on screen.
 - The window title is the folder's name.
+- The menu bar: the app menu (About, Quit), File (Open Folder…), Edit (Undo, Redo, Cut, Copy, Paste, Select All, for the filter input and the code view), View (Present, Show Ignored with a check, Refresh) and Window (Minimize, Zoom). Present has its own unbound action, because a menu item shows its action's first key as a shortcut and `Present` is Space, which the menu would then take from the filter input. Open Folder is disabled while presenting, as ⌘O is ignored there.
 
 ### Explorer panel
 
@@ -323,6 +329,8 @@ The tree and its rows carry AccessKit roles, labels and checked state. Tests and
 
 Only these strings appear in the interface: "Filter" as the input placeholder, "All", "Images", "Text", "Name", "Size", "Type", "N selected", "Open Folder", tooltips on icon buttons, and operating system error messages. No taglines, no helper text.
 
+Milestone 5 adds the menu bar's items (named in Launch), the About alert ("Strikebrain Viewer", "Version N", "OK"), and the Refresh tooltip while the folder's changes are not followed: "Refresh. Changes on disk are not followed: " and the error.
+
 ## Left out on purpose
 
 From brainstrike: the tokens column and token indexing; the "This thread" column, thread presets and checkout header; attach to thread, export and split into parts; workspace tabs and the editor; the selection settings popover and selection cap; context actions; multiple roots; view filter presets, chips, glob lists and regex mode; lazy folder loading and its spinners; the 10,000-entry listing cap; the expand-all confirmation.
@@ -382,7 +390,7 @@ Each ends with something that runs and tests that hold it. Each gets its own imp
 | M2 Explorer panel | Rows, checkboxes, chevrons, keyboard, filter input, kind control, toolbar, sortable header, selection bar, theme, accessibility roles. | The ported behaviour tests pass and 1.65 M rows scroll at display rate. |
 | M3 Stage | Image, Markdown and code viewers, left and right, caches, preloading. | Flicking through 1,000 mixed files stays under a fixed memory ceiling recorded in the test. Done: the ceiling is 64 MB of growth over 989 steps; measured 5 to 6 MB (`tests/ui/flick.rs`). |
 | M4 Presentation | Fullscreen, keys, leave. | Entering and leaving keeps the current file and the window's prior fullscreen state. Done: `tests/ui/presentation.rs`. |
-| M5 Finish | Saved state, live refresh, a packaged `.app`. | Quitting and reopening returns the same view. |
+| M5 Finish | Saved state, live refresh, a packaged `.app`. | Quitting and reopening returns the same view. Done: `tests/ui/persist.rs` saves a real folder's view as the app runs and quits, launches a second app over the same state file, and compares every piece. |
 
 Milestone 0 detail:
 
@@ -392,6 +400,16 @@ Milestone 5 detail:
 
 - State is a JSON file in the platform config directory: root path, expanded paths, selected paths, query, kind, sort, first visible row, split width, window bounds. Paths are stored relative to the root.
 - Live refresh uses a recursive `notify` watcher with a 150 ms debounce. Any batch of events triggers a full background rescan and a tree swap that carries state across by path.
+
+As built:
+
+- **File.** `~/Library/Application Support/ai.brainstrike.viewer/state.json` on macOS (`directories`' config folder for the bundle identifier). `STRIKEBRAIN_VIEWER_STATE=<file>` points a run elsewhere. Fields: `version` (1), `root` (absolute, canonical), `show_ignored`, `expanded`, `selected` (`folders` and `files`), `current`, `query`, `kind`, `sort` (`key`, `direction`), `first_visible_row`, `explorer_width`, `window` (`state` windowed, maximized or fullscreen; `x`, `y`, `width`, `height` relative to its display; the display's UUID). A missing, unreadable, malformed or other-version file is ignored and the app starts fresh; it is replaced at the next save. Unusable values (a relative root, a non-positive size) are dropped.
+- **Checks, compactly.** A folder whose every file is checked is one entry under `folders` (the root is `""`); other checked files are listed under `files`. Select all over any tree saves as one entry. Restoring a folder entry checks every file in it at that time, including files added since. Measured (release, M4 Max): 100,000 checked files with no folder fully checked save as 3.96 MB in 22 ms on the background executor (names 12 ms, encoding 5 ms, writing 5 ms) and read back in 4 ms; all 100,000 checked save as 402 bytes. The UI thread copies two bit sets, under a microsecond at this size.
+- **First visible row** is stored by path, not index, so it survives files added above it. Restoring puts that row at the top of the tree and gives it keyboard focus. Under a Size sort it waits for sizes, which reorder the rows.
+- **When it saves.** Half a second after a change, at most once per half second (a change while a save waits rides along), and when the app quits. Closing the window quits, so that save runs with the window still there. A save copies the state on the UI thread and names, encodes and writes it on the background executor; saves land in the order they were taken, an unchanged state is not written again, and the file is written to a temporary name and renamed over the old one. Scrolling alone does not schedule a save; the next save or the quit records it.
+- **Restoring** happens in two steps: the filter and Show ignored apply before the first scan, so the first tree is already right; sort, open folders, checks, `current` and the top row apply when the scan lands. Window bounds go to the window when it opens, moved and shrunk onto the saved display's visible area, or the primary display's when that display is gone. A fullscreen the presentation made is saved as the window it came from.
+- **Live refresh.** The watcher (`notify`'s FSEvents backend; creations, removals and modifications, no reads) runs on its own thread and feeds a channel. A GPUI task waits for a change, gathers more for 150 ms on GPUI's timer, then asks `explorer::changes_matter`, off the UI thread, whether a new scan would show any of them: a path the tree lists matters; otherwise the first part of the path the tree lacks matters only if it still exists and the scan's own walker, with the same ignore rules, would list it. Changes inside `.git`, to `.DS_Store`, under ignored folders such as `target/` and `node_modules/`, and under the app's own state folder never rescan. Measured: 400 files written under an ignored `target/` and a log ignored at the top, over a second, caused no rescan; one new file in `src/` caused exactly one. A change while a scan runs asks for one more scan when it lands, never more. A watcher error, or a watcher that lost track with no path to name, rescans once. The watcher is replaced when the folder changes and dropped with the state. One that cannot start (the folder is missing, a watch limit) leaves the folder unfollowed and turns Refresh the warning colour, its tooltip giving the reason.
+- **Bundle.** `just bundle` builds the release profile (thin LTO, one codegen unit, debug info stripped, symbol names kept, panics unwind) and assembles `target/release/bundle/osx/Strikebrain Viewer.app` by hand, as the Kit's packaging guide does: the Info.plist template in `crates/viewer/bundle` with the version from Cargo, an `.icns` made with `sips` and `iconutil` from the 1024 px `icon.png` that `just icon` draws, and an ad-hoc signature. Measured on 2026-11-23: binary 26.1 MB (21.4 MB with symbol names stripped as well), bundle 25 MB; launching the bundled binary to its first on-screen window, 0.67 s the first time after a build and 0.20 s after.
 
 ## Functions Sean writes
 
@@ -415,6 +433,7 @@ Each is set up with its signature, doc comment and failing tests. Sean writes th
 - **Markdown on large files.** The text view lays out only the blocks on screen: 0.25 ms a frame at 4 KB to 345 KB. It measures every block once when a document opens: 28 ms at 4 KB, 41 ms at 86 KB, 0.21 s at 345 KB. Probe: `timing_the_markdown_view_on_large_documents`.
 - **Small scroll steps far down a very long list.** GPUI keeps a list's scroll offset in an `f32`: `uniform_list`, the Kit's `VirtualList`, and `list()`, whose `ListState` anchors on a row but adds each wheel delta to an absolute `f32` top. At 29 px a row, a delta under half the `f32` step is lost: from row 289,262 (2^23 px, step 1 px) sub-pixel deltas go; from row 578,525 (2^24 px, step 2 px) a 1 px delta goes and 3 px moves 4; from row 1,157,049 (2^25 px, step 4 px) everything under 2 px goes. Measured on the 1,650,231-row reference corpus as one flat list (M2, release, M4 Max): at the middle, 0.5 and 1 px moved nothing and 3 px moved 4; at the end, 0.5 and 1 px moved nothing, 3 px moved 4 and 10 px moved 8. Frame cost is not the problem: a scrolling frame took 0.66 to 0.69 ms median and at most 1.1 ms at the top, the middle and the end (frame build without GPU raster). So past about row 578,000 a slow trackpad scroll sticks while flicks, the wheel, the scrollbar and the keys still move. The fix is scroll state of our own (a row plus an offset inside it, or `f64`) with our own wheel handling and a scrollbar adapter, not a framework list; it is left out of M2. Probe: `cargo test --release -p viewer --test ui -- --ignored --nocapture timing_scrolling`.
 - **Cold build time** is unknown until milestone 0.
+- **Live refresh on very large folders.** Each change a scan would show rescans the whole folder, as decided. With Show ignored on, a busy folder the tree then shows (a build's `target/`) is rescanned back to back while it changes. On Linux, `notify` uses inotify, which watches every folder separately; a 1.65 M-entry tree would exceed default watch limits. Neither is handled. A change to `.git/info/exclude` or the global excludes does not rescan.
 
 ## References
 

@@ -28,6 +28,8 @@ Design: `docs/superpowers/specs/2026-11-22-strikebrain-viewer-design.md`.
 | Engine benchmarks against the budgets; not part of `check` (`EXPLORER_SCAN_ROOT=<large folder>` adds real scans) | `just bench [group]` |
 | Run the app | `just run` |
 | See the app without a window: key states as PNG images in `target/shots/` | `just shot` |
+| Release build wrapped as `target/release/bundle/osx/Strikebrain Viewer.app`, signed ad hoc | `just bundle` |
+| Redraw the icon source `crates/viewer/bundle/icon.png` from `tests/icon.rs` | `just icon` |
 | Engine tests | `cargo nextest run -p explorer` |
 | All tests | `cargo nextest run --workspace` |
 | One UI test | `cargo nextest run -p viewer --test ui <name>` |
@@ -41,6 +43,13 @@ Iterate on the narrowest check. Engine work needs only the engine tests.
 Lints live in the root `Cargo.toml` (`[workspace.lints]`, one comment per non-obvious choice) and `clippy.toml`. Tests may `unwrap` and `panic`; elsewhere return errors or use `expect("why it cannot fail")`. `std::thread::sleep` is banned: in tests, drive time with the GPUI executor's timer and clock.
 
 nextest reports a test as slow after 10 s and kills it after 30 s (`.config/nextest.toml`). A test that needs longer is a defect.
+
+## Saved state and live refresh
+
+- The app saves its state to `~/Library/Application Support/ai.brainstrike.viewer/state.json` (the platform config folder, through `directories`; `crates/viewer/src/persist.rs`). `STRIKEBRAIN_VIEWER_STATE=<file>` points a run elsewhere, for example `STRIKEBRAIN_VIEWER_STATE=/tmp/s.json just run`, so trying a build never touches your own state.
+- Tests never touch it: `AppView::new` saves nothing and follows nothing. Tests that save pass `Session { store: Some(StateStore::at(<temp>/state.json)), .. }` to `AppView::with_session`, or a store to `open_main_window`. The bundle identifier lives in `persist::APP_ID` and in `crates/viewer/bundle/Info.plist`; a unit test keeps them equal.
+- Saves are timed on GPUI's clock: in a test, `cx.executor().advance_clock(SAVE_DELAY)` then `run_until_parked` writes a pending save; `cx.quit()` runs the quit save.
+- Live refresh (`state/watch.rs`) is off unless `Session::watch` is set. Tests with a real watcher (`tests/ui/watch.rs`) call `cx.executor().allow_parking()`, since its thread wakes the app, and wait in real time with `until`. In such a test every executor timer costs up to 100 ms of real time (the test scheduler parks in 100 ms slices), so wait in few, long steps.
 
 ## Tools
 
@@ -69,6 +78,8 @@ Measured on 2026-11-23, Apple M4 Max (16 cores), Rust 1.100.0.
 | `just check`, warm, nothing changed | 3.4 s |
 | `just check` after touching both crates | 5.3 s |
 | `just lint` (the pre-commit hook), warm | 0.4 s |
+| `just bundle` after a debug build (thin LTO, one codegen unit) | 73 s |
+| `just check`, warm, nothing changed (2026-11-23, after milestone 5) | 13 s |
 
 On this machine, a step that takes several times longer than these is a defect. Stop and report it.
 
@@ -80,3 +91,11 @@ Not available. The trial on 2026-11-22 stopped before a live run:
 - `gpui-kit` 0.10.0 does not re-export that feature. Enabling it needs the Dioxus CLI and a direct `gpui-pre` dependency. The Rules forbid the direct dependency.
 
 Neither was added. Rebuild and restart instead.
+
+## Known gaps
+
+- The bundle is signed ad hoc (`codesign -s -`), for local use and for tools that find the app by bundle identifier. Distribution needs a Developer ID signature and notarization, which `just bundle` does not do.
+- Live refresh rescans the whole folder on any change a scan would show, as the design says. With Show ignored on, a busy folder the tree then shows (a build's `target/`) is rescanned back to back while it changes.
+- A change to `.git/info/exclude` or the global git excludes does not trigger a rescan; a `.gitignore` change does.
+- `just shot` draws offscreen. To see the real window, `just bundle`, launch the app, find its window id with `CGWindowListCopyWindowInfo` and run `screencapture -x -o -l <id> out.png`. While the screen is locked `screencapture` captures nothing.
+- The live-refresh tests wait on real file-system events, about 2 to 5 s each; they are the slowest in the suite.
