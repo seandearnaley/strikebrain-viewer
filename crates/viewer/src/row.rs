@@ -14,7 +14,10 @@
 
 use std::rc::Rc;
 
-use explorer::{Check, Kind, NodeId, RowView, format_size};
+use explorer::{
+    Check, Kind, NodeId, RowView, format_size, is_binary_extension, is_image_extension,
+};
+use gpui_kit::assets::IconName as AssetIcon;
 use gpui_kit::base::{Checkbox, CheckboxIndicator, CheckboxState, RoleOverride};
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, h_flex};
 use gpui_kit::{
@@ -397,7 +400,8 @@ impl TreeRow {
             )
     }
 
-    /// Folder, open folder, file or symlink, 16 px.
+    /// Folder, open folder, symlink, or a file by its kind, 16 px. Files
+    /// stay quiet, in the muted colour.
     fn icon(&self, cx: &App) -> Icon {
         let theme = cx.theme();
         match self.kind {
@@ -407,10 +411,42 @@ impl TreeRow {
                 IconName::Folder
             })
             .text_color(theme.info),
-            Kind::File => Icon::new(IconName::File).text_color(theme.muted_foreground),
-            Kind::Symlink => Icon::new(gpui_kit::assets::IconName::FileSymlink)
-                .text_color(theme.muted_foreground),
+            Kind::File => Icon::new(file_icon(&self.ext)).text_color(theme.muted_foreground),
+            Kind::Symlink => Icon::new(AssetIcon::FileSymlink).text_color(theme.muted_foreground),
         }
         .size_4()
+    }
+}
+
+/// A file's icon by its lowercase extension, in the kinds the stage tells
+/// apart: a picture, Markdown, other text or code, and anything else (a
+/// known binary format), as the Images and Text kinds sort them.
+fn file_icon(extension: &str) -> AssetIcon {
+    if is_image_extension(extension) {
+        AssetIcon::FileImage
+    } else if matches!(extension, "md" | "markdown") {
+        AssetIcon::FileText
+    } else if is_binary_extension(extension) {
+        AssetIcon::File
+    } else {
+        AssetIcon::FileCode
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::assets::IconName as AssetIcon;
+
+    use super::file_icon;
+
+    #[test]
+    fn a_file_icon_says_its_kind() {
+        assert_eq!(file_icon("png"), AssetIcon::FileImage);
+        assert_eq!(file_icon("svg"), AssetIcon::FileImage);
+        assert_eq!(file_icon("md"), AssetIcon::FileText);
+        assert_eq!(file_icon("rs"), AssetIcon::FileCode);
+        assert_eq!(file_icon("txt"), AssetIcon::FileCode);
+        assert_eq!(file_icon(""), AssetIcon::FileCode);
+        assert_eq!(file_icon("zip"), AssetIcon::File);
     }
 }
