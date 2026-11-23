@@ -178,14 +178,15 @@ async fn files_created_deleted_renamed_and_changed_on_disk_show(cx: &mut TestApp
         code(cx, handle).as_deref() == Some("first c")
     })
     .await;
-    // Checks carried across every rescan by path.
+    // Checks carried across every rescan by path; with every file checked,
+    // the files that appeared are checked too.
     assert_eq!(
         read(cx, &view, |state| state
             .explorer()
             .unwrap()
             .selected_paths()
             .collect::<Vec<_>>()),
-        ["c.txt"]
+        ["sub/moved.txt", "c.txt", "new.txt"]
     );
 }
 

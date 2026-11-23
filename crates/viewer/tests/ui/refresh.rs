@@ -10,9 +10,15 @@ use crate::{
 
 #[gpui_kit::test]
 fn refresh_shows_the_disk_and_keeps_checks_and_the_stage(cx: &mut TestAppContext) {
-    let dir = folder(&[("a.txt", "a"), ("b.txt", "b"), ("c.txt", "c")]);
+    // z.txt stays unchecked, so the folder is only partly checked.
+    let dir = folder(&[
+        ("a.txt", "a"),
+        ("b.txt", "b"),
+        ("c.txt", "c"),
+        ("z.txt", "z"),
+    ]);
     let (handle, view) = open_app(cx, Launch::Folder(dir.path().to_owned()));
-    assert_eq!(rows_now(cx, handle), ["a.txt", "b.txt", "c.txt"]);
+    assert_eq!(rows_now(cx, handle), ["a.txt", "b.txt", "c.txt", "z.txt"]);
     let ids = ["a.txt", "b.txt", "c.txt"].map(|path| node(cx, &view, path));
     cx.update_window(handle, |_, window, cx| {
         for id in ids {
@@ -28,7 +34,7 @@ fn refresh_shows_the_disk_and_keeps_checks_and_the_stage(cx: &mut TestAppContext
     write(dir.path(), "d.txt", "d");
     click(cx, handle, "refresh");
 
-    assert_eq!(rows_now(cx, handle), ["a.txt", "c.txt", "d.txt"]);
+    assert_eq!(rows_now(cx, handle), ["a.txt", "c.txt", "d.txt", "z.txt"]);
     let [a, c, d] = ["a.txt", "c.txt", "d.txt"].map(|path| node(cx, &view, path));
     cx.update_window(handle, |_, window, _| {
         assert_eq!(window.find(row(a)).checked(), Some(true));
@@ -39,6 +45,30 @@ fn refresh_shows_the_disk_and_keeps_checks_and_the_stage(cx: &mut TestAppContext
     // The deleted file's place on the stage goes to the next checked file.
     assert_eq!(current(cx, &view), Some(c));
     assert_eq!(read(cx, &view, AppState::selected_count), 2);
+}
+
+#[gpui_kit::test]
+fn a_file_added_to_a_fully_checked_folder_is_checked(cx: &mut TestAppContext) {
+    // As a saved state restores a fully checked folder: every file in it.
+    let dir = folder(&[("sub/a.txt", "a"), ("sub/b.txt", "b"), ("other.txt", "o")]);
+    let (handle, view) = open_app(cx, Launch::Folder(dir.path().to_owned()));
+    let sub = node(cx, &view, "sub");
+    cx.update_window(handle, |_, window, cx| {
+        window.within(row(sub)).click("check", cx);
+    })
+    .unwrap();
+    write(dir.path(), "sub/new.txt", "n");
+    write(dir.path(), "new.txt", "n");
+    click(cx, handle, "refresh");
+    let checked = read(cx, &view, |state| {
+        state
+            .explorer()
+            .unwrap()
+            .selected_paths()
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(checked, ["sub/a.txt", "sub/b.txt", "sub/new.txt"]);
+    assert_eq!(read(cx, &view, AppState::selected_count), 3);
 }
 
 #[gpui_kit::test]

@@ -79,36 +79,44 @@ impl ViewSnapshot {
     #[must_use]
     pub fn selection(&self) -> SavedSelection {
         let tree = &*self.tree;
-        let all = Visibility::all();
-        let check = |id| self.selection.check(tree, &all, id);
-        let mut saved = SavedSelection::default();
-        match check(NodeId::ROOT) {
-            Check::Off => return saved,
-            Check::On => {
-                saved.folders.push(String::new());
-                return saved;
-            }
-            Check::Mixed => {}
+        let (folders, files) = compact(tree, &self.selection);
+        SavedSelection {
+            folders: folders.into_iter().map(|id| tree.path(id)).collect(),
+            files: files.into_iter().map(|id| tree.path(id)).collect(),
         }
-        // Depth first, children pushed in reverse so the first comes off
-        // first: nodes leave the stack in id order. Only partly checked
-        // folders are opened.
-        let mut stack: Vec<NodeId> = tree.children(NodeId::ROOT).iter().rev().copied().collect();
-        while let Some(id) = stack.pop() {
-            if tree.is_file(id) {
-                if self.selection.is_selected(id) {
-                    saved.files.push(tree.path(id));
-                }
-                continue;
-            }
-            match check(id) {
-                Check::Off => {}
-                Check::On => saved.folders.push(tree.path(id)),
-                Check::Mixed => stack.extend(tree.children(id).iter().rev()),
-            }
-        }
-        saved
     }
+}
+
+/// The checks of `selection` compactly, in id order: the folders whose
+/// every file is checked, none inside another (the root alone when every
+/// file is), then the other checked files. Opens only partly checked
+/// folders.
+pub(super) fn compact(tree: &Tree, selection: &Selection) -> (Vec<NodeId>, Vec<NodeId>) {
+    let all = Visibility::all();
+    let check = |id| selection.check(tree, &all, id);
+    let (mut folders, mut files) = (Vec::new(), Vec::new());
+    match check(NodeId::ROOT) {
+        Check::Off => return (folders, files),
+        Check::On => return (vec![NodeId::ROOT], files),
+        Check::Mixed => {}
+    }
+    // Depth first, children pushed in reverse so the first comes off
+    // first: nodes leave the stack in id order.
+    let mut stack: Vec<NodeId> = tree.children(NodeId::ROOT).iter().rev().copied().collect();
+    while let Some(id) = stack.pop() {
+        if tree.is_file(id) {
+            if selection.is_selected(id) {
+                files.push(id);
+            }
+            continue;
+        }
+        match check(id) {
+            Check::Off => {}
+            Check::On => folders.push(id),
+            Check::Mixed => stack.extend(tree.children(id).iter().rev()),
+        }
+    }
+    (folders, files)
 }
 
 /// The stored open folders among `open`, as relative paths in id order.

@@ -353,10 +353,20 @@ impl Explorer {
     }
 
     /// Moves every piece of state to `tree` through `map`, and reruns the
-    /// filter asked for on it.
+    /// filter asked for on it. A folder whose every file was checked has
+    /// every file checked in the new tree, files added to it included, as
+    /// a saved state brings it back.
     fn install_tree(&mut self, tree: Arc<Tree>, map: &IdMap) {
         let n = tree.node_count();
-        self.selection = Selection::from_bits(&tree, map.carry(self.selection.as_bitset(), n));
+        let (full, _) = saved::compact(&self.tree, &self.selection);
+        let mut checked = map.carry(self.selection.as_bitset(), n);
+        for folder in full.into_iter().filter_map(|folder| map.get(folder)) {
+            if !tree.is_file(folder) {
+                checked.insert_range(tree.subtree(folder));
+            }
+        }
+        // Folder bits are dropped here, leaving the files.
+        self.selection = Selection::from_bits(&tree, checked);
         self.expanded = map.carry(&self.expanded, n);
         self.collapsed = map.carry(&self.collapsed, n);
         self.generation.fetch_add(1, Ordering::Relaxed);

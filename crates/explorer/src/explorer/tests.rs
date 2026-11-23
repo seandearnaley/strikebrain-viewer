@@ -423,6 +423,43 @@ fn replacing_the_tree_carries_checks_and_open_folders_by_path() {
 }
 
 #[test]
+fn a_rescan_checks_files_added_to_a_fully_checked_folder() {
+    // As a saved state restores a fully checked folder: every file in it.
+    let mut explorer = explorer(&["full/a.txt", "full/sub/b.txt", "part/c.txt", "part/d.txt"]);
+    explorer.toggle_check(id(&explorer, "full"));
+    explorer.toggle_check(id(&explorer, "part/c.txt"));
+    let new = Tree::from_paths(&[
+        "full/a.txt",
+        "full/sub/b.txt",
+        "full/sub/new.txt",
+        "full/new.txt",
+        "part/c.txt",
+        "part/d.txt",
+        "part/new.txt",
+    ])
+    .unwrap();
+    explorer.replace_tree(Arc::new(new));
+    let mut checked = gallery(&explorer);
+    checked.sort();
+    assert_eq!(
+        checked,
+        [
+            "full/a.txt",
+            "full/new.txt",
+            "full/sub/b.txt",
+            "full/sub/new.txt",
+            "part/c.txt"
+        ]
+    );
+
+    // Everything checked: a file added anywhere is checked too.
+    explorer.select_all();
+    let more = Tree::from_paths(&["full/a.txt", "part/c.txt", "elsewhere/e.txt"]).unwrap();
+    explorer.replace_tree(Arc::new(more));
+    assert_eq!(explorer.check(NodeId::ROOT), Check::On);
+}
+
+#[test]
 fn a_filter_result_for_the_old_tree_is_rejected() {
     let mut explorer = explorer(&SAMPLE);
     let stale = explorer.filter_job("md", KindFilter::All).run().unwrap();
@@ -669,19 +706,26 @@ fn the_file_on_the_stage_follows_its_path_or_the_nearest_surviving_gallery_file(
         key: SortKey::Name,
         direction: Direction::Descending,
     });
-    // An unchecked file goes to the next gallery file after it.
+    // An unchecked file goes to the next gallery file after it. `u`, new
+    // and never checked, keeps the root partly checked, so files that
+    // appear stay unchecked.
     assert_eq!(
-        replace(&mut view, "c.txt", &["a.txt", "b.txt", "d.txt", "e.txt"]).as_deref(),
+        replace(
+            &mut view,
+            "c.txt",
+            &["a.txt", "b.txt", "d.txt", "e.txt", "u.txt"]
+        )
+        .as_deref(),
         Some("b.txt")
     );
     // `d` is deleted with `b`: the next survivor after it is `a`.
     assert_eq!(
-        replace(&mut view, "d.txt", &["a.txt", "e.txt"]).as_deref(),
+        replace(&mut view, "d.txt", &["a.txt", "e.txt", "u.txt"]).as_deref(),
         Some("a.txt")
     );
     // Nothing after `a` survives: the last survivor before it.
     assert_eq!(
-        replace(&mut view, "a.txt", &["e.txt", "z.txt"]).as_deref(),
+        replace(&mut view, "a.txt", &["e.txt", "u.txt", "z.txt"]).as_deref(),
         Some("e.txt")
     );
     // No gallery file survives: `z` is not checked.

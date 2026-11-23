@@ -337,6 +337,7 @@ proptest! {
         explorer.set_filter(text, kind);
         let open: BTreeSet<String> = explorer.open_paths().collect();
         let checked: BTreeSet<String> = explorer.selected_paths().collect();
+        let full_folders = explorer.snapshot().selection().folders;
 
         explorer.replace_tree(Arc::new(tree_of(&new)));
         let tree = explorer.tree();
@@ -351,10 +352,19 @@ proptest! {
             explorer.open_paths().collect::<BTreeSet<_>>(),
             kept(&open, |kind| kind == Kind::Dir)
         );
-        prop_assert_eq!(
-            explorer.selected_paths().collect::<BTreeSet<_>>(),
-            kept(&checked, Kind::is_file)
-        );
+        // The checked files that are still files, and every file now in a
+        // folder that was fully checked, as a saved state restores it.
+        let mut expected = kept(&checked, Kind::is_file);
+        for folder in &full_folders {
+            let found = if folder.is_empty() { Some(NodeId::ROOT) } else { tree.find(folder) };
+            for id in found.filter(|&id| !tree.is_file(id)).map(|id| tree.subtree(id)).into_iter().flatten() {
+                let node = NodeId::from_index(id);
+                if tree.is_file(node) {
+                    expected.insert(tree.path(node));
+                }
+            }
+        }
+        prop_assert_eq!(explorer.selected_paths().collect::<BTreeSet<_>>(), expected);
         prop_assert_eq!(
             explorer.visibility(),
             &filter(tree, &Query::parse(text), kind)
