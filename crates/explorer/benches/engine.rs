@@ -72,6 +72,16 @@ fn listed(root: &Path, show_ignored: bool) -> Tree {
         .expect("EXPLORER_SCAN_ROOT names a readable folder")
 }
 
+/// A folder scanned and shown as the app shows it: its tree joined as the
+/// first folder of an explorer with none.
+fn shown(root: &Path, show_ignored: bool) -> Explorer {
+    let mut explorer = Explorer::empty();
+    explorer
+        .add_folder(&listed(root, show_ignored), 0, None)
+        .expect("the folder fits in a tree");
+    explorer
+}
+
 fn open(c: &mut Criterion) {
     let mut group = c.benchmark_group("open");
     let generated;
@@ -82,7 +92,7 @@ fn open(c: &mut Criterion) {
         generated.path().to_path_buf()
     };
     group.bench_function("scan and show, default rules", |b| {
-        b.iter(|| Explorer::new(Arc::new(listed(&small, false))));
+        b.iter(|| shown(&small, false));
     });
     group.bench_function("read sizes, default rules", |b| {
         b.iter_batched(
@@ -98,7 +108,7 @@ fn open(c: &mut Criterion) {
             .sampling_mode(SamplingMode::Flat)
             .measurement_time(Duration::from_secs(80));
         group.bench_function("scan and show, ignored shown", |b| {
-            b.iter(|| Explorer::new(Arc::new(listed(&root, true))));
+            b.iter(|| shown(&root, true));
         });
         group.bench_function("read sizes, ignored shown", |b| {
             b.iter_batched(
