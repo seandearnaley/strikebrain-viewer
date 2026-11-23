@@ -290,6 +290,17 @@ fn visible_file_counts_cover_any_id_range() {
 }
 
 #[test]
+fn visibilities_print_and_compare_by_what_they_show() {
+    let (tree, visibility) = run(&["a.txt", "b.txt"], "a", KindFilter::All);
+    let text = format!("{visibility:?}");
+    assert!(text.contains("visible: [0, 1]"), "{text}");
+    assert!(format!("{:?}", Visibility::all()).contains("active: false"));
+    assert_ne!(visibility, Visibility::all());
+    assert_ne!(Visibility::all(), visibility);
+    assert_eq!(tree.node_count(), 3);
+}
+
+#[test]
 fn a_universe_is_the_visible_set() {
     let (tree, visibility) = run(&["a.txt", "b.txt"], "a", KindFilter::All);
     let universe = visibility.universe().unwrap();

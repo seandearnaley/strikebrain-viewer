@@ -44,6 +44,15 @@ fn a_new_explorer_shows_the_top_level_closed() {
 }
 
 #[test]
+fn the_selection_and_gallery_print_briefly() {
+    let mut explorer = explorer(&SAMPLE);
+    explorer.toggle_check(id(&explorer, "top.txt"));
+    let top = id(&explorer, "top.txt").index();
+    assert!(format!("{:?}", explorer.selection()).contains(&format!("files: [{top}]")));
+    assert!(format!("{:?}", explorer.gallery()).starts_with("Gallery"));
+}
+
+#[test]
 fn the_chevron_opens_and_closes_a_folder() {
     let mut explorer = explorer(&SAMPLE);
     let docs = id(&explorer, "docs");
