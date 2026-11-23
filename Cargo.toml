@@ -69,3 +69,12 @@ split-debuginfo = "unpacked"
 # Every dependency runs optimized; our own crates stay in debug.
 [profile.dev.package."*"]
 opt-level = 3
+
+# What `just bundle` ships. Thin LTO and one codegen unit, as Zed's release
+# profile. Debug info goes but symbol names stay, so a panic's backtrace
+# still names its functions. Panics unwind, the default: GPUI Base catches
+# one in its text-selection scope to restore its state before resuming it.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"

@@ -51,6 +51,37 @@ run:
 shot:
     cargo test -p viewer --test shots
 
+# Draw the app icon into crates/viewer/bundle/icon.png, the source the
+# bundle's icon is made from. Run after changing tests/icon.rs.
+icon:
+    cargo test -p viewer --test icon
+
+# Build the release binary and wrap it in a macOS app, signed ad hoc:
+# target/release/bundle/osx/Strikebrain Viewer.app. The Info.plist template
+# and the icon live in crates/viewer/bundle; the version comes from Cargo.
+bundle:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build --release --locked -p viewer
+    version=$(cargo pkgid -p viewer | sed 's/.*[#@]//')
+    app="target/release/bundle/osx/Strikebrain Viewer.app"
+    rm -rf "$app"
+    mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+    cp target/release/strikebrain-viewer "$app/Contents/MacOS/"
+    sed "s/@VERSION@/$version/g" crates/viewer/bundle/Info.plist > "$app/Contents/Info.plist"
+    plutil -lint -s "$app/Contents/Info.plist"
+    iconset="$(mktemp -d)/AppIcon.iconset"
+    mkdir "$iconset"
+    for side in 16 32 128 256 512; do
+        sips -z "$side" "$side" crates/viewer/bundle/icon.png --out "$iconset/icon_${side}x${side}.png" > /dev/null
+        sips -z "$((side * 2))" "$((side * 2))" crates/viewer/bundle/icon.png --out "$iconset/icon_${side}x${side}@2x.png" > /dev/null
+    done
+    iconutil -c icns "$iconset" -o "$app/Contents/Resources/AppIcon.icns"
+    rm -r "$iconset"
+    codesign --force --deep -s - "$app"
+    codesign --verify --strict "$app"
+    echo "$app ($version)"
+
 # Install the pinned tools and the pre-commit hook. Needs cargo-binstall.
 setup:
     cargo binstall --no-confirm --locked just@1.59.0 typos-cli@1.52.2 cargo-nextest@0.9.152 cargo-llvm-cov@0.9.2 cargo-deny@0.22.0 cargo-shear@1.14.1 bacon@3.26.0
