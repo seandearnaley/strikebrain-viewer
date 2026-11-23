@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use proptest::prelude::*;
 
-use super::Explorer;
+use super::{Explorer, RowView};
 use crate::sort::DisplayOrder;
 use crate::tree::tests::{path_sets, tree_of};
-use crate::{Check, Direction, KindFilter, NodeId, Sort, SortKey, Tree};
+use crate::{Check, Direction, Kind, KindFilter, NodeId, Sort, SortKey, Tree};
 
 fn explorer(paths: &[&str]) -> Explorer {
     Explorer::new(Arc::new(Tree::from_paths(paths).unwrap()))
@@ -247,6 +247,120 @@ fn reveal_under_a_filter_reopens_closed_folders_and_skips_hidden_nodes() {
 }
 
 #[test]
+fn the_filter_asked_for_and_whether_one_is_shown() {
+    let mut explorer = explorer(&SAMPLE);
+    assert_eq!(explorer.filter_text(), "");
+    assert_eq!(explorer.filter_kind(), KindFilter::All);
+    assert!(!explorer.is_filter_active());
+    let job = explorer.filter_job("md ", KindFilter::Text);
+    // Asked for, not shown yet.
+    assert_eq!(explorer.filter_text(), "md ");
+    assert_eq!(explorer.filter_kind(), KindFilter::Text);
+    assert!(!explorer.is_filter_active());
+    assert!(explorer.apply_filter(job.run().unwrap()));
+    assert!(explorer.is_filter_active());
+    explorer.set_filter("", KindFilter::All);
+    assert_eq!(explorer.filter_text(), "");
+    assert!(!explorer.is_filter_active());
+}
+
+#[test]
+fn which_folders_can_open() {
+    use std::path::PathBuf;
+
+    use crate::tree::RawTree;
+
+    let mut explorer = explorer(&SAMPLE);
+    let (docs, deep, empty) = (
+        id(&explorer, "docs"),
+        id(&explorer, "docs/deep"),
+        id(&explorer, "empty"),
+    );
+    assert!(explorer.can_open(docs));
+    assert!(explorer.can_open(empty));
+    assert!(!explorer.can_open(id(&explorer, "top.txt")));
+    assert!(!explorer.can_open(NodeId::ROOT));
+    // "deep" shows `docs/deep` by its name alone: nothing below it to open.
+    explorer.set_filter("deep", KindFilter::All);
+    assert!(explorer.can_open(docs));
+    assert!(!explorer.can_open(deep));
+    assert!(!explorer.can_open(empty));
+
+    let mut raw = RawTree::new("root", true).unwrap();
+    let locked = raw.push(0, "locked", Kind::Dir).unwrap();
+    raw.set_kind(locked, Kind::Unreadable);
+    let tree = Arc::new(raw.build(PathBuf::from("/root")).unwrap());
+    let explorer = Explorer::new(tree);
+    assert!(!explorer.can_open(NodeId::new(1)));
+}
+
+#[test]
+fn set_open_opens_and_closes_and_ignores_what_cannot_open() {
+    let mut explorer = explorer(&SAMPLE);
+    let docs = id(&explorer, "docs");
+    explorer.set_open(docs, true);
+    explorer.set_open(docs, true);
+    assert!(explorer.is_open(docs));
+    assert_eq!(rows(&explorer)[..3], ["docs", "docs/deep", "docs/a.md"]);
+    explorer.set_open(id(&explorer, "top.txt"), true);
+    explorer.set_open(NodeId::ROOT, false);
+    assert_eq!(rows(&explorer).len(), 7);
+    explorer.set_open(docs, false);
+    assert_eq!(rows(&explorer), ["docs", "empty", "src", "top.txt"]);
+    // Under a filter it closes and reopens only what the filter opened.
+    explorer.set_filter("deep", KindFilter::All);
+    assert_eq!(rows(&explorer), ["docs", "docs/deep"]);
+    explorer.set_open(docs, false);
+    assert_eq!(rows(&explorer), ["docs"]);
+    explorer.set_open(docs, true);
+    explorer.set_open(id(&explorer, "docs/deep"), true);
+    assert_eq!(rows(&explorer), ["docs", "docs/deep"]);
+    // The stored open folders were not touched.
+    explorer.set_filter("", KindFilter::All);
+    assert_eq!(rows(&explorer), ["docs", "empty", "src", "top.txt"]);
+}
+
+#[test]
+fn a_row_view_holds_what_a_row_draws() {
+    let tree =
+        Tree::from_paths_with_sizes(&[("docs/a.md", 10), ("docs/b.MD", 5), ("top", 1)]).unwrap();
+    let mut explorer = Explorer::new(Arc::new(tree));
+    let docs = id(&explorer, "docs");
+    explorer.toggle_folder(docs);
+    explorer.toggle_check(id(&explorer, "docs/a.md"));
+    let folder = explorer.row(0).unwrap();
+    assert_eq!(
+        folder,
+        RowView {
+            id: docs,
+            depth: 1,
+            kind: Kind::Dir,
+            name: "docs",
+            check: Check::Mixed,
+            open: true,
+            can_open: true,
+            size: Some(15),
+            ext: "",
+        }
+    );
+    let file = explorer.row(2).unwrap();
+    assert_eq!(
+        (
+            file.name,
+            file.depth,
+            file.check,
+            file.open,
+            file.can_open,
+            file.size,
+            file.ext
+        ),
+        ("b.MD", 2, Check::Off, false, false, Some(5), "md")
+    );
+    assert_eq!(explorer.row(3).unwrap().ext, "");
+    assert_eq!(explorer.row(4), None);
+}
+
+#[test]
 fn a_stale_filter_result_is_rejected() {
     let mut explorer = explorer(&SAMPLE);
     let first = explorer.filter_job("md", KindFilter::All).run().unwrap();
@@ -368,7 +482,6 @@ fn replacing_the_tree_reruns_the_filter_last_asked_for() {
 fn a_size_sort_is_redone_when_sizes_arrive() {
     use std::path::PathBuf;
 
-    use crate::Kind;
     use crate::tree::RawTree;
 
     let mut raw = RawTree::new("root", false).unwrap();
@@ -393,7 +506,6 @@ fn a_size_sort_is_redone_when_sizes_arrive() {
 fn a_size_sort_catches_up_on_the_next_change_without_being_told() {
     use std::path::PathBuf;
 
-    use crate::Kind;
     use crate::tree::RawTree;
 
     let mut raw = RawTree::new("root", false).unwrap();

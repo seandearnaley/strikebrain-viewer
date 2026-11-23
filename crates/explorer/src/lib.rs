@@ -18,7 +18,7 @@ pub use content::{
     BINARY_EXTENSIONS, HEAD_LEN, IMAGE_EXTENSIONS, Viewer, format_size, is_binary_extension,
     is_image_extension, viewer_for,
 };
-pub use explorer::{Explorer, FilterJob, FilterResult, Gallery};
+pub use explorer::{Explorer, FilterJob, FilterResult, Gallery, RowView};
 pub use filter::{KindFilter, Query, Visibility, filter};
 pub use fixedbitset::FixedBitSet;
 pub use remap::IdMap;

@@ -20,11 +20,13 @@ use crate::{Check, Kind, KindFilter, NodeId, Query, Selection, Sort, Tree, Visib
 
 mod filtering;
 mod gallery;
+mod row;
 #[cfg(test)]
 mod tests;
 
 pub use filtering::{FilterJob, FilterResult};
 pub use gallery::Gallery;
+pub use row::RowView;
 
 /// A view of one tree: checks, open folders, filter, sort and rows.
 ///
@@ -124,24 +126,39 @@ impl Explorer {
         }
     }
 
-    /// The chevron: opens or closes a folder. Under an active filter this
-    /// only changes the filter's temporary state, and only for a folder the
-    /// filter opened. Files, unreadable folders and the root are ignored.
-    pub fn toggle_folder(&mut self, id: NodeId) {
-        self.catch_up();
+    /// Whether the folder has a chevron: a readable folder, or under an
+    /// active filter a folder with something visible below it. False for
+    /// the root, files, unreadable folders, and a folder the filter shows
+    /// only for its name. An empty folder can open, showing nothing.
+    #[must_use]
+    pub fn can_open(&self, id: NodeId) -> bool {
         if id == NodeId::ROOT {
+            false
+        } else if self.visibility.is_active() {
+            self.visibility.opens(id)
+        } else {
+            self.tree.kind(id) == Kind::Dir
+        }
+    }
+
+    /// The chevron: opens or closes a folder. See [`Explorer::set_open`].
+    pub fn toggle_folder(&mut self, id: NodeId) {
+        self.set_open(id, !self.is_open(id));
+    }
+
+    /// Opens or closes a folder that [`Explorer::can_open`]; anything else
+    /// is ignored. Under an active filter this changes only the filter's
+    /// temporary state, which lasts until the query or kind changes; the
+    /// stored open folders return when the filter clears.
+    pub fn set_open(&mut self, id: NodeId, open: bool) {
+        self.catch_up();
+        if !self.can_open(id) || self.is_open(id) == open {
             return;
         }
         if self.visibility.is_active() {
-            if !self.visibility.opens(id) {
-                return;
-            }
-            self.collapsed.toggle(id.index());
+            self.collapsed.set(id.index(), !open);
         } else {
-            if self.tree.kind(id) != Kind::Dir {
-                return;
-            }
-            self.expanded.toggle(id.index());
+            self.expanded.set(id.index(), open);
         }
         self.rebuild_rows();
     }
@@ -269,6 +286,26 @@ impl Explorer {
     #[must_use]
     pub fn visibility(&self) -> &Visibility {
         &self.visibility
+    }
+
+    /// The filter text last asked for, by [`Explorer::filter_job`] or
+    /// [`Explorer::set_filter`], exactly as typed. It may not be shown yet.
+    #[must_use]
+    pub fn filter_text(&self) -> &str {
+        &self.requested.0
+    }
+
+    /// The kind last asked for, alongside [`Explorer::filter_text`].
+    #[must_use]
+    pub fn filter_kind(&self) -> KindFilter {
+        self.requested.1
+    }
+
+    /// Whether the rows on screen are filtered: a query or a kind other
+    /// than [`KindFilter::All`] has been applied.
+    #[must_use]
+    pub fn is_filter_active(&self) -> bool {
+        self.visibility.is_active()
     }
 
     /// Switches to a new scan of the same folder, carrying the checks, the
