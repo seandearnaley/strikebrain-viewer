@@ -243,10 +243,22 @@ fn debug_output_summarises_the_tree() {
 }
 
 // Folder and file names share no entry, so random paths never conflict.
-const FOLDERS: [&str; 9] = [
-    "src", "Src", "src10", "src2", "Ä", "a b", ".hidden", "x.d", "SRC",
+// Some change byte length when lowercased: `İ` (2 bytes) becomes `i̇` (3),
+// `ẞ` (3) becomes `ß` (2), and the Kelvin sign `K` (3) becomes `k` (1).
+const FOLDERS: [&str; 11] = [
+    "src",
+    "Src",
+    "src10",
+    "src2",
+    "Ä",
+    "a b",
+    ".hidden",
+    "x.d",
+    "SRC",
+    "İstanbul",
+    "\u{212A}iln",
 ];
-const FILES: [&str; 11] = [
+const FILES: [&str; 14] = [
     "a.txt",
     "A.TXT",
     "b10.rs",
@@ -258,6 +270,9 @@ const FILES: [&str; 11] = [
     "e.md",
     "z",
     "f.tar.gz",
+    "STRAẞE.md",
+    "\u{212A}.PNG",
+    "İ.txt",
 ];
 
 /// Random relative paths with sizes: up to three folders, then a file or a

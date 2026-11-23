@@ -221,6 +221,28 @@ fn many_hits_in_a_row_and_far_apart_are_all_found() {
 }
 
 #[test]
+fn names_whose_lowercase_changes_length_match_at_the_right_node() {
+    let names = [
+        "\u{212A}elvin.txt",
+        "STRAẞE.md",
+        "İzmir/a.txt",
+        "zz-k.txt",
+        "plain",
+    ];
+    let (tree, visibility) = run(&names, "k", KindFilter::All);
+    assert_eq!(
+        visible(&tree, &visibility),
+        ["\u{212A}elvin.txt", "zz-k.txt"]
+    );
+    let (tree, visibility) = run(&names, "ẞe", KindFilter::All);
+    assert_eq!(visible(&tree, &visibility), ["STRAẞE.md"]);
+    let (tree, visibility) = run(&names, "i\u{307}z", KindFilter::All);
+    assert_eq!(visible(&tree, &visibility), ["İzmir"]);
+    let (tree, visibility) = run(&names, "-İ plain", KindFilter::All);
+    assert_eq!(visible(&tree, &visibility), ["plain"]);
+}
+
+#[test]
 fn a_cancelled_filter_gives_no_result() {
     let tree = Tree::from_paths(&["a.txt"]).unwrap();
     let query = Query::parse("a -b");
@@ -275,10 +297,12 @@ fn a_universe_is_the_visible_set() {
     assert!(!universe.contains(id(&tree, "b.txt").index()));
 }
 
-/// Terms that hit, miss, overlap and nest across the generated names.
-const TERMS: [&str; 26] = [
+/// Terms that hit, miss, overlap and nest across the generated names, some
+/// of them changing byte length when lowercased.
+const TERMS: [&str; 34] = [
     "src", "SRC", "s", "a", ".", "md", "é", "Ä", "b1", "b", "x", "e", "z", "readme", "1", "2",
-    "gz", ".git", "-", "q", "-src", "-a", "-md", "-.", "-e", "-x.d",
+    "gz", ".git", "-", "q", "-src", "-a", "-md", "-.", "-e", "-x.d", "İ", "i\u{307}", "ß", "ẞ",
+    "k", "\u{212A}", "-ß", "-k",
 ];
 
 fn queries() -> impl Strategy<Value = (String, KindFilter)> {
@@ -289,20 +313,43 @@ fn queries() -> impl Strategy<Value = (String, KindFilter)> {
         .prop_map(|(terms, kind)| (terms.join(" "), kind))
 }
 
+/// Lowercase one character at a time, as the oracle's own fold: it does
+/// not use the tree's lowercased names or the query's lowercased terms.
+fn fold(text: &str) -> String {
+    text.chars().flat_map(char::to_lowercase).collect()
+}
+
+/// The query's include and exclude terms, folded, by the grammar's words.
+fn folded_terms(text: &str) -> (Vec<String>, Vec<String>) {
+    let (mut include, mut exclude) = (Vec::new(), Vec::new());
+    for term in text.split_whitespace() {
+        match term.strip_prefix('-') {
+            Some(rest) if !rest.is_empty() => exclude.push(fold(rest)),
+            _ => include.push(fold(term)),
+        }
+    }
+    (include, exclude)
+}
+
+/// The extension of a folded name: after the last dot, unless the dot
+/// starts the name.
+fn extension(folded: &str) -> &str {
+    match folded.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() => ext,
+        _ => "",
+    }
+}
+
 fn contains_every(name: &str, terms: &[String]) -> bool {
     terms.iter().all(|term| name.contains(term.as_str()))
 }
 
 /// The node or a folder above it, below the root, names an exclude term.
-fn removed(tree: &Tree, query: &Query, node: NodeId) -> bool {
+fn removed(tree: &Tree, exclude: &[String], node: NodeId) -> bool {
     let mut current = node;
     while current != NodeId::ROOT {
-        let name = tree.lower_name(current);
-        if query
-            .exclude()
-            .iter()
-            .any(|term| name.contains(term.as_str()))
-        {
+        let name = fold(tree.name(current));
+        if exclude.iter().any(|term| name.contains(term.as_str())) {
             return true;
         }
         current = tree.parent(current).unwrap();
@@ -311,26 +358,27 @@ fn removed(tree: &Tree, query: &Query, node: NodeId) -> bool {
 }
 
 /// The filter's rules for one node, by recursion over its children.
-fn brute_visible(tree: &Tree, query: &Query, kind: KindFilter, node: NodeId) -> bool {
-    if query.is_empty() && kind == KindFilter::All {
+fn brute_visible(tree: &Tree, text: &str, kind: KindFilter, node: NodeId) -> bool {
+    let (include, exclude) = folded_terms(text);
+    if include.is_empty() && exclude.is_empty() && kind == KindFilter::All {
         return true;
     }
     let any_child = || {
         tree.children(node)
             .iter()
-            .any(|&child| brute_visible(tree, query, kind, child))
+            .any(|&child| brute_visible(tree, text, kind, child))
     };
     if node == NodeId::ROOT {
         return any_child();
     }
-    if removed(tree, query, node) {
+    if removed(tree, &exclude, node) {
         return false;
     }
-    let name = tree.lower_name(node);
+    let name = fold(tree.name(node));
     if tree.is_file(node) {
-        contains_every(name, query.include()) && kind.passes(tree.extension(node))
+        contains_every(&name, &include) && kind.passes(extension(&name))
     } else {
-        any_child() || (!query.include().is_empty() && contains_every(name, query.include()))
+        any_child() || (!include.is_empty() && contains_every(&name, &include))
     }
 }
 
@@ -342,10 +390,10 @@ proptest! {
         let visibility = filter(&tree, &query, kind);
         prop_assert_eq!(visibility.is_active(), !query.is_empty() || kind != KindFilter::All);
         for node in tree.ids() {
-            let expected = brute_visible(&tree, &query, kind, node);
+            let expected = brute_visible(&tree, &text, kind, node);
             prop_assert_eq!(visibility.is_visible(node), expected, "{:?}", tree.path(node));
             let opens = visibility.is_active()
-                && tree.children(node).iter().any(|&child| brute_visible(&tree, &query, kind, child));
+                && tree.children(node).iter().any(|&child| brute_visible(&tree, &text, kind, child));
             prop_assert_eq!(visibility.opens(node), opens, "{:?}", tree.path(node));
         }
     }

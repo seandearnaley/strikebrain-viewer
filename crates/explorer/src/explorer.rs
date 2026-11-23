@@ -117,10 +117,12 @@ impl Explorer {
     /// Whether the folder shows its children: under an active filter, when
     /// something below it is visible and it was not closed by hand;
     /// otherwise when the user opened it. Files and unreadable folders are
-    /// never open.
+    /// never open; the root, whose children are the top rows, always is.
     #[must_use]
     pub fn is_open(&self, id: NodeId) -> bool {
-        if self.visibility.is_active() {
+        if id == NodeId::ROOT {
+            true
+        } else if self.visibility.is_active() {
             self.visibility.opens(id) && !self.collapsed.contains(id.index())
         } else {
             self.tree.kind(id) == Kind::Dir && self.expanded.contains(id.index())
