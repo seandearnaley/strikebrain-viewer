@@ -6,6 +6,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use explorer::Tree;
 use gpui_kit::component::{Theme, ThemeMode};
@@ -89,6 +90,14 @@ fn save(
 ) -> PathBuf {
     cx.run_until_parked();
     cx.update(|cx| Theme::change(mode, None, cx));
+    // Let measured layout and springs (the kind control's pill) settle on
+    // the simulated clock.
+    for _ in 0..3 {
+        cx.update_window(handle, |_, window, cx| window.render_frame(cx))
+            .expect("draw a frame");
+        cx.advance_clock(Duration::from_millis(500));
+        cx.run_until_parked();
+    }
     cx.update_window(handle, |_, window, cx| window.render_frame(cx))
         .expect("draw a frame");
     let image = cx
@@ -103,6 +112,33 @@ fn fixture() -> Launch {
     Launch::Tree(Arc::new(
         Tree::from_paths_with_sizes(FIXTURE).expect("the fixture is a valid tree"),
     ))
+}
+
+/// Drags the divider to `x`.
+fn drag_divider(cx: &mut HeadlessAppContext, handle: AnyWindowHandle, x: f32) {
+    cx.update_window(handle, |_, window, cx| {
+        let pane = window.find("explorer-pane").bounds();
+        let y = pane.center().y;
+        window.drag(point(pane.right(), y), point(px(x), y), cx);
+    })
+    .expect("drag the divider");
+}
+
+/// Clicks into the filter and types `text`.
+fn type_query(cx: &mut HeadlessAppContext, handle: AnyWindowHandle, text: &str) {
+    cx.update_window(handle, |_, window, cx| {
+        window.click("filter", cx);
+        window.input(text, cx);
+    })
+    .expect("type into the filter");
+    cx.run_until_parked();
+}
+
+/// Clicks the element `id`.
+fn click(cx: &mut HeadlessAppContext, handle: AnyWindowHandle, id: &'static str) {
+    cx.update_window(handle, |_, window, cx| window.click(id, cx))
+        .expect("click");
+    cx.run_until_parked();
 }
 
 /// Drives the tree with keys so one frame shows every row state: open and
@@ -161,18 +197,51 @@ fn main() {
             &format!("tree-states-{suffix}"),
         ));
 
+        // 480 px: the Type column joins Size.
+        drag_divider(&mut cx, handle, 480.);
+        written.push(save(&mut cx, handle, mode, &dir, &format!("wide-{suffix}")));
+
+        // Sorted by size, largest first: two clicks on Size.
+        click(&mut cx, handle, "header-size");
+        click(&mut cx, handle, "header-size");
+        written.push(save(
+            &mut cx,
+            handle,
+            mode,
+            &dir,
+            &format!("sorted-size-{suffix}"),
+        ));
+
         // Narrower than 300 px: no Size column, names truncate.
-        cx.update_window(handle, |_, window, cx| {
-            let y = window.find("explorer-pane").bounds().center().y;
-            window.drag(point(px(300.), y), point(px(230.), y), cx);
-        })
-        .expect("drag the divider");
+        drag_divider(&mut cx, handle, 230.);
         written.push(save(
             &mut cx,
             handle,
             mode,
             &dir,
             &format!("narrow-{suffix}"),
+        ));
+
+        // A query that finds files inside closed folders: they show open.
+        let mut cx = context();
+        let (handle, _) = open(&mut cx, fixture());
+        type_query(&mut cx, handle, "svg");
+        written.push(save(
+            &mut cx,
+            handle,
+            mode,
+            &dir,
+            &format!("filter-{suffix}"),
+        ));
+
+        // A query with no match: the tree is blank.
+        type_query(&mut cx, handle, " zzz");
+        written.push(save(
+            &mut cx,
+            handle,
+            mode,
+            &dir,
+            &format!("filter-empty-{suffix}"),
         ));
 
         let mut cx = context();
