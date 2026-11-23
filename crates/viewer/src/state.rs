@@ -210,6 +210,12 @@ impl AppState {
         self.current
     }
 
+    /// The file on the stage with the tree it belongs to: while this stays
+    /// the same, so does what the stage shows.
+    pub(crate) fn staged(&self) -> (u64, Option<NodeId>) {
+        (self.tree_generation, self.current)
+    }
+
     /// The keyboard focus row's node.
     #[must_use]
     pub fn focus(&self) -> Option<NodeId> {

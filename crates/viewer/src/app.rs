@@ -1,11 +1,15 @@
 //! The root view: the explorer and the stage side by side, and keyboard
 //! focus moving between the panes: filter, tree, stage.
+//!
+//! Both panes are embedded as cached views: a frame reuses a pane's last
+//! drawing unless that pane notified, so a key in the tree never rebuilds
+//! the stage.
 
 use gpui_kit::component::{h_resizable, resizable_panel};
 use gpui_kit::{
     App, AppContext as _, Context, Entity, Focusable as _, IntoElement, ParentElement as _, Pixels,
-    Render, SharedString, Styled as _, Subscription, TestSupportExt as _, Window, div, prelude::*,
-    px,
+    Render, SharedString, StyleRefinement, Styled as _, Subscription, TestSupportExt as _, Window,
+    div, prelude::*, px,
 };
 
 use crate::explorer_panel::{ExplorerFocus, ExplorerPanel};
@@ -78,6 +82,13 @@ impl AppView {
     #[must_use]
     pub fn state(&self) -> &Entity<AppState> {
         &self.state
+    }
+
+    /// How many times the stage pane has rendered: a probe that tests use
+    /// to see that work in the explorer leaves the stage alone.
+    #[must_use]
+    pub fn stage_renders(&self, cx: &App) -> usize {
+        self.stage.read(cx).renders()
     }
 
     /// The title this view gave the window: the open folder's name.
@@ -162,6 +173,12 @@ impl AppView {
     }
 }
 
+/// The layout of a cached pane: it fills its side of the split. A cached
+/// view is laid out from this style instead of being measured.
+fn pane() -> StyleRefinement {
+    StyleRefinement::default().size_full()
+}
+
 impl Render for AppView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
@@ -182,7 +199,7 @@ impl Render for AppView {
                                     .id("explorer-pane")
                                     .test_support()
                                     .size_full()
-                                    .child(self.explorer.clone()),
+                                    .child(self.explorer.clone().cached(pane())),
                             ),
                     )
                     .child(
@@ -191,7 +208,7 @@ impl Render for AppView {
                                 .id("stage-pane")
                                 .test_support()
                                 .size_full()
-                                .child(self.stage.clone()),
+                                .child(self.stage.clone().cached(pane())),
                         ),
                     ),
             )

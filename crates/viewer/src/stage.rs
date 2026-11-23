@@ -3,6 +3,9 @@
 //! For now it shows only the current file's name, centred, so `current` is
 //! visible. Milestone 3 replaces this with the image, Markdown and code
 //! viewers. It takes keyboard focus in the [`STAGE`] key context.
+//!
+//! The root view embeds it cached, so it redraws only when it notifies:
+//! when the file it shows changes, not on every change to the state.
 
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::{
@@ -11,6 +14,8 @@ use gpui_kit::{
     Window, div, prelude::*,
 };
 
+use explorer::NodeId;
+
 use crate::keys::STAGE;
 use crate::state::AppState;
 
@@ -18,6 +23,10 @@ use crate::state::AppState;
 pub(crate) struct Stage {
     state: Entity<AppState>,
     focus_handle: FocusHandle,
+    /// What the stage last showed; it redraws only when this changes.
+    shown: (u64, Option<NodeId>),
+    /// How many times `render` ran: a probe for the view cache.
+    renders: usize,
     _observe: Subscription,
 }
 
@@ -35,17 +44,34 @@ impl Focusable for Stage {
 
 impl Stage {
     pub(crate) fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
-        let observe = cx.observe(&state, |_, _, cx| cx.notify());
+        // The state changes on every key in the tree; the stage redraws only
+        // when the file it shows does.
+        let observe = cx.observe(&state, |this, state, cx| {
+            let staged = state.read(cx).staged();
+            if staged != this.shown {
+                this.shown = staged;
+                cx.notify();
+            }
+        });
+        let shown = state.read(cx).staged();
         Self {
             state,
             focus_handle: cx.focus_handle(),
+            shown,
+            renders: 0,
             _observe: observe,
         }
+    }
+
+    /// How many times the stage has rendered.
+    pub(crate) fn renders(&self) -> usize {
+        self.renders
     }
 }
 
 impl Render for Stage {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.renders += 1;
         let state = self.state.read(cx);
         let name: Option<SharedString> = state
             .current()

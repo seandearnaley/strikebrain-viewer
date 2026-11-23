@@ -11,6 +11,7 @@ mod keyboard;
 mod launch;
 mod layout;
 mod races;
+mod redraw;
 mod refresh;
 mod rows;
 mod scale;
