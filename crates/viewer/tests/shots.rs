@@ -12,8 +12,8 @@ use explorer::Tree;
 use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::test::{TestEventExt as _, TestWindowExt as _};
 use gpui_kit::{
-    AnyWindowHandle, AppContext as _, Bounds, ElementId, Entity, HeadlessAppContext, ScrollDelta,
-    WindowBounds, WindowOptions, point, px, size,
+    AnyWindowHandle, AppContext as _, Bounds, ElementId, Entity, HeadlessAppContext, Pixels,
+    ScrollDelta, Size, WindowBounds, WindowOptions, point, px, size,
 };
 use viewer::{AppAssets, AppView, Launch, ScanStatus};
 
@@ -54,13 +54,21 @@ fn context() -> HeadlessAppContext {
 }
 
 fn open(cx: &mut HeadlessAppContext, launch: Launch) -> (AnyWindowHandle, Entity<AppView>) {
+    open_sized(cx, launch, size(px(900.), px(560.)))
+}
+
+fn open_sized(
+    cx: &mut HeadlessAppContext,
+    launch: Launch,
+    window_size: Size<Pixels>,
+) -> (AnyWindowHandle, Entity<AppView>) {
     let opened = cx
         .update(|cx| {
             gpui_kit::open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(Bounds {
                         origin: Default::default(),
-                        size: size(px(900.), px(560.)),
+                        size: window_size,
                     })),
                     focus: true,
                     show: false,
@@ -191,6 +199,184 @@ fn long_list() -> Launch {
         Tree::from_paths_with_sizes(&paths).expect("the names are distinct"),
     ))
 }
+
+/// One file of each kind the stage shows, in display order: a landscape
+/// photo, a portrait photo, an icon smaller than the stage, Markdown, Rust,
+/// a file of long lines and a binary file.
+fn stage_folder() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("a temporary folder");
+    let write = |name: &str, bytes: &[u8]| {
+        std::fs::write(dir.path().join(name), bytes).expect("write a stage file");
+    };
+    write("a-landscape.png", &photo(1600, 1000));
+    write("b-portrait.jpg", &photo_jpeg(900, 1400));
+    write("c-icon.png", &icon(32));
+    write("d-notes.md", MARKDOWN.as_bytes());
+    write("e-lib.rs", RUST.as_bytes());
+    let long: String = (0..60)
+        .map(|line| {
+            let mut text = format!("{line:03} ");
+            text.push_str(&"a long line that runs past the edge of the stage ".repeat(4));
+            text.push('\n');
+            text
+        })
+        .collect();
+    write("f-long-lines.txt", long.as_bytes());
+    write("g-archive.bin", &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    dir
+}
+
+/// A calm test picture: a dusk gradient with soft bands and a sun.
+fn picture(width: u32, height: u32) -> image::RgbImage {
+    image::RgbImage::from_fn(width, height, |x, y| {
+        let (fx, fy) = (x as f32 / width as f32, y as f32 / height as f32);
+        let sky = [
+            (0.10 + 0.55 * fy, 0.18 + 0.35 * fy, 0.42 - 0.12 * fy),
+            (0.98, 0.72, 0.45),
+        ];
+        let (cx, cy) = (0.68_f32, 0.58_f32);
+        let sun = ((fx - cx).powi(2) + ((fy - cy) * height as f32 / width as f32).powi(2)).sqrt();
+        let glow = (1. - (sun / 0.12)).clamp(0., 1.);
+        let hill = fy > 0.72 + 0.06 * (fx * 7.).sin();
+        let (r, g, b) = if hill {
+            (0.08 + 0.05 * fx, 0.13 + 0.05 * fy, 0.16)
+        } else {
+            let t = glow.powf(0.6);
+            (
+                sky[0].0 * (1. - t) + sky[1].0 * t,
+                sky[0].1 * (1. - t) + sky[1].1 * t,
+                sky[0].2 * (1. - t) + sky[1].2 * t,
+            )
+        };
+        let channel = |v: f32| (v.clamp(0., 1.) * 255.).round() as u8;
+        image::Rgb([channel(r), channel(g), channel(b)])
+    })
+}
+
+fn photo(width: u32, height: u32) -> Vec<u8> {
+    encode(
+        image::DynamicImage::ImageRgb8(picture(width, height)),
+        image::ImageFormat::Png,
+    )
+}
+
+fn photo_jpeg(width: u32, height: u32) -> Vec<u8> {
+    encode(
+        image::DynamicImage::ImageRgb8(picture(width, height)),
+        image::ImageFormat::Jpeg,
+    )
+}
+
+/// A small app icon: a rounded square with a mark in it.
+fn icon(side: u32) -> Vec<u8> {
+    let image = image::RgbaImage::from_fn(side, side, |x, y| {
+        let (fx, fy) = (x as f32 + 0.5, y as f32 + 0.5);
+        let half = side as f32 / 2.;
+        let corner = side as f32 * 0.22;
+        let (dx, dy) = (
+            (fx - half).abs() - (half - corner),
+            (fy - half).abs() - (half - corner),
+        );
+        let outside = dx.max(0.).hypot(dy.max(0.)) > corner;
+        if outside {
+            return image::Rgba([0, 0, 0, 0]);
+        }
+        let ring = ((fx - half).hypot(fy - half) - side as f32 * 0.24).abs() < side as f32 * 0.07;
+        if ring {
+            image::Rgba([255, 255, 255, 255])
+        } else {
+            image::Rgba([52, 110, 190, 255])
+        }
+    });
+    encode(
+        image::DynamicImage::ImageRgba8(image),
+        image::ImageFormat::Png,
+    )
+}
+
+fn encode(image: image::DynamicImage, format: image::ImageFormat) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    image
+        .write_to(&mut std::io::Cursor::new(&mut bytes), format)
+        .expect("encode the picture");
+    bytes
+}
+
+const MARKDOWN: &str = "# Field notes
+
+A short document to check the reading view: headings, a list, code and a table.
+Lines wrap inside a measure that stays readable on a wide stage.
+
+## Packing list
+
+- A notebook with *squared* paper
+- Two pencils, one **soft**
+- The `trail-map.pdf` printed at A4
+
+### Steps
+
+1. Check the forecast.
+2. Leave a note with the route.
+3. Start before sunrise.
+
+```rust
+fn main() {
+    let distance = 12.5; // kilometres
+    println!(\"{distance} km\");
+}
+```
+
+| Day | Distance | Climb |
+| --- | ---: | ---: |
+| Monday | 12.5 km | 640 m |
+| Tuesday | 8.0 km | 310 m |
+
+> The map is not the territory.
+";
+
+const RUST: &str = "//! A small module, to check the code view.
+
+use std::collections::HashMap;
+
+/// Counts how often each word appears.
+pub fn word_counts(text: &str) -> HashMap<&str, usize> {
+    let mut counts = HashMap::new();
+    for word in text.split_whitespace() {
+        *counts.entry(word).or_insert(0) += 1;
+    }
+    counts
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Trail {
+    pub name: String,
+    pub length_km: f32,
+    pub climb_m: u32,
+}
+
+impl Trail {
+    pub fn new(name: impl Into<String>, length_km: f32, climb_m: u32) -> Self {
+        Self { name: name.into(), length_km, climb_m }
+    }
+
+    /// Minutes at 4 km/h plus 10 minutes per 100 m of climb.
+    pub fn minutes(&self) -> u32 {
+        let walking = self.length_km / 4.0 * 60.0;
+        walking.round() as u32 + self.climb_m / 10
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn counts_repeated_words() {
+        let counts = word_counts(\"a b a\");
+        assert_eq!(counts[\"a\"], 2);
+    }
+}
+";
 
 /// Drags the divider to `x`.
 fn drag_divider(cx: &mut HeadlessAppContext, handle: AnyWindowHandle, x: f32) {
@@ -424,6 +610,56 @@ fn main() {
             mode,
             &dir,
             &format!("special-rows-{suffix}"),
+        ));
+
+        // The stage, one file of each kind, in a gallery of seven: the
+        // position shows under each.
+        let stage = stage_folder();
+        let mut cx = context();
+        let (handle, _) = open_sized(
+            &mut cx,
+            Launch::Folder(stage.path().to_owned()),
+            size(px(1200.), px(760.)),
+        );
+        click(&mut cx, handle, "select-all");
+        cx.update_window(handle, |_, window, cx| window.press("tab", cx))
+            .expect("focus the stage");
+        for name in [
+            "stage-landscape",
+            "stage-portrait",
+            "stage-icon",
+            "stage-markdown",
+            "stage-code",
+            "stage-long-lines",
+            "stage-unsupported",
+        ] {
+            written.push(save(
+                &mut cx,
+                handle,
+                mode,
+                &dir,
+                &format!("{name}-{suffix}"),
+            ));
+            cx.update_window(handle, |_, window, cx| window.press("right", cx))
+                .expect("next file");
+        }
+
+        // A file outside the gallery: no position.
+        let mut cx = context();
+        let (handle, view) = open_sized(
+            &mut cx,
+            Launch::Folder(stage.path().to_owned()),
+            size(px(1200.), px(760.)),
+        );
+        let rust = node(&mut cx, &view, "e-lib.rs");
+        cx.update_window(handle, |_, window, cx| window.click(rust, cx))
+            .expect("show a file");
+        written.push(save(
+            &mut cx,
+            handle,
+            mode,
+            &dir,
+            &format!("stage-peek-{suffix}"),
         ));
 
         let mut cx = context();
