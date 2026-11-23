@@ -18,7 +18,7 @@ Platform: macOS on Apple silicon. GPUI also targets Windows and Linux. Nothing h
 ## Settled decisions
 
 1. **GPUI through GPUI Kit.** `gpui-kit = "=0.10.0"`. The explorer tree is built directly on GPUI's `uniform_list`, not the Kit's `Tree`.
-2. **The gallery is a stage.** One file fills the right pane. No tile grid in version one.
+2. **The gallery is a stage.** One file fills the right pane. Milestone 7 adds a tile grid in front of it; see [Milestones 6 and 7](#milestones-6-and-7-several-folders-and-the-gallery).
 3. **Space depends on focus.** It toggles a checkbox in the tree and starts the presentation on the stage.
 4. **Filter terms are ANDed.** A file must contain every include term.
 5. **The filter block is small.** One text input and three kinds: All, Images, Text. No presets, chips, glob lists or regex mode.
@@ -256,7 +256,7 @@ States:
 - No rows after filtering: the tree area is blank.
 - The folder itself cannot be read: the operating system's error message, one line, in the tree area.
 
-Not in version one: column resizing, a column menu, context menus, multiple root folders, type-ahead.
+Not in version one: column resizing, a column menu, context menus, type-ahead. Multiple root folders arrive in milestone 6.
 
 ### Stage
 
@@ -342,11 +342,58 @@ Only these strings appear in the interface: "Filter" as the input placeholder, "
 
 Milestone 5 adds the menu bar's items (named in Launch), the About alert ("Strikebrain Viewer", "Version N", "OK"), and the Refresh tooltip while the folder's changes are not followed: "Refresh. Changes on disk are not followed: " and the error.
 
+## Milestones 6 and 7: several folders and the gallery
+
+Asked for on 2026-11-23, after the first run of the finished app: the window had no way to add or change folders as brainstrike does, and several checked files should show together as a gallery until one is opened. Where this section and an earlier one disagree, this section wins; each milestone rewrites the earlier sections it changes, so the document describes one app.
+
+### Milestone 6: several folders
+
+The explorer holds any number of folders, as brainstrike's workspace does.
+
+- **Tree.** Each folder is a top-level row, always, even when it is the only one. Folders keep the order they were added in; sorting applies inside each. A folder's row is a folder row like any other (chevron, checkbox, icon, name, size), named by the folder's last path component, open when added. Its tooltip is its full path, which tells two folders of one name apart.
+- **Engine.** One `Tree` still: ids stay depth-first pre-order and a subtree stays one contiguous range, so selection, filter, sort and rows keep their shape. A scan still reads one folder; the facade joins the scanned folders into the one tree. Adding, removing or rescanning one folder scans only that folder and carries checks, open folders, `current` and the top row across by absolute path. Live refresh rescans only the folder a change is in.
+- **Adding.** One action, Add Folder: a toolbar button left of Show ignored, ⌘O, File → Add Folder…, the button of the empty state, a folder dropped on the Dock icon or sent by "Open With", and every folder named on the command line. The system picker allows several folders at once. Adding never replaces what is open.
+- **Overlap.** A file is never in the tree twice. Adding a folder that is already open, or one inside an open folder, opens the tree to its row and focuses it. Adding a folder that contains open folders adds it and removes those, carrying their checks and open folders.
+- **Removing.** A folder's row shows a remove button at its right edge while hovered or focused, over the Size cell, with the tooltip "Remove Folder"; ⌘⌫ on a focused folder row does the same. Removing takes the folder's checks with it. Removing the last folder shows the empty state.
+- **Filter.** A folder with no match hides like any other folder row.
+- **Launch.** With folder arguments, exactly those folders open, taking the saved view of each one that was saved. With none, the saved folders reopen; one that no longer exists is dropped.
+- **Saved state.** The state file holds a list of folders, each with its own checks and open folders. A state file in the old one-folder format still loads, as one folder.
+- **Window title.** The folder's name with one folder open, the application's name otherwise.
+- **Copy.** "Open Folder" becomes "Add Folder" everywhere; "Remove Folder" is the one new tooltip.
+- **Budgets** hold for the joined tree. New: adding a folder of about 6,000 files to a tree of 1,000,000 entries shows its rows within 100 ms of the scan landing.
+
+### Milestone 7: the gallery
+
+The stage has two views: the gallery, a grid of the checked files, and the file view that fills the pane, which is the stage as built.
+
+- **Which shows.** Any change to the checked files shows the gallery when two or more are checked, the one file when one is, and a blank stage when none is. A click on a file row or Enter on it opens that file in the file view, checked or not, as before.
+- **Tiles**, in gallery order. An image tile is the image fitted inside the tile. A text, code or Markdown tile is the top of the file as plain text in the monospace font at 9 px, clipped to the tile, with no highlighting. A file the stage cannot show is its kind's icon. Under each tile, the file's name on one line, truncated. The tile of `current` has the accent background; the focused tile has the focus ring.
+- **Layout.** Columns fill the width: tiles at least 180 px wide, 4:3, 16 px apart and 16 px in from the pane's edges. The grid draws only the rows of tiles on screen.
+- **Loading.** Thumbnails and text heads load on the background executor, nearest the viewport first; work for a tile scrolled away is dropped. A thumbnail is decoded no larger than the tile at the display's scale and held in a cache with a byte budget; the file view's full-size cache is separate. A tile shows nothing until its content is ready: no spinner.
+- **Opening.** A click on a tile, or Enter on the focused tile, opens that file in the file view. ← and → then move through the gallery as before.
+- **Going back.** In the file view, Esc returns to the gallery when two or more files are checked, focused on the tile of the file that was showing and scrolled so it is on screen; otherwise Esc focuses the explorer as before. A grid button left of the position counter does the same, with the tooltip "Gallery".
+- **Presentation.** Space presents from either view: from the gallery it starts at the focused tile. Esc leaves to the view it started from.
+- **Saved state.** Which view shows is saved and restored with `current`.
+
+Keys in the gallery, a new `Gallery` key context:
+
+| Key | Gallery |
+| --- | --- |
+| ← → ↑ ↓ | Move focus by one tile |
+| Home, End | First tile, last tile |
+| Page Up, Page Down | Move focus by a screen of rows |
+| Enter | Open the focused tile |
+| Space | Present from the focused tile |
+| Esc | Focus the explorer |
+| ⌘F, ⌘O, Tab | As on the stage |
+
+Budgets: with 100,000 files checked the gallery draws its first frame within 16 ms of the stage being asked, and a scroll frame stays within the display's frame time; thumbnails never hold more than their byte budget.
+
 ## Left out on purpose
 
-From brainstrike: the tokens column and token indexing; the "This thread" column, thread presets and checkout header; attach to thread, export and split into parts; workspace tabs and the editor; the selection settings popover and selection cap; context actions; multiple roots; view filter presets, chips, glob lists and regex mode; lazy folder loading and its spinners; the 10,000-entry listing cap; the expand-all confirmation.
+From brainstrike: the tokens column and token indexing; the "This thread" column, thread presets and checkout header; attach to thread, export and split into parts; workspace tabs and the editor; the selection settings popover and selection cap; context actions; view filter presets, chips, glob lists and regex mode; lazy folder loading and its spinners; the 10,000-entry listing cap; the expand-all confirmation.
 
-From a typical image viewer: zoom and pan, a tile grid, HEIC, AVIF and RAW formats, editing of any kind.
+From a typical image viewer: zoom and pan, HEIC, AVIF and RAW formats, editing of any kind.
 
 ## Testing
 
