@@ -246,20 +246,23 @@ Not in version one: column resizing, a column menu, context menus, multiple root
 ### Stage
 
 - `Image`: GPUI's `img()` from the file path, scaled down to fit and never enlarged.
-- `Markdown`: the Kit's `TextView`, scrollable.
+- `Markdown`: the Kit's `TextView`, scrollable, in a centred column 720 px wide at most.
 - `Code`: the Kit's editor, read-only, with line numbers and `syntect` highlighting chosen by extension.
 - `Unsupported`: the file's name and size, centred and muted.
 - When `current` is in the gallery, a position such as "2 / 3" sits at the bottom centre.
 - A blank stage draws nothing.
 
+The stage reads the first 8 KB on the background executor and asks `viewer_for`. Only regular files are opened: a symlink to a FIFO or a device is `Unsupported`. A picture GPUI cannot decode shows as `Unsupported`. Until a read lands the stage keeps what it showed.
+
 Limits and caches:
 
-- Text files over 10 MB are `Unsupported`. Milestone 3 measures the editor and adjusts this number.
+- Text files over 10 MB are `Unsupported`. Milestone 3 measured the editor and kept 10 MB: see Risks.
 - Invalid UTF-8 is decoded lossily.
 - Decoded images live in a bounded least-recently-used `ImageCache` holding 8 images. Evicted images release their GPU texture.
 - The next and previous gallery images are preloaded through the same cache.
 - Loaded text is kept in a least-recently-used cache capped at 32 MB.
 - Every load carries the id it was started for. A result for a file that is no longer `current` or a neighbour is dropped.
+- Both caches remember each file's size and modification time: after a refresh a changed file is read again and an unchanged one keeps its decoded pixels, its text and its scroll position.
 
 ### Presentation
 
@@ -367,7 +370,7 @@ Each ends with something that runs and tests that hold it. Each gets its own imp
 | M0 Skeleton | Toolchain pin, workspace, lints, dev profile, `AGENTS.md`, Kit agent skills, a window with two resizable panes, a one-hour trial of GPUI's `hot-reload` feature. | The window opens, one headless UI test passes, and cold and warm build times are recorded in `AGENTS.md`. |
 | M1 Engine | Tree, scan, selection, filter, sort, rows, facade, `content`. | Property tests pass and benchmarks meet the budgets. |
 | M2 Explorer panel | Rows, checkboxes, chevrons, keyboard, filter input, kind control, toolbar, sortable header, selection bar, theme, accessibility roles. | The ported behaviour tests pass and 1.65 M rows scroll at display rate. |
-| M3 Stage | Image, Markdown and code viewers, left and right, caches, preloading. | Flicking through 1,000 mixed files stays under a fixed memory ceiling recorded in the test. |
+| M3 Stage | Image, Markdown and code viewers, left and right, caches, preloading. | Flicking through 1,000 mixed files stays under a fixed memory ceiling recorded in the test. Done: the ceiling is 64 MB of growth over 989 steps; measured 5 to 6 MB (`tests/ui/flick.rs`). |
 | M4 Presentation | Fullscreen, keys, leave. | Entering and leaving keeps the current file and the window's prior fullscreen state. |
 | M5 Finish | Saved state, live refresh, a packaged `.app`. | Quitting and reopening returns the same view. |
 
@@ -397,8 +400,9 @@ Each is set up with its signature, doc comment and failing tests. Sean writes th
 - **Nothing has been compiled.** Every API named here was checked against current docs and upstream source. Milestone 0 is the first contact with a compiler.
 - **Pre-1.0 dependencies.** The Kit went from 0.7 to 0.10 in six weeks. Versions are pinned exactly and upgraded on purpose.
 - **`gpui-pre` is a republish.** It is Zed's source, published by the Kit's maintainer and not by Zed. `Cargo.lock` and `cargo deny` guard against drift. A git dependency on `zed-industries/zed` is the fallback.
-- **Large photos.** GPUI decodes at full resolution; a 48-megapixel image is about 190 MB decoded. If milestone 3 measures a problem, the fix is a custom loader that decodes at display size.
-- **Editor on large files.** The Kit documents its editor as stable at 200,000 lines.
+- **Large photos.** GPUI decodes at full resolution. Measured in milestone 3 (release, M4 Max), an 8000 x 6000 picture decodes in 50 ms as a smooth PNG and 0.59 s as a grainy 44 MB JPEG, on the background executor, and holds 183 MB of pixels, plus as much again as a GPU texture while it is drawn; from the cache it draws in 3 to 5 ms. The 8-image cache can therefore hold some 1.5 GB of such photos, or about 740 MB of 24-megapixel ones. Not fixed in milestone 3. The fix is still a loader that decodes at display size, which needs the `image` crate as a runtime dependency and the GIF, WebP and SVG paths GPUI's loader already has; a byte budget on the cache next to its count is the smaller step. Probe: `timing_a_large_photo`.
+- **Editor on large files.** The Kit's 0.10.0 source documents the editor as handling about 50,000 lines. Measured in milestone 3 (release, M4 Max, 27-byte lines, test build): 0.5 MB reaches the screen 13 ms after the click and scrolls at 0.45 ms a frame; 5.5 MB (200,000 lines) 50 ms and 1.1 ms; 10 MB (360,000 lines) 0.1 s and 2.6 ms; one 4.8 MB line 85 ms and 0.5 ms. Highlighting arrives later from the background executor: 0.85 s, 7 s and 13 s. So the text limit stays at 10 MB. Two costs remain. The Kit's syntect backend parses a document of up to 64 KB at once on the UI thread, about 2.6 ms a KB: a 27 KB file takes 59 ms to show and a 62 KB file 164 ms, while a 68 KB file takes 5 ms; avoiding it means a highlighter of our own, with `syntect` as a direct dependency. And the editor copies its whole text into an accessibility value on every frame while an assistive technology is connected (always, in test builds): at 10 MB a test build grows by about 10 MB a frame until the allocator settles near 870 MB, which a release build without a screen reader does not do. Probe: `timing_the_code_view_on_large_files`.
+- **Markdown on large files.** The text view lays out only the blocks on screen: 0.25 ms a frame at 4 KB to 345 KB. It measures every block once when a document opens: 28 ms at 4 KB, 41 ms at 86 KB, 0.21 s at 345 KB. Probe: `timing_the_markdown_view_on_large_documents`.
 - **Small scroll steps far down a very long list.** GPUI keeps a list's scroll offset in an `f32`: `uniform_list`, the Kit's `VirtualList`, and `list()`, whose `ListState` anchors on a row but adds each wheel delta to an absolute `f32` top. At 29 px a row, a delta under half the `f32` step is lost: from row 289,262 (2^23 px, step 1 px) sub-pixel deltas go; from row 578,525 (2^24 px, step 2 px) a 1 px delta goes and 3 px moves 4; from row 1,157,049 (2^25 px, step 4 px) everything under 2 px goes. Measured on the 1,650,231-row reference corpus as one flat list (M2, release, M4 Max): at the middle, 0.5 and 1 px moved nothing and 3 px moved 4; at the end, 0.5 and 1 px moved nothing, 3 px moved 4 and 10 px moved 8. Frame cost is not the problem: a scrolling frame took 0.66 to 0.69 ms median and at most 1.1 ms at the top, the middle and the end (frame build without GPU raster). So past about row 578,000 a slow trackpad scroll sticks while flicks, the wheel, the scrollbar and the keys still move. The fix is scroll state of our own (a row plus an offset inside it, or `f64`) with our own wheel handling and a scrollbar adapter, not a framework list; it is left out of M2. Probe: `cargo test --release -p viewer --test ui -- --ignored --nocapture timing_scrolling`.
 - **Cold build time** is unknown until milestone 0.
 

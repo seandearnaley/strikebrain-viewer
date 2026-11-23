@@ -6,7 +6,8 @@
 //! it then reads the rest, up to [`TEXT_LIMIT`], and decodes it lossily.
 //! Only regular files are opened: a symlink to a FIFO, a device or a folder
 //! is unsupported, since opening a FIFO waits for a writer and reading a
-//! device may never end.
+//! device may never end. (The scan leaves FIFOs and devices out; a symlink
+//! is a leaf whatever it points to.)
 
 use std::fs::{self, File, Metadata};
 use std::io::{self, Read as _};
@@ -16,8 +17,10 @@ use std::time::SystemTime;
 use explorer::{HEAD_LEN, Viewer, viewer_for};
 use gpui_kit::SharedString;
 
-/// Text files larger than this are unsupported: 10 MB. The editor opens a
-/// file this size in about a second; see the design spec's Budgets.
+/// Text files larger than this are unsupported: 10 MB. Measured in
+/// milestone 3 (release, M4 Max): a 10 MB file of 360,000 lines reaches
+/// the screen in about 0.1 s and scrolls at 2.6 ms a frame; its colours
+/// follow some 13 s later from the background. See the spec's Risks.
 pub(crate) const TEXT_LIMIT: u64 = 10 * 1024 * 1024;
 
 /// What a file looked like when it was read: its size and when it last
@@ -259,5 +262,24 @@ mod tests {
             load(&dir.path().join("missing.md"), "missing.md", None),
             Loaded::Unsupported { len: None }
         );
+    }
+
+    #[test]
+    fn a_symlink_to_a_fifo_is_never_opened() {
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("pipe");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let link = dir.path().join("pipe.txt");
+        std::os::unix::fs::symlink(&fifo, &link).unwrap();
+        // Opening the FIFO for reading would wait for a writer forever.
+        assert_eq!(
+            load(&link, "pipe.txt", None),
+            Loaded::Unsupported { len: None }
+        );
+        assert_eq!(stamp(&link), None);
     }
 }

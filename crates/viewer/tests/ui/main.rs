@@ -6,6 +6,7 @@
 
 mod checks;
 mod filter;
+mod flick;
 mod header;
 mod keyboard;
 mod launch;
