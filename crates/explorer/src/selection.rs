@@ -80,6 +80,14 @@ impl Selection {
         }
     }
 
+    /// A selection of the files among `bits`, one bit per node of `tree`.
+    /// Folder bits are dropped.
+    pub(crate) fn from_bits(tree: &Tree, mut bits: FixedBitSet) -> Self {
+        assert_eq!(bits.len(), tree.node_count(), "one bit per node");
+        bits.intersect_with(tree.files());
+        Self { bits }
+    }
+
     /// Whether the file `id` is selected. Always false for a folder.
     #[must_use]
     pub fn is_selected(&self, id: NodeId) -> bool {

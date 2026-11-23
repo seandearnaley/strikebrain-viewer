@@ -8,9 +8,9 @@
 //! follow natural name order among siblings of the same kind.
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
-use std::num::NonZeroUsize;
+use std::collections::{HashMap, HashSet};
 
+use crate::parallel::sort_each;
 use crate::{NodeId, Tree, compare_names};
 
 /// The column a view sorts by.
@@ -217,15 +217,15 @@ fn keys(tree: &Tree, key: SortKey, sizes: Option<&[u64]>) -> Vec<u64> {
 /// collected from the names.
 fn type_keys(tree: &Tree) -> Vec<u64> {
     let table = tree.extensions();
-    let mut extra: HashMap<&str, u64> = HashMap::new();
+    let mut extra: HashSet<&str> = HashSet::new();
     for file in tree.files().ones() {
         let id = NodeId::from_index(file);
         if tree.ext_id(id) == 0 && !tree.extension(id).is_empty() {
-            extra.insert(tree.extension(id), 0);
+            extra.insert(tree.extension(id));
         }
     }
     let mut all: Vec<&str> = table.iter().map(|ext| &**ext).collect();
-    all.extend(extra.keys());
+    all.extend(extra);
     all.sort_unstable_by(|a, b| compare_names(a, b));
     let position: HashMap<&str, u64> = all.iter().zip(0..).map(|(&ext, at)| (ext, at)).collect();
     let by_id: Vec<u64> = table.iter().map(|ext| position[&**ext]).collect();
@@ -256,39 +256,6 @@ fn pre_order(tree: &Tree, children: &[NodeId]) -> Vec<NodeId> {
         }
     }
     order
-}
-
-/// Elements to sort before a second thread is worth starting.
-const PARALLEL_SORT_MIN: usize = 1 << 14;
-
-/// Sorts each slice by `compare`. Slices are independent, so large
-/// workloads spread over threads in contiguous runs of about equal length.
-pub(crate) fn sort_each<T: Send>(
-    slices: Vec<&mut [T]>,
-    compare: &(impl Fn(&T, &T) -> Ordering + Sync),
-) {
-    let total: usize = slices.iter().map(|slice| slice.len()).sum();
-    let threads = std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
-    let run_len = total.div_ceil(threads).max(PARALLEL_SORT_MIN);
-    let sort_run = |run: Vec<&mut [T]>| {
-        for slice in run {
-            slice.sort_unstable_by(compare);
-        }
-    };
-    std::thread::scope(|scope| {
-        let mut run = Vec::new();
-        let mut run_size = 0;
-        for slice in slices {
-            run_size += slice.len();
-            run.push(slice);
-            if run_size >= run_len {
-                let full = std::mem::take(&mut run);
-                run_size = 0;
-                scope.spawn(move || sort_run(full));
-            }
-        }
-        sort_run(run);
-    });
 }
 
 #[cfg(test)]

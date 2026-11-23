@@ -274,13 +274,7 @@ impl Explorer {
     pub fn replace_tree(&mut self, tree: Arc<Tree>) -> IdMap {
         let map = IdMap::new(&self.tree, &tree);
         let n = tree.node_count();
-        let mut selection = Selection::new(&tree);
-        for old in self.selection.iter() {
-            if let Some(new) = map.get(old) {
-                selection.set_file(&tree, new, true);
-            }
-        }
-        self.selection = selection;
+        self.selection = Selection::from_bits(&tree, map.carry(self.selection.as_bitset(), n));
         self.expanded = map.carry(&self.expanded, n);
         self.collapsed = map.carry(&self.collapsed, n);
         self.generation.fetch_add(1, Ordering::Relaxed);

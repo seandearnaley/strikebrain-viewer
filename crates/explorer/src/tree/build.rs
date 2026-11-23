@@ -14,7 +14,7 @@ use fixedbitset::FixedBitSet;
 use super::names::{NameArena, extension_of};
 use super::{Kind, Tree, TreeError, canonical_order, to_u32};
 use crate::NodeId;
-use crate::sort::sort_each;
+use crate::parallel::sort_each;
 
 /// The parent of the root, and of nodes the tree should drop.
 pub(crate) const NO_PARENT: u32 = u32::MAX;

@@ -6,6 +6,7 @@ mod bits;
 mod content;
 mod explorer;
 mod filter;
+mod parallel;
 mod remap;
 mod rows;
 mod scan;
