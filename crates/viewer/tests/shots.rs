@@ -10,12 +10,12 @@ use std::time::Duration;
 
 use explorer::Tree;
 use gpui_kit::component::{Theme, ThemeMode};
-use gpui_kit::test::TestWindowExt as _;
+use gpui_kit::test::{TestEventExt as _, TestWindowExt as _};
 use gpui_kit::{
-    AnyWindowHandle, AppContext as _, Bounds, Entity, HeadlessAppContext, WindowBounds,
-    WindowOptions, point, px, size,
+    AnyWindowHandle, AppContext as _, Bounds, ElementId, Entity, HeadlessAppContext, ScrollDelta,
+    WindowBounds, WindowOptions, point, px, size,
 };
-use viewer::{AppAssets, AppView, Launch};
+use viewer::{AppAssets, AppView, Launch, ScanStatus};
 
 /// A small project with nested folders, sizes and a long name.
 const FIXTURE: &[(&str, u64)] = &[
@@ -98,6 +98,19 @@ fn save(
         cx.advance_clock(Duration::from_millis(500));
         cx.run_until_parked();
     }
+    capture(cx, handle, mode, dir, name)
+}
+
+/// Draws one frame in `mode` and writes it, running no task first: for a
+/// state that the next task would end, such as a scan in progress.
+fn capture(
+    cx: &mut HeadlessAppContext,
+    handle: AnyWindowHandle,
+    mode: ThemeMode,
+    dir: &Path,
+    name: &str,
+) -> PathBuf {
+    cx.update(|cx| Theme::change(mode, None, cx));
     cx.update_window(handle, |_, window, cx| window.render_frame(cx))
         .expect("draw a frame");
     let image = cx
@@ -108,9 +121,74 @@ fn save(
     path
 }
 
+/// The node at `path` in the tree on screen.
+fn node(cx: &mut HeadlessAppContext, view: &Entity<AppView>, path: &str) -> ElementId {
+    let id = cx.update(|cx| {
+        let state = view.read(cx).state().read(cx);
+        let explorer = state.explorer().expect("a tree is on screen");
+        explorer.tree().find(path).expect("the path is in the tree")
+    });
+    ("row", id.index()).into()
+}
+
+/// A temporary folder holding `files`, each with its text.
+fn folder(files: &[(&str, &str)]) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("a temporary folder");
+    for (path, text) in files {
+        let path = dir.path().join(path);
+        std::fs::create_dir_all(path.parent().expect("a file has a folder"))
+            .expect("make the file's folder");
+        std::fs::write(path, text).expect("write the file");
+    }
+    dir
+}
+
+/// Sets a folder's permissions: 0o000 makes it unreadable.
+fn chmod(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+        .expect("set the folder's permissions");
+}
+
+/// Starts opening `root` and stops while the scan is still running but has
+/// run for 200 ms: the simulated clock moves past 200 ms before any task
+/// runs, the expired timer runs alone, then the foreground tasks in spawn
+/// order until the slow mark, which comes before the task that starts the
+/// scan job.
+fn open_slowly(cx: &mut HeadlessAppContext, view: &Entity<AppView>, root: PathBuf) {
+    let state = cx.update(|cx| view.read(cx).state().clone());
+    cx.update(|cx| state.update(cx, |state, cx| state.open_folder(root, cx)));
+    let executor = cx.background_executor.clone();
+    let dispatcher = executor
+        .dispatcher()
+        .as_test()
+        .expect("the headless app runs on the test scheduler");
+    dispatcher
+        .scheduler()
+        .clock()
+        .advance(Duration::from_millis(200));
+    while dispatcher.tick(true) {}
+    let slow = |cx: &mut HeadlessAppContext| {
+        cx.update(|cx| *state.read(cx).status() == ScanStatus::Scanning { slow: true })
+    };
+    while !slow(cx) && dispatcher.tick(false) {}
+    assert!(slow(cx), "the scan shows its progress bar");
+}
+
 fn fixture() -> Launch {
     Launch::Tree(Arc::new(
         Tree::from_paths_with_sizes(FIXTURE).expect("the fixture is a valid tree"),
+    ))
+}
+
+/// 300 files with sizes from bytes to megabytes.
+fn long_list() -> Launch {
+    let owned: Vec<(String, u64)> = (0..300_u64)
+        .map(|i| (format!("frame-{i:03}.png"), 1 + i * i * i * 97))
+        .collect();
+    let paths: Vec<(&str, u64)> = owned.iter().map(|(p, s)| (p.as_str(), *s)).collect();
+    Launch::Tree(Arc::new(
+        Tree::from_paths_with_sizes(&paths).expect("the names are distinct"),
     ))
 }
 
@@ -242,6 +320,110 @@ fn main() {
             mode,
             &dir,
             &format!("filter-empty-{suffix}"),
+        ));
+
+        // Keyboard focus on a file row: the ring, on a row that is not
+        // current.
+        let mut cx = context();
+        let (handle, _) = open(&mut cx, fixture());
+        cx.update_window(handle, |_, window, cx| {
+            for key in ["end", "up", "up"] {
+                window.press(key, cx);
+            }
+        })
+        .expect("drive the tree");
+        written.push(save(
+            &mut cx,
+            handle,
+            mode,
+            &dir,
+            &format!("focus-file-{suffix}"),
+        ));
+
+        // The pointer over a row that is not current.
+        let mut cx = context();
+        let (handle, view) = open(&mut cx, fixture());
+        let docs = node(&mut cx, &view, "docs");
+        cx.update_window(handle, |_, window, cx| window.hover(docs, cx))
+            .expect("hover a row");
+        written.push(save(
+            &mut cx,
+            handle,
+            mode,
+            &dir,
+            &format!("hover-{suffix}"),
+        ));
+
+        // A long list scrolled to its middle, the pointer on the overlay
+        // scrollbar so it shows: it must not cover the sizes.
+        let mut cx = context();
+        let (handle, _) = open(&mut cx, long_list());
+        cx.update_window(handle, |_, window, cx| {
+            window.scroll("tree", ScrollDelta::Pixels(point(px(0.), px(-2_900.))), cx);
+            let tree = window.find("tree").bounds();
+            window.pointer_move(point(tree.right() - px(8.), tree.center().y), None, cx);
+        })
+        .expect("scroll the tree");
+        written.push(save(
+            &mut cx,
+            handle,
+            mode,
+            &dir,
+            &format!("long-scrolled-{suffix}"),
+        ));
+
+        // A folder scanning for more than 200 ms: the progress bar under
+        // the toolbar.
+        let mut cx = context();
+        let (handle, view) = open(&mut cx, Launch::Empty);
+        open_slowly(
+            &mut cx,
+            &view,
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixture"),
+        );
+        written.push(capture(
+            &mut cx,
+            handle,
+            mode,
+            &dir,
+            &format!("scanning-{suffix}"),
+        ));
+
+        // Show ignored on: the ignored file listed, the eye pressed.
+        let ignoring = folder(&[
+            (".gitignore", "build.log\n"),
+            ("build.log", "x"),
+            ("notes.md", "x"),
+        ]);
+        let mut cx = context();
+        let (handle, _) = open(&mut cx, Launch::Folder(ignoring.path().to_owned()));
+        click(&mut cx, handle, "show-ignored");
+        written.push(save(
+            &mut cx,
+            handle,
+            mode,
+            &dir,
+            &format!("show-ignored-{suffix}"),
+        ));
+
+        // An unreadable folder and a symlink among ordinary rows.
+        let special = folder(&[
+            ("locked/secret.txt", "x"),
+            ("real/inside.txt", "x"),
+            ("a.txt", "x"),
+        ]);
+        std::os::unix::fs::symlink(special.path().join("real"), special.path().join("link"))
+            .expect("make a symlink");
+        chmod(&special.path().join("locked"), 0o000);
+        let mut cx = context();
+        let (handle, _) = open(&mut cx, Launch::Folder(special.path().to_owned()));
+        chmod(&special.path().join("locked"), 0o755);
+        written.push(save(
+            &mut cx,
+            handle,
+            mode,
+            &dir,
+            &format!("special-rows-{suffix}"),
         ));
 
         let mut cx = context();

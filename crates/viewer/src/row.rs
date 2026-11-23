@@ -6,6 +6,11 @@
 //! chevron target, then 6 px gaps around a 16 px checkbox and a 16 px icon,
 //! and the name at 14/16 px. The Type and Size cells follow as the tree
 //! widens; see [`crate::columns`].
+//!
+//! In light mode hover is the muted background at full strength, not the
+//! spec's half, which does not show on the light background. The focus ring is the theme's ring colour (brainstrike's
+//! foreground at half strength), 2 px with a 4 px radius, kept 2 px in from
+//! the pane's edge and the divider.
 
 use std::rc::Rc;
 use std::sync::{Arc, LazyLock};
@@ -14,9 +19,9 @@ use explorer::{Check, Kind, NodeId, RowView, format_size};
 use gpui_kit::base::{Checkbox, CheckboxIndicator, CheckboxState, RoleOverride};
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, h_flex};
 use gpui_kit::{
-    AccessibleAction, App, FontFeatures, IntoElement, MouseButton, ParentElement as _, Rems,
-    RenderOnce, Role, SharedString, StatefulInteractiveElement, Styled as _, TestSupportExt as _,
-    Toggled, Window, container_query, div, prelude::*, rems,
+    AccessibleAction, App, Font, FontFeatures, IntoElement, MouseButton, ParentElement as _,
+    Pixels, Rems, RenderOnce, Role, SharedString, StatefulInteractiveElement, Styled as _,
+    TestSupportExt as _, Toggled, Window, container_query, div, font, prelude::*, rems,
 };
 
 use crate::columns::{self, Columns};
@@ -24,6 +29,10 @@ use crate::state::RowAction;
 
 /// Indent per level below the top: 20 px.
 const INDENT: Rems = Rems(1.25);
+
+/// How far the focus ring stays in from the pane's edge and the divider:
+/// 2 px.
+const RING_INSET: Rems = Rems(0.125);
 
 /// Tabular figures, so sizes line up digit under digit. Made once; each row
 /// clones the `Arc`.
@@ -125,7 +134,16 @@ impl TreeRow {
 impl RenderOnce for TreeRow {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.theme();
-        let (accent, muted, border, ring) = (theme.accent, theme.muted, theme.border, theme.ring);
+        let (accent, border, ring) = (theme.accent, theme.border, theme.ring);
+        // The spec's half-strength muted is 2.5 % lightness from the light
+        // background and does not show; full strength does. In dark mode half
+        // strength shows, and full strength would come close to the current
+        // row's accent.
+        let hover = if theme.is_dark() {
+            theme.muted.opacity(0.5)
+        } else {
+            theme.muted
+        };
         let toggled = match self.check {
             Check::Off => Toggled::False,
             Check::Mixed => Toggled::Mixed,
@@ -169,7 +187,7 @@ impl RenderOnce for TreeRow {
                 if current {
                     row.bg(accent)
                 } else {
-                    row.hover(|style| style.bg(muted.opacity(0.5)))
+                    row.hover(|style| style.bg(hover))
                 }
             })
             .on_click(move |_, window, cx| on_click(&RowAction::Show, window, cx))
@@ -178,7 +196,9 @@ impl RenderOnce for TreeRow {
                     .h_7()
                     .w_full()
                     .child(container_query(move |size, window, cx| {
-                        self.body(Columns::for_width(size.width, window.rem_size()), cx)
+                        let columns = Columns::for_width(size.width, window.rem_size());
+                        let shifts = BaselineShifts::new(window, cx);
+                        self.body(columns, shifts, cx)
                     })),
             )
             .when(focus == Focus::Ringed, |row| {
@@ -187,7 +207,11 @@ impl RenderOnce for TreeRow {
                         .id("ring")
                         .test_support()
                         .absolute()
-                        .inset_0()
+                        .top_0()
+                        .bottom_0()
+                        .left(RING_INSET)
+                        .right(RING_INSET)
+                        .rounded_sm()
                         .border_2()
                         .border_color(ring),
                 )
@@ -195,10 +219,40 @@ impl RenderOnce for TreeRow {
     }
 }
 
+/// How far to move the 12 px Type and Size text down so it sits on the
+/// 14 px name's baseline. Each is centred in the row in a 16 px line box,
+/// where its baseline falls at half the box plus half of ascent minus
+/// descent, so smaller text lands higher: about 0.7 px for the Type and a
+/// pixel for the monospace Size. GPUI's layout has no baseline alignment,
+/// so the gaps are measured from the fonts.
+#[derive(Clone, Copy, Debug)]
+struct BaselineShifts {
+    extension: Pixels,
+    size: Pixels,
+}
+
+impl BaselineShifts {
+    fn new(window: &Window, cx: &App) -> Self {
+        let rem = window.rem_size();
+        let line = rems(1.).to_pixels(rem);
+        let small = rems(0.75).to_pixels(rem);
+        let text = window.text_system();
+        let ui = window.text_style().font();
+        let name = text.resolve_font(&ui);
+        let baseline = text.baseline_offset(name, rems(0.875).to_pixels(rem), line);
+        let below =
+            |family: Font| baseline - text.baseline_offset(text.resolve_font(&family), small, line);
+        Self {
+            extension: below(ui),
+            size: below(font(cx.theme().mono_font_family.clone())),
+        }
+    }
+}
+
 impl TreeRow {
     /// Chevron, checkbox, icon and name, then the Type and Size cells that
     /// `columns` shows.
-    fn body(self, columns: Columns, cx: &App) -> impl IntoElement + use<> {
+    fn body(self, columns: Columns, shifts: BaselineShifts, cx: &App) -> impl IntoElement + use<> {
         let theme = cx.theme();
         let indent = INDENT * f32::from(self.depth.saturating_sub(1));
         let size = self.size;
@@ -234,6 +288,9 @@ impl TreeRow {
                         .id("type")
                         .test_support()
                         .text_xs()
+                        .line_height(rems(1.))
+                        .relative()
+                        .top(shifts.extension)
                         .text_color(muted_foreground)
                         .child(ext),
                 )
@@ -246,6 +303,9 @@ impl TreeRow {
                         .font_family(mono)
                         .font_features(TABULAR_FIGURES.clone())
                         .text_xs()
+                        .line_height(rems(1.))
+                        .relative()
+                        .top(shifts.size)
                         .text_color(muted_foreground)
                         .when_some(size, |cell, bytes| cell.child(format_size(bytes))),
                 )

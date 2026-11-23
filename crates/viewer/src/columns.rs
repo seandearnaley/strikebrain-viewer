@@ -35,9 +35,10 @@ impl Columns {
     }
 }
 
-/// One line of cells, full height, starting at the panel's 8 px inset.
+/// One line of cells, full height, 8 px in from both sides: a name that
+/// fills it truncates 8 px from the divider.
 pub(crate) fn line() -> Div {
-    h_flex().size_full().pl_2()
+    h_flex().size_full().px_2()
 }
 
 /// The Type cell, which holds the extension: 72 px, its text 8 px in from
@@ -46,7 +47,9 @@ pub(crate) fn extension_cell() -> Div {
     div().flex_shrink_0().w(TYPE_WIDTH).px_2().truncate()
 }
 
-/// The Size cell: 80 px, its text right-aligned 8 px from the edge.
+/// The Size cell: 80 px, its text right-aligned 8 px in from the cell's
+/// edge, so 16 px from the pane's: clear of the overlay scrollbar's thumb,
+/// which reaches 12 px in while dragged.
 pub(crate) fn size_cell() -> Div {
     div().flex_shrink_0().w_20().pr_2().flex().justify_end()
 }
