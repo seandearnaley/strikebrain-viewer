@@ -2,20 +2,22 @@
 //!
 //! For now it shows only the current file's name, centred, so `current` is
 //! visible. Milestone 3 replaces this with the image, Markdown and code
-//! viewers.
+//! viewers. It takes keyboard focus in the [`STAGE`] key context.
 
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::{
-    Context, Entity, IntoElement, ParentElement as _, Render, Role, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Subscription, TestSupportExt as _, Window, div,
-    prelude::*,
+    App, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement as _, Render, Role,
+    SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, TestSupportExt as _,
+    Window, div, prelude::*,
 };
 
+use crate::keys::STAGE;
 use crate::state::AppState;
 
 /// The stage pane. Draws nothing while no file is current.
 pub(crate) struct Stage {
     state: Entity<AppState>,
+    focus_handle: FocusHandle,
     _observe: Subscription,
 }
 
@@ -25,11 +27,18 @@ impl std::fmt::Debug for Stage {
     }
 }
 
+impl Focusable for Stage {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
 impl Stage {
     pub(crate) fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         let observe = cx.observe(&state, |_, _, cx| cx.notify());
         Self {
             state,
+            focus_handle: cx.focus_handle(),
             _observe: observe,
         }
     }
@@ -45,6 +54,10 @@ impl Render for Stage {
         let theme = cx.theme();
 
         div()
+            .id("stage")
+            .test_support()
+            .track_focus(&self.focus_handle)
+            .key_context(STAGE)
             .size_full()
             .flex()
             .items_center()

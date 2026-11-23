@@ -1,45 +1,62 @@
-//! The explorer pane: the folder tree and its states.
+//! The explorer pane: the folder tree and the controls above it.
 //!
-//! Top to bottom, the spec's regions are: toolbar, filter input, kind
-//! control, column header, tree, and a selection bar floating over the
-//! tree. This milestone draws the tree and the scan's progress bar, which
-//! sits under the toolbar; the other regions slot in at the marked places
-//! in [`ExplorerPanel::render`].
+//! Top to bottom, the spec's regions: toolbar (`toolbar.rs`), filter input
+//! and kind control (`filter_bar.rs`), column header (`header.rs`), the
+//! tree, and a selection bar floating over the tree (`selection_bar.rs`).
+//! With no folder the pane shows only "Open Folder".
+
+mod filter_bar;
+mod header;
+mod selection_bar;
+mod toolbar;
 
 use std::ops::Range;
 
 use explorer::{Explorer, NodeId};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::progress::Progress;
+use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::scroll::ScrollableElement as _;
-use gpui_kit::component::{ActiveTheme as _, Sizable as _, v_flex};
+use gpui_kit::component::{ActiveTheme as _, v_flex};
 use gpui_kit::{
-    AnyElement, App, Context, Entity, FocusHandle, Focusable, IntoElement, MouseButton,
+    AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable, IntoElement,
     ParentElement as _, Render, Role, ScrollStrategy, SharedString,
     StatefulInteractiveElement as _, Styled as _, Subscription, TestSupportExt as _,
     UniformListScrollHandle, Window, div, prelude::*, uniform_list,
 };
 
 use crate::keys::{
-    Collapse, EXPLORER, Expand, FocusFirst, FocusLast, FocusNext, FocusNextPage, FocusPrevious,
-    FocusPreviousPage, OpenFolder, ShowFile, ToggleCheck,
+    ClearFilter, Collapse, EXPLORER, Expand, FocusFirst, FocusLast, FocusNext, FocusNextPage,
+    FocusPrevious, FocusPreviousPage, OpenFolder, ShowFile, ToggleCheck,
 };
 use crate::row::{RowEvent, TreeRow};
-use crate::state::{AppState, Motion, ScanStatus};
+use crate::state::{AppState, Motion, ScanStatus, StateEvent};
+
+use selection_bar::SelectionBar;
 
 /// Rows a page key moves when the tree has not been laid out yet.
 const FALLBACK_PAGE: usize = 10;
 
-/// The explorer pane. Owns keyboard focus for the tree and its scroll
-/// position; everything else lives in [`AppState`].
+/// The part of the explorer pane that holds keyboard focus.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ExplorerFocus {
+    /// The filter input.
+    Filter,
+    /// The tree, or the pane's body when there is no tree.
+    Tree,
+}
+
+/// The explorer pane. Owns keyboard focus for the tree, the filter input's
+/// state and the tree's scroll position; everything else lives in
+/// [`AppState`].
 pub(crate) struct ExplorerPanel {
     state: Entity<AppState>,
     focus_handle: FocusHandle,
+    filter: Entity<InputState>,
     scroll: UniformListScrollHandle,
-    /// Whether the focus ring shows: set by a key press, cleared by a
-    /// pointer press.
+    /// Whether the focus ring shows: set by a key press that moves or lands
+    /// focus in the tree, cleared by any pointer press in the pane.
     ring: bool,
-    _observe: Subscription,
+    _subscriptions: [Subscription; 3],
 }
 
 impl std::fmt::Debug for ExplorerPanel {
@@ -57,15 +74,70 @@ impl Focusable for ExplorerPanel {
 }
 
 impl ExplorerPanel {
-    pub(crate) fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
-        let observe = cx.observe(&state, |_, _, cx| cx.notify());
+    pub(crate) fn new(
+        state: Entity<AppState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let filter = cx.new(|cx| InputState::new(window, cx).placeholder("Filter"));
+        let subscriptions = [
+            cx.observe(&state, |_, _, cx| cx.notify()),
+            cx.subscribe(&state, |this, _, event: &StateEvent, cx| match event {
+                StateEvent::RowsReplaced => this.reveal_focus(cx),
+            }),
+            cx.subscribe(&filter, |this, input, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change) {
+                    let text = input.read(cx).value();
+                    this.state
+                        .update(cx, |state, cx| state.set_query(&text, cx));
+                }
+            }),
+        ];
         Self {
             state,
             focus_handle: cx.focus_handle(),
+            filter,
             scroll: UniformListScrollHandle::new(),
             ring: false,
-            _observe: observe,
+            _subscriptions: subscriptions,
         }
+    }
+
+    // Focus, for the panes' Tab order and ⌘F
+
+    /// Which part of the pane holds keyboard focus, if any.
+    pub(crate) fn focused(&self, window: &Window, cx: &App) -> Option<ExplorerFocus> {
+        if self.filter.focus_handle(cx).contains_focused(window, cx) {
+            Some(ExplorerFocus::Filter)
+        } else if self.focus_handle.contains_focused(window, cx) {
+            Some(ExplorerFocus::Tree)
+        } else {
+            None
+        }
+    }
+
+    /// Whether the filter input is on screen: a folder is open.
+    pub(crate) fn has_filter(&self, cx: &App) -> bool {
+        !self.state.read(cx).is_empty()
+    }
+
+    /// Focuses the filter input with its text selected, so typing replaces
+    /// the query.
+    pub(crate) fn focus_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.has_filter(cx) {
+            return;
+        }
+        self.filter.update(cx, |input, cx| {
+            input.focus(window, cx);
+            input.select_all(window, cx);
+        });
+    }
+
+    /// Focuses the tree from the keyboard: the focus ring shows.
+    pub(crate) fn focus_tree(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.focus_handle, cx);
+        let row = self.state.read(cx).focus_index();
+        self.after_key(row, cx);
     }
 
     // Keys: each moves or changes the focus row, shows the ring and keeps
@@ -142,12 +214,33 @@ impl ExplorerPanel {
         self.after_key(row, cx);
     }
 
+    /// Esc in the tree: clears the query.
+    fn clear_filter(&mut self, _: &ClearFilter, window: &mut Window, cx: &mut Context<Self>) {
+        self.clear_query(window, cx);
+        let row = self.state.read(cx).focus_index();
+        self.after_key(row, cx);
+    }
+
     fn after_key(&mut self, row: Option<usize>, cx: &mut Context<Self>) {
         if let Some(row) = row {
             self.scroll.scroll_to_item(row, ScrollStrategy::Nearest);
         }
         self.ring = true;
         cx.notify();
+    }
+
+    /// Keeps the focus row on screen after the rows were rebuilt.
+    fn reveal_focus(&mut self, cx: &mut Context<Self>) {
+        if let Some(row) = self.state.read(cx).focus_index() {
+            self.scroll.scroll_to_item(row, ScrollStrategy::Nearest);
+        }
+    }
+
+    /// Empties the filter input and the query.
+    fn clear_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.filter
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.state.update(cx, |state, cx| state.set_query("", cx));
     }
 
     /// How many whole rows fit in the tree's viewport, from the last layout.
@@ -196,6 +289,7 @@ impl ExplorerPanel {
         });
     }
 
+    /// Any pointer press in the pane hides the focus ring.
     fn pointer_down(&mut self, cx: &mut Context<Self>) {
         if self.ring {
             self.ring = false;
@@ -205,12 +299,18 @@ impl ExplorerPanel {
 
     // Rendering
 
-    fn render_rows(&mut self, range: Range<usize>, cx: &mut Context<Self>) -> Vec<TreeRow> {
+    fn render_rows(
+        &mut self,
+        range: Range<usize>,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<TreeRow> {
         let state = self.state.read(cx);
         let Some(explorer) = state.explorer() else {
             return Vec::new();
         };
-        let (current, focus, ring) = (state.current(), state.focus(), self.ring);
+        let ring = self.ring && self.focus_handle.is_focused(window);
+        let (current, focus) = (state.current(), state.focus());
         range
             .filter_map(|ix| explorer.row(ix))
             .map(|row| {
@@ -227,9 +327,12 @@ impl ExplorerPanel {
             .collect()
     }
 
-    fn render_tree(&self, explorer: &Explorer, cx: &Context<Self>) -> AnyElement {
+    /// The tree, with the selection bar floating over its bottom while
+    /// anything is checked. The list gains bottom padding while the bar
+    /// shows, so the last row can scroll clear of it; no row moves.
+    fn render_tree(&self, explorer: &Explorer, selected: usize, cx: &Context<Self>) -> AnyElement {
         let label: SharedString = explorer.tree().name(NodeId::ROOT).to_owned().into();
-        div()
+        let tree = div()
             .id("tree")
             .test_support()
             .role(Role::Tree)
@@ -246,24 +349,33 @@ impl ExplorerPanel {
             .on_action(cx.listener(Self::collapse))
             .on_action(cx.listener(Self::toggle_check))
             .on_action(cx.listener(Self::show_file))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _, _, cx| this.pointer_down(cx)),
-            )
+            .on_action(cx.listener(Self::clear_filter))
             .relative()
-            .flex_1()
-            .min_h_0()
-            .w_full()
+            .size_full()
             .child(
                 uniform_list(
                     "rows",
                     explorer.rows().len(),
-                    cx.processor(|this, range, _, cx| this.render_rows(range, cx)),
+                    cx.processor(|this, range, window, cx| this.render_rows(range, window, cx)),
                 )
                 .track_scroll(&self.scroll)
-                .size_full(),
+                .size_full()
+                .when(selected > 0, |list| list.pb(SelectionBar::clearance())),
             )
-            .vertical_scrollbar(&self.scroll)
+            .vertical_scrollbar(&self.scroll);
+
+        div()
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .child(tree)
+            .when(selected > 0, |area| {
+                area.child(SelectionBar::new(
+                    selected,
+                    cx.listener(|this, _, _, cx| this.state.update(cx, AppState::clear_selection)),
+                ))
+            })
             .into_any_element()
     }
 
@@ -288,7 +400,7 @@ impl ExplorerPanel {
             .role(Role::Label)
             .aria_label(message.clone())
             .w_full()
-            .px_3()
+            .px_2()
             .py_2()
             .truncate()
             .text_sm()
@@ -316,26 +428,32 @@ impl ExplorerPanel {
 
 impl Render for ExplorerPanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let state = self.state.read(cx);
-        let slow = matches!(state.status(), ScanStatus::Scanning { slow: true });
-        let body = match (state.status(), state.explorer()) {
-            (ScanStatus::Failed(message), _) => {
-                self.render_without_tree(Some(Self::render_error(message, cx)))
-            }
-            (_, Some(explorer)) => self.render_tree(explorer, cx),
-            (ScanStatus::Idle, None) => self.render_without_tree(Some(Self::render_empty())),
-            (ScanStatus::Scanning { .. }, None) => self.render_without_tree(None),
-        };
-
-        v_flex()
+        let panel = v_flex()
             .size_full()
             .bg(cx.theme().background)
-            // Toolbar (36 px) goes here.
-            .when(slow, |panel| {
-                panel.child(Progress::new("scan-progress").loading(true).xsmall())
-            })
-            // Filter input, kind control and column header go here, in that order.
+            .capture_any_mouse_down(cx.listener(|this, _, _, cx| this.pointer_down(cx)));
+
+        let state = self.state.read(cx);
+        if state.is_empty() {
+            return panel.child(self.render_without_tree(Some(Self::render_empty())));
+        }
+        // The header labels rows, so it shows only with a tree.
+        let (header, body) = match (state.status(), state.explorer()) {
+            (ScanStatus::Failed(message), _) => (
+                None,
+                self.render_without_tree(Some(Self::render_error(message, cx))),
+            ),
+            (_, Some(explorer)) => (
+                Some(self.render_header(explorer.sort(), cx)),
+                self.render_tree(explorer, state.selected_count(), cx),
+            ),
+            (_, None) => (None, self.render_without_tree(None)),
+        };
+
+        panel
+            .child(self.render_toolbar(cx))
+            .child(self.render_filter_bar(cx))
+            .children(header)
             .child(body)
-        // The selection bar floats over the tree, so it joins as an overlay.
     }
 }

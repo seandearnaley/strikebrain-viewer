@@ -1,13 +1,20 @@
 //! Keyboard commands: GPUI actions and the keys bound to them.
 //!
-//! Tree commands bind in the [`EXPLORER`] key context, which the explorer's
-//! tree declares while it holds focus. Opening a folder and quitting bind
-//! everywhere.
+//! Each pane declares a key context while it holds focus: the explorer's
+//! tree [`EXPLORER`], its filter input [`FILTER`] and the stage [`STAGE`].
+//! Tab moves between those three panes in each of them. Opening a folder
+//! and quitting bind everywhere.
 
 use gpui_kit::{KeyBinding, actions};
 
 /// The key context the explorer's tree declares.
 pub const EXPLORER: &str = "Explorer";
+
+/// The key context around the explorer's filter input.
+pub const FILTER: &str = "Filter";
+
+/// The key context the stage declares.
+pub const STAGE: &str = "Stage";
 
 actions!(
     explorer,
@@ -32,6 +39,11 @@ actions!(
         ToggleCheck,
         /// Shows the focused file on the stage. Does nothing on a folder.
         ShowFile,
+        /// Clears the filter query, from the tree.
+        ClearFilter,
+        /// Esc in the filter input: clears a query, or with none moves focus
+        /// to the tree.
+        CancelFilter,
     ]
 );
 
@@ -42,6 +54,14 @@ actions!(
         OpenFolder,
         /// Quits the application.
         Quit,
+        /// Moves keyboard focus to the next pane: filter, tree, stage.
+        NextPane,
+        /// Moves keyboard focus to the previous pane.
+        PreviousPane,
+        /// Moves keyboard focus to the filter input.
+        FocusFilter,
+        /// Moves keyboard focus to the explorer's tree.
+        FocusExplorer,
     ]
 );
 
@@ -50,7 +70,7 @@ actions!(
 /// Learning exercise: Sean may rewrite this body; the tests below define it.
 #[must_use]
 pub fn bindings() -> Vec<KeyBinding> {
-    let explorer = Some(EXPLORER);
+    let (explorer, filter, stage) = (Some(EXPLORER), Some(FILTER), Some(STAGE));
     vec![
         KeyBinding::new("up", FocusPrevious, explorer),
         KeyBinding::new("down", FocusNext, explorer),
@@ -62,6 +82,17 @@ pub fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("left", Collapse, explorer),
         KeyBinding::new("space", ToggleCheck, explorer),
         KeyBinding::new("enter", ShowFile, explorer),
+        KeyBinding::new("escape", ClearFilter, explorer),
+        KeyBinding::new("cmd-f", FocusFilter, explorer),
+        KeyBinding::new("tab", NextPane, explorer),
+        KeyBinding::new("shift-tab", PreviousPane, explorer),
+        KeyBinding::new("escape", CancelFilter, filter),
+        KeyBinding::new("tab", NextPane, filter),
+        KeyBinding::new("shift-tab", PreviousPane, filter),
+        KeyBinding::new("escape", FocusExplorer, stage),
+        KeyBinding::new("cmd-f", FocusFilter, stage),
+        KeyBinding::new("tab", NextPane, stage),
+        KeyBinding::new("shift-tab", PreviousPane, stage),
         KeyBinding::new("cmd-o", OpenFolder, None),
         KeyBinding::new("cmd-q", Quit, None),
     ]
@@ -113,6 +144,23 @@ mod tests {
     fn space_checks_and_enter_shows_in_the_explorer() {
         assert_bound("space", Some(EXPLORER), &ToggleCheck);
         assert_bound("enter", Some(EXPLORER), &ShowFile);
+    }
+
+    #[test]
+    fn escape_clears_the_filter_or_leaves_it_and_command_f_finds_it() {
+        assert_bound("escape", Some(EXPLORER), &ClearFilter);
+        assert_bound("escape", Some(FILTER), &CancelFilter);
+        assert_bound("escape", Some(STAGE), &FocusExplorer);
+        assert_bound("cmd-f", Some(EXPLORER), &FocusFilter);
+        assert_bound("cmd-f", Some(STAGE), &FocusFilter);
+    }
+
+    #[test]
+    fn tab_and_shift_tab_move_between_panes_from_each_pane() {
+        for context in [EXPLORER, FILTER, STAGE] {
+            assert_bound("tab", Some(context), &NextPane);
+            assert_bound("shift-tab", Some(context), &PreviousPane);
+        }
     }
 
     #[test]

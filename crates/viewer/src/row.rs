@@ -2,9 +2,10 @@
 //!
 //! Brainstrike's measurements, on the rem scale so they follow the theme's
 //! base font (16 px, where every value below is exact): 28 px tall plus a
-//! 1 px rule, 20 px of indent per level, a 24 px chevron target, then 6 px
-//! gaps around a 16 px checkbox and a 16 px icon, and the name at 14/16 px.
-//! The Size cell shows once the tree is at least 300 px wide.
+//! 1 px rule, the panel's 8 px inset, 20 px of indent per level, a 24 px
+//! chevron target, then 6 px gaps around a 16 px checkbox and a 16 px icon,
+//! and the name at 14/16 px. The Type and Size cells follow as the tree
+//! widens; see [`crate::columns`].
 
 use std::rc::Rc;
 use std::sync::Arc;
@@ -18,10 +19,10 @@ use gpui_kit::{
     Toggled, Window, container_query, div, prelude::*, rems,
 };
 
+use crate::columns::{self, Columns};
+
 /// Indent per level below the top: 20 px.
 const INDENT: Rems = Rems(1.25);
-/// The tree width from which the Size cell shows: 300 px.
-const SIZE_COLUMN_FROM: Rems = Rems(18.75);
 
 /// What a row asks its owner to do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -65,6 +66,8 @@ pub(crate) struct TreeRow {
     depth: u16,
     kind: Kind,
     name: SharedString,
+    /// The extension, for the Type cell; empty for folders.
+    ext: SharedString,
     check: Check,
     disclosure: Disclosure,
     size: Option<u64>,
@@ -89,6 +92,7 @@ impl TreeRow {
             depth: row.depth,
             kind: row.kind,
             name: row.name.to_owned().into(),
+            ext: row.ext.to_owned().into(),
             check: row.check,
             disclosure,
             size: row.size,
@@ -180,8 +184,7 @@ impl RenderOnce for TreeRow {
                     .h_7()
                     .w_full()
                     .child(container_query(move |size, window, cx| {
-                        let wide = size.width >= SIZE_COLUMN_FROM.to_pixels(window.rem_size());
-                        self.body(wide, cx)
+                        self.body(Columns::for_width(size.width, window.rem_size()), cx)
                     })),
             )
             .when(focus == Focus::Ringed, |row| {
@@ -199,40 +202,53 @@ impl RenderOnce for TreeRow {
 }
 
 impl TreeRow {
-    /// Chevron, checkbox, icon, name and, when `wide`, the Size cell.
-    fn body(self, wide: bool, cx: &App) -> impl IntoElement + use<> {
+    /// Chevron, checkbox, icon and name, then the Type and Size cells that
+    /// `columns` shows.
+    fn body(self, columns: Columns, cx: &App) -> impl IntoElement + use<> {
         let theme = cx.theme();
         let indent = INDENT * f32::from(self.depth.saturating_sub(1));
         let size = self.size;
         let mono = theme.mono_font_family.clone();
         let muted_foreground = theme.muted_foreground;
+        let ext = self.ext.clone();
 
-        h_flex()
-            .size_full()
-            .pl(indent)
-            .gap_1p5()
-            .child(self.chevron(cx))
-            .child(self.checkbox(cx))
-            .child(self.icon(cx))
+        columns::line()
             .child(
-                div()
+                h_flex()
                     .flex_1()
                     .min_w_0()
-                    .truncate()
-                    .text_sm()
-                    .line_height(rems(1.))
-                    .text_color(theme.foreground)
-                    .child(self.name),
+                    .h_full()
+                    .pl(indent)
+                    .gap_1p5()
+                    .child(self.chevron(cx))
+                    .child(self.checkbox(cx))
+                    .child(self.icon(cx))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_sm()
+                            .line_height(rems(1.))
+                            .text_color(theme.foreground)
+                            .child(self.name),
+                    ),
             )
-            .when(wide, |body| {
-                body.child(
-                    div()
+            .when(columns.kind, |line| {
+                line.child(
+                    columns::kind_cell()
+                        .id("type")
+                        .test_support()
+                        .text_xs()
+                        .text_color(muted_foreground)
+                        .child(ext),
+                )
+            })
+            .when(columns.size, |line| {
+                line.child(
+                    columns::size_cell()
                         .id("size")
                         .test_support()
-                        .flex_shrink_0()
-                        .w_20()
-                        .pr_2()
-                        .text_right()
                         .font_family(mono)
                         .font_features(FontFeatures(Arc::new(vec![("tnum".into(), 1)])))
                         .text_xs()

@@ -2,6 +2,7 @@
 
 mod app;
 mod assets;
+mod columns;
 mod explorer_panel;
 pub mod keys;
 mod row;

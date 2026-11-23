@@ -1,12 +1,12 @@
-//! The icons the app draws: the Kit's default set plus the symlink icon,
-//! which the default set leaves out.
+//! The icons the app draws: the Kit's default set plus the few it leaves
+//! out: the symlink file, Collapse all, Select all and Clear.
 
 use std::borrow::Cow;
 
 use gpui_kit::assets::{Assets, icon_assets};
 use gpui_kit::{AssetSource, Result, SharedString};
 
-icon_assets!(ExtraIcons, [FileSymlink]);
+icon_assets!(ExtraIcons, [FileSymlink, ChevronsDownUp, ListChecks, ListX]);
 
 /// The app's asset source: pass it to `Application::with_assets`.
 #[derive(Clone, Copy, Debug, Default)]
@@ -32,9 +32,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn loads_the_symlink_icon_and_the_default_icons() {
-        let symlink = gpui_kit::assets::IconName::FileSymlink.path();
-        assert!(AppAssets.load(&symlink).unwrap().is_some());
+    fn loads_the_extra_icons_and_the_default_icons() {
+        use gpui_kit::assets::IconName;
+        let symlink = IconName::FileSymlink.path();
+        for icon in [
+            IconName::FileSymlink,
+            IconName::ChevronsDownUp,
+            IconName::ListChecks,
+            IconName::ListX,
+        ] {
+            assert!(AppAssets.load(&icon.path()).unwrap().is_some());
+        }
         assert!(AppAssets.load("icons/folder.svg").unwrap().is_some());
         assert!(AppAssets.list("icons/").unwrap().contains(&symlink));
     }

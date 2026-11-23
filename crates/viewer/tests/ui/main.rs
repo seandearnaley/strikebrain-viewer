@@ -1,0 +1,213 @@
+//! UI integration tests: the real root view in a headless window, driven by
+//! clicks and key presses, checked through accessibility facts, geometry
+//! and the application state.
+//!
+//! One module per area of the interface; the helpers they share are here.
+
+mod checks;
+mod filter;
+mod header;
+mod keyboard;
+mod launch;
+mod layout;
+mod refresh;
+mod rows;
+mod scale;
+mod timing;
+mod toolbar;
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use explorer::{NodeId, Tree};
+use gpui_kit::test::{TestQueryExt as _, TestWindowExt as _};
+use gpui_kit::{
+    AnyWindowHandle, AppContext as _, Bounds, ElementId, Entity, Point, Role, TestAppContext,
+    Window, WindowBounds, WindowOptions, point, px, size,
+};
+use viewer::{AppState, AppView, Launch};
+
+/// A small project. Display order: docs, src, file2.txt, file10.txt,
+/// README.md; inside src: app, lib.rs, main.rs.
+const PROJECT: &[&str] = &[
+    "README.md",
+    "file10.txt",
+    "file2.txt",
+    "docs/a.md",
+    "docs/b.md",
+    "src/main.rs",
+    "src/lib.rs",
+    "src/app/view.rs",
+];
+
+fn tree(paths: &[&str]) -> Launch {
+    Launch::Tree(Arc::new(
+        Tree::from_paths(paths).expect("the fixture paths form a tree"),
+    ))
+}
+
+fn sized_tree(paths: &[(&str, u64)]) -> Launch {
+    Launch::Tree(Arc::new(
+        Tree::from_paths_with_sizes(paths).expect("the fixture paths form a tree"),
+    ))
+}
+
+/// The folder `tests/fixture`, scanned from disk.
+fn fixture_folder() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixture")
+}
+
+/// A temporary folder holding `files`, each with its text.
+fn folder(files: &[(&str, &str)]) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("a temporary folder");
+    for (path, text) in files {
+        write(dir.path(), path, text);
+    }
+    dir
+}
+
+/// Writes `text` to `root/path`, making its folders.
+fn write(root: &Path, path: &str, text: &str) {
+    let path = root.join(path);
+    std::fs::create_dir_all(path.parent().expect("a file has a folder"))
+        .expect("make the file's folder");
+    std::fs::write(path, text).expect("write the file");
+}
+
+/// Opens the app in a 1000 x 700 window with the app's key bindings.
+fn open_app(cx: &mut TestAppContext, launch: Launch) -> (AnyWindowHandle, Entity<AppView>) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        viewer::init(cx);
+    });
+    let opened = cx.update(|cx| {
+        gpui_kit::open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                    Point::default(),
+                    size(px(1000.), px(700.)),
+                ))),
+                ..Default::default()
+            },
+            cx,
+            |window, cx| cx.new(|cx| AppView::new(launch, window, cx)),
+        )
+        .expect("open test window")
+    });
+    cx.run_until_parked();
+    opened
+}
+
+/// Reads the application state.
+fn read<R>(cx: &mut TestAppContext, view: &Entity<AppView>, f: impl FnOnce(&AppState) -> R) -> R {
+    cx.update(|cx| f(view.read(cx).state().read(cx)))
+}
+
+/// The node at `path` in the tree on screen.
+fn node(cx: &mut TestAppContext, view: &Entity<AppView>, path: &str) -> NodeId {
+    read(cx, view, |state| {
+        let explorer = state.explorer().expect("a tree is on screen");
+        explorer
+            .tree()
+            .find(path)
+            .expect("the path is in the fixture")
+    })
+}
+
+fn row(id: NodeId) -> ElementId {
+    ("row", id.index()).into()
+}
+
+/// The labels of the tree rows on screen, top to bottom.
+fn labels(window: &Window) -> Vec<String> {
+    window
+        .find_all_by_role(Role::TreeItem)
+        .iter()
+        .filter(|row| row.visible())
+        .map(|row| row.label().expect("every row has a label").to_owned())
+        .collect()
+}
+
+/// The labels of the rows on screen after a fresh frame.
+fn rows_now(cx: &mut TestAppContext, handle: AnyWindowHandle) -> Vec<String> {
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        labels(window)
+    })
+    .expect("read the rows")
+}
+
+/// The name on the stage, if any.
+fn stage(window: &Window) -> Option<String> {
+    window
+        .try_find("stage-file")
+        .map(|file| file.label().expect("the stage names its file").to_owned())
+}
+
+fn current(cx: &mut TestAppContext, view: &Entity<AppView>) -> Option<NodeId> {
+    read(cx, view, AppState::current)
+}
+
+fn focus(cx: &mut TestAppContext, view: &Entity<AppView>) -> Option<NodeId> {
+    read(cx, view, AppState::focus)
+}
+
+/// Presses `key` in the window and lets every task finish.
+fn press(cx: &mut TestAppContext, handle: AnyWindowHandle, key: &str) {
+    cx.update_window(handle, |_, window, cx| window.press(key, cx))
+        .expect("press a key");
+    cx.run_until_parked();
+}
+
+/// Clicks the element `id` and lets every task finish.
+fn click(cx: &mut TestAppContext, handle: AnyWindowHandle, id: impl Into<ElementId>) {
+    let id = id.into();
+    cx.update_window(handle, |_, window, cx| window.click(id, cx))
+        .expect("click");
+    cx.run_until_parked();
+}
+
+/// Clicks into the filter input, types `text` there and lets the filter
+/// job land.
+fn type_query(cx: &mut TestAppContext, handle: AnyWindowHandle, text: &str) {
+    cx.update_window(handle, |_, window, cx| {
+        window.click("filter", cx);
+        window.input(text, cx);
+    })
+    .expect("type into the filter");
+    cx.run_until_parked();
+}
+
+/// What the filter input holds.
+fn filter_value(cx: &mut TestAppContext, handle: AnyWindowHandle) -> String {
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.find("filter").value().unwrap_or_default().to_owned()
+    })
+    .expect("read the filter")
+}
+
+/// Whether the element `id` holds keyboard focus.
+fn is_focused(cx: &mut TestAppContext, handle: AnyWindowHandle, id: &'static str) -> bool {
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.find(id).focused() == Some(true)
+    })
+    .expect("read focus")
+}
+
+/// Drags the divider from where it is to `to_x`, at the explorer's mid-height.
+fn drag_divider(cx: &mut TestAppContext, handle: AnyWindowHandle, to_x: f32) {
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        let explorer = window.find("explorer-pane").bounds();
+        let mid_height = explorer.center().y;
+        window.drag(
+            point(explorer.right(), mid_height),
+            point(px(to_x), mid_height),
+            cx,
+        );
+        window.render_frame(cx);
+    })
+    .expect("drag the divider in the test window");
+}
