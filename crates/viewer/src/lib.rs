@@ -2,4 +2,4 @@
 
 mod app;
 
-pub use app::{AppView, EXPLORER_WIDTH};
+pub use app::{AppView, EXPLORER_MIN_WIDTH, EXPLORER_WIDTH};

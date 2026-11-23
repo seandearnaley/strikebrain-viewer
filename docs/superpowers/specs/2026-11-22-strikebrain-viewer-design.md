@@ -66,7 +66,7 @@ Workspace settings:
 
 - `resolver = "3"`.
 - Lints: `unsafe_code = "forbid"`; clippy `all` and `pedantic` at warn.
-- Dev profile, taken from the Kit's installation guide: `debug = "limited"`, `split-debuginfo = "unpacked"`, and `opt-level = 3` for `gpui-pre`, `gpui-pre-platform`, `gpui-kit`, `gpui-component`, `gpui-kit-assets`, `taffy`, `rustybuzz`, `ttf-parser`.
+- Dev profile: `debug = "limited"`, `split-debuginfo = "unpacked"`, and `opt-level = 3` for all dependencies via `[profile.dev.package."*"]`, because the Kit guide's per-crate list omits `gpui-base` and `gpui-pre-macos`.
 
 ## Engine: crate `explorer`
 
