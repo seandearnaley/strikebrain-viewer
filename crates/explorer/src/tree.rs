@@ -26,7 +26,8 @@ mod paths;
 pub(crate) mod tests;
 
 pub(crate) use build::{NO_PARENT, RawTree};
-use names::{NameArena, extension_of};
+use names::NameArena;
+pub(crate) use names::extension_of;
 
 /// What a node is on disk.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
