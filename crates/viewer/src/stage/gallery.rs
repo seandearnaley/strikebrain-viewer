@@ -211,6 +211,10 @@ impl Gallery {
             cx.observe(&state, |this, state, cx| {
                 let seen = Seen::of(state.read(cx));
                 if seen != this.seen {
+                    // Focus that moved, by whatever means, is kept on screen.
+                    if seen.tile != this.seen.tile {
+                        this.reveal = true;
+                    }
                     if !seen.shows {
                         // Hidden: its reads stop.
                         for load in this.loading.values() {

@@ -139,7 +139,7 @@ impl AppState {
     /// Opens the checked file `id` in the file view.
     fn open(&mut self, id: NodeId, cx: &mut Context<Self>) {
         self.current = Some(id);
-        self.tile = Some(id);
+        self.set_tile(Some(id));
         self.view = StageView::File;
         cx.emit(StateEvent::CurrentMoved);
         cx.notify();
@@ -154,7 +154,7 @@ impl AppState {
             return false;
         }
         self.view = StageView::Gallery;
-        self.tile = self.nearest_tile(self.current);
+        self.set_tile(self.nearest_tile(self.current));
         cx.emit(StateEvent::RevealTile);
         cx.notify();
         true
@@ -179,6 +179,7 @@ impl AppState {
             .unwrap_or(0);
         let to = tile_after(motion, from, len, columns);
         self.tile = explorer.gallery_from(to).next();
+        self.tile_at = to;
         cx.notify();
         self.tile.map(|_| to)
     }
@@ -206,10 +207,24 @@ impl AppState {
         .or_else(|| explorer.gallery().next())
     }
 
-    /// After a change to the checks the person made: the gallery with two
-    /// or more checked files, its focus on the file on the stage; the one
-    /// file with one; a blank stage with none.
-    pub(super) fn show_for_checks(&mut self, cx: &mut Context<Self>) {
+    /// Puts tile focus on `tile` and remembers where it stands in the
+    /// gallery.
+    fn set_tile(&mut self, tile: Option<NodeId>) {
+        self.tile = tile;
+        let at = self
+            .explorer
+            .as_ref()
+            .zip(tile)
+            .and_then(|(explorer, tile)| explorer.gallery_position(tile));
+        self.tile_at = at.unwrap_or_default();
+    }
+
+    /// After a change to the checks the person made, `current` having been
+    /// `before`: the gallery with two or more checked files; the one file
+    /// with one; a blank stage with none. The gallery's focus follows the
+    /// file on the stage when the gallery was not showing or the change
+    /// moved that file; otherwise it stays where it was.
+    pub(super) fn show_for_checks(&mut self, before: Option<NodeId>, cx: &mut Context<Self>) {
         match self.gallery_len() {
             0 => {
                 self.current = None;
@@ -220,28 +235,37 @@ impl AppState {
                 self.view = StageView::File;
             }
             _ => {
+                let showing = self.view == StageView::Gallery;
                 self.view = StageView::Gallery;
-                self.tile = self.nearest_tile(self.current.or(self.tile));
-                cx.emit(StateEvent::RevealTile);
+                if !showing || self.current != before {
+                    self.set_tile(self.nearest_tile(self.current.or(self.tile)));
+                    cx.emit(StateEvent::RevealTile);
+                }
             }
         }
     }
 
-    /// After the gallery changed by anything else (a rescan, a folder
+    /// After any change to the gallery (the checks, a rescan, a folder
     /// removed, a view restored): a gallery left with fewer than two files
     /// gives way to the file view, and tile focus stays on a checked file.
+    /// A focused file that went gives its focus to the file now at its
+    /// place, as the tree's focus row does.
     pub(super) fn settle_view(&mut self) {
         self.gallery_changes += 1;
-        if self.view == StageView::Gallery && self.gallery_len() < 2 {
+        let len = self.gallery_len();
+        if self.view == StageView::Gallery && len < 2 {
             self.view = StageView::File;
         }
-        let tile_checked = self.tile.is_some_and(|tile| {
-            self.explorer
-                .as_ref()
-                .is_some_and(|explorer| explorer.is_selected(tile))
-        });
-        if !tile_checked {
-            self.tile = self.nearest_tile(self.current);
+        let Some(explorer) = self.explorer.as_ref() else {
+            self.tile = None;
+            return;
+        };
+        if let Some(at) = self.tile.and_then(|tile| explorer.gallery_position(tile)) {
+            self.tile_at = at;
+        } else {
+            let at = self.tile_at.min(len.saturating_sub(1));
+            self.tile = explorer.gallery_from(at).next();
+            self.tile_at = at;
         }
     }
 
@@ -249,7 +273,7 @@ impl AppState {
     /// the file presented last, scrolled to it.
     pub(super) fn back_from_presenting(&mut self, cx: &mut Context<Self>) {
         if self.view == StageView::Gallery {
-            self.tile = self.nearest_tile(self.current);
+            self.set_tile(self.nearest_tile(self.current));
             cx.emit(StateEvent::RevealTile);
         }
     }

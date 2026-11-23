@@ -12,6 +12,7 @@ impl AppState {
     /// to the next checked file, else the previous one, else nothing; an
     /// empty stage takes the first checked file.
     pub(super) fn toggle_check(&mut self, id: NodeId, cx: &mut Context<Self>) {
+        let before = self.current;
         let Some(explorer) = self.explorer.as_mut() else {
             return;
         };
@@ -23,34 +24,37 @@ impl AppState {
         } else {
             self.leave_unchecked_current(current_was_checked);
         }
-        self.checks_changed(cx);
+        self.checks_changed(before, cx);
     }
 
     /// Checks every file the filter shows: the toolbar's Select all.
     pub fn select_all(&mut self, cx: &mut Context<Self>) {
+        let before = self.current;
         let Some(explorer) = self.explorer.as_mut() else {
             return;
         };
         explorer.select_all();
-        self.checks_changed(cx);
+        self.checks_changed(before, cx);
     }
 
     /// Unchecks every file, hidden ones included: Clear.
     pub fn clear_selection(&mut self, cx: &mut Context<Self>) {
+        let before = self.current;
         let Some(explorer) = self.explorer.as_mut() else {
             return;
         };
         let current_was_checked = self.current.is_some_and(|c| explorer.is_selected(c));
         explorer.clear_selection();
         self.leave_unchecked_current(current_was_checked);
-        self.checks_changed(cx);
+        self.checks_changed(before, cx);
     }
 
-    /// After the person changed the checks: the stage shows what they hold
-    /// (see `state/gallery.rs`).
-    fn checks_changed(&mut self, cx: &mut Context<Self>) {
+    /// After the person changed the checks, the file on the stage having
+    /// been `before`: the stage shows what they hold (see
+    /// `state/gallery.rs`).
+    fn checks_changed(&mut self, before: Option<NodeId>, cx: &mut Context<Self>) {
         self.selection_changed();
-        self.show_for_checks(cx);
+        self.show_for_checks(before, cx);
         cx.notify();
     }
 

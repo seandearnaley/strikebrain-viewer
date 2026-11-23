@@ -409,11 +409,10 @@ fn a_refresh_keeps_the_gallery_and_its_focus_on_a_file_still_there(cx: &mut Test
     assert_eq!(view_of(cx, handle), View::Gallery);
     assert_eq!(focused_tile(cx, &view).as_deref(), Some("f002.rs"));
     assert_eq!(tiles(cx, handle), ["f001.rs", "f002.rs", "f003.rs"]);
-    // The focused file goes: focus moves to a checked file beside it.
+    // The focused file goes: focus moves to the file now at its place.
     std::fs::remove_file(dir.path().join("f002.rs")).unwrap();
     refresh(cx, &view);
-    let focus = focused_tile(cx, &view).unwrap();
-    assert!(["f001.rs", "f003.rs"].contains(&focus.as_str()), "{focus}");
+    assert_eq!(focused_tile(cx, &view).as_deref(), Some("f003.rs"));
 }
 
 #[gpui_kit::test]
@@ -727,4 +726,78 @@ fn a_turned_photos_tile_is_turned(cx: &mut TestAppContext) {
     tiles(cx, handle);
     let (width, height) = probe(cx, &view).largest().expect("a thumbnail");
     assert!(height > width, "{width} x {height}");
+}
+
+/// Whether the tile of the file at `path` shows the focus ring.
+fn ringed(
+    cx: &mut TestAppContext,
+    handle: AnyWindowHandle,
+    view: &Entity<AppView>,
+    path: &str,
+) -> bool {
+    let id = node(cx, view, path);
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.within(tile(id)).try_find("tile-ring").is_some()
+    })
+    .expect("read the tile")
+}
+
+#[gpui_kit::test]
+fn tab_into_the_gallery_and_leaving_a_presentation_show_the_ring(cx: &mut TestAppContext) {
+    let dir = files(3);
+    let (handle, view) = gallery_of(cx, dir.path());
+    // Tab brought focus here: the focused tile shows its ring, as the
+    // tree's row does.
+    assert!(ringed(cx, handle, &view, "f000.rs"));
+    // A press below the tiles hides it.
+    click(cx, handle, "gallery");
+    assert!(!ringed(cx, handle, &view, "f000.rs"));
+    assert!(is_focused(cx, handle, "stage"));
+    // Presenting and leaving by key shows it again.
+    press(cx, handle, "space");
+    press(cx, handle, "escape");
+    assert_eq!(view_of(cx, handle), View::Gallery);
+    assert!(ringed(cx, handle, &view, "f000.rs"));
+    // Shift-Tab away and Tab back.
+    click(cx, handle, "gallery");
+    press(cx, handle, "shift-tab");
+    press(cx, handle, "tab");
+    assert!(is_focused(cx, handle, "stage"));
+    assert!(ringed(cx, handle, &view, "f000.rs"));
+}
+
+#[gpui_kit::test]
+fn unchecking_another_file_leaves_the_focused_tile_where_it_is(cx: &mut TestAppContext) {
+    let dir = files(100);
+    let (handle, view) = gallery_of(cx, dir.path());
+    assert_eq!(current(cx, &view), Some(node(cx, &view, "f000.rs")));
+    for _ in 0..70 {
+        press(cx, handle, "right");
+    }
+    assert_eq!(focused_tile(cx, &view).as_deref(), Some("f070.rs"));
+    // A file other than the one on the stage, unchecked in the tree.
+    check(cx, handle, &view, "f005.rs");
+    assert_eq!(focused_tile(cx, &view).as_deref(), Some("f070.rs"));
+    assert!(tiles(cx, handle).contains(&"f070.rs".to_owned()));
+    // Checking a file puts it on the stage: focus follows it.
+    check(cx, handle, &view, "f005.rs");
+    assert_eq!(focused_tile(cx, &view).as_deref(), Some("f005.rs"));
+    assert!(tiles(cx, handle).contains(&"f005.rs".to_owned()));
+}
+
+#[gpui_kit::test]
+fn a_focused_file_that_goes_gives_its_focus_to_the_file_now_in_its_place(cx: &mut TestAppContext) {
+    let dir = files(100);
+    let (handle, view) = gallery_of(cx, dir.path());
+    for _ in 0..70 {
+        press(cx, handle, "right");
+    }
+    std::fs::remove_file(dir.path().join("f070.rs")).unwrap();
+    refresh(cx, &view);
+    assert_eq!(focused_tile(cx, &view).as_deref(), Some("f071.rs"));
+    assert!(tiles(cx, handle).contains(&"f071.rs".to_owned()));
+    // The next key goes on from there.
+    press(cx, handle, "right");
+    assert_eq!(focused_tile(cx, &view).as_deref(), Some("f072.rs"));
 }

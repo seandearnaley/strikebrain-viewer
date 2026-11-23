@@ -362,6 +362,18 @@ impl Stage {
         cx: &mut Context<Self>,
     ) {
         self.state.update(cx, AppState::stop_presenting);
+        // Back in the gallery by a key: its focus ring shows.
+        if self.state.read(cx).shows_gallery() {
+            self.gallery.update(cx, Gallery::key_pressed);
+        }
+    }
+
+    /// Tab or shift-Tab brought keyboard focus to the stage: the gallery's
+    /// focus ring shows, as the tree's does.
+    pub(crate) fn focused_by_key(&mut self, cx: &mut Context<Self>) {
+        if self.state.read(cx).shows_gallery() {
+            self.gallery.update(cx, Gallery::key_pressed);
+        }
     }
 
     fn scroll(&mut self, scroll: Scroll, cx: &mut Context<Self>) {

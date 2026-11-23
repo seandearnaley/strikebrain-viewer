@@ -479,7 +479,10 @@ impl AppView {
             Pane::Tree => self
                 .explorer
                 .update(cx, |explorer, cx| explorer.focus_tree(window, cx)),
-            Pane::Stage => window.focus(&self.stage.focus_handle(cx), cx),
+            Pane::Stage => {
+                window.focus(&self.stage.focus_handle(cx), cx);
+                self.stage.update(cx, Stage::focused_by_key);
+            }
         }
     }
 }

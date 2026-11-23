@@ -174,6 +174,9 @@ pub struct AppState {
     view: StageView,
     /// The tile with keyboard focus in the gallery, by node.
     tile: Option<NodeId>,
+    /// Where `tile` was last seen in the gallery: where its focus goes if
+    /// its file goes.
+    tile_at: usize,
     /// Counts changes to the gallery other than a new tree: the checks and
     /// the order.
     gallery_changes: u64,
@@ -252,6 +255,7 @@ impl AppState {
             current: None,
             view: StageView::File,
             tile: None,
+            tile_at: 0,
             gallery_changes: 0,
             focus: None,
             focus_row: 0,
