@@ -28,8 +28,8 @@ use crate::keys::{
     ClearFilter, Collapse, EXPLORER, Expand, FocusFirst, FocusLast, FocusNext, FocusNextPage,
     FocusPrevious, FocusPreviousPage, OpenFolder, ShowFile, ToggleCheck,
 };
-use crate::row::{RowEvent, TreeRow};
-use crate::state::{AppState, Motion, ScanStatus, StateEvent};
+use crate::row::TreeRow;
+use crate::state::{AppState, DrawnRow, Motion, RowAction, ScanStatus, StateEvent};
 
 use selection_bar::SelectionBar;
 
@@ -271,22 +271,21 @@ impl ExplorerPanel {
 
     // Pointer
 
-    fn row_event(
+    /// A press on a row the last frame drew. It does nothing when the row
+    /// is gone since: input arrives before the next frame.
+    fn row_action(
         &mut self,
-        id: NodeId,
-        event: RowEvent,
+        row: DrawnRow,
+        action: RowAction,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        window.focus(&self.focus_handle, cx);
-        self.state.update(cx, |state, cx| {
-            state.focus_node(id, cx);
-            match event {
-                RowEvent::Click => state.show(id, cx),
-                RowEvent::ToggleCheck => state.toggle_check(id, cx),
-                RowEvent::ToggleOpen => state.toggle_folder(id, cx),
-            }
-        });
+        if self
+            .state
+            .update(cx, |state, cx| state.row_action(row, action, cx))
+        {
+            window.focus(&self.focus_handle, cx);
+        }
     }
 
     /// Any pointer press in the pane hides the focus ring.
@@ -312,13 +311,14 @@ impl ExplorerPanel {
         let ring = self.ring && self.focus_handle.is_focused(window);
         let (current, focus) = (state.current(), state.focus());
         range
-            .filter_map(|ix| explorer.row(ix))
-            .map(|row| {
+            .filter_map(|ix| Some((ix, explorer.row(ix)?)))
+            .map(|(ix, row)| {
                 let id = row.id;
+                let drawn = state.drawn_row(ix, id);
                 TreeRow::new(
                     &row,
-                    cx.listener(move |this, event: &RowEvent, window, cx| {
-                        this.row_event(id, *event, window, cx);
+                    cx.listener(move |this, action: &RowAction, window, cx| {
+                        this.row_action(drawn, *action, window, cx);
                     }),
                 )
                 .current(current == Some(id))

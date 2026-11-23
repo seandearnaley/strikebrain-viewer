@@ -56,6 +56,30 @@ pub enum Motion {
     Last,
 }
 
+/// A row as one frame drew it: which tree, where, and which node. Input
+/// reaches a frame's listeners before the next frame is drawn, so by then
+/// the rows or the whole tree may have changed; [`AppState`] acts on a drawn
+/// row only while it is still that row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct DrawnRow {
+    tree: u64,
+    ix: usize,
+    id: NodeId,
+}
+
+/// What a pointer press or an assistive-technology action asks of a row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RowAction {
+    /// A press on the row: shows a file on the stage; on a folder, nothing
+    /// more than focus.
+    Show,
+    /// A press on the checkbox.
+    ToggleCheck,
+    /// A press on the chevron, or Expand or Collapse from assistive
+    /// technology.
+    ToggleOpen,
+}
+
 /// What [`AppState`] tells its views besides "something changed".
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StateEvent {
@@ -70,6 +94,10 @@ pub struct AppState {
     /// The folder last asked for, as given.
     root: Option<PathBuf>,
     explorer: Option<Explorer>,
+    /// Bumped whenever the tree on screen is replaced or removed, so a row
+    /// drawn for an older tree is recognised. A count, not the tree's
+    /// address, which a new tree can reuse.
+    tree_generation: u64,
     status: ScanStatus,
     /// The file on the stage.
     current: Option<NodeId>,
@@ -132,6 +160,7 @@ impl AppState {
         let mut state = Self {
             root: None,
             explorer: None,
+            tree_generation: 0,
             status: ScanStatus::Idle,
             current: None,
             focus: None,
@@ -230,13 +259,40 @@ impl AppState {
 
     // Rows
 
-    /// Moves keyboard focus to `id`, if it is a row.
-    pub fn focus_node(&mut self, id: NodeId, cx: &mut Context<Self>) {
-        let Some(row) = self.explorer.as_ref().and_then(|e| e.row_of(id)) else {
-            return;
-        };
-        self.set_focus(id, row);
+    /// The row at `ix`, showing `id`, as the frame being drawn shows it.
+    pub(crate) fn drawn_row(&self, ix: usize, id: NodeId) -> DrawnRow {
+        DrawnRow {
+            tree: self.tree_generation,
+            ix,
+            id,
+        }
+    }
+
+    /// A press on a drawn row: focuses the row, then does `action` on it.
+    /// Does nothing and returns false when the row is no longer on screen
+    /// as it was drawn: the tree was replaced, or the rows changed under it.
+    pub(crate) fn row_action(
+        &mut self,
+        row: DrawnRow,
+        action: RowAction,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let still_drawn = row.tree == self.tree_generation
+            && self
+                .explorer
+                .as_ref()
+                .is_some_and(|explorer| explorer.rows().get(row.ix) == Some(&row.id));
+        if !still_drawn {
+            return false;
+        }
+        self.set_focus(row.id, row.ix);
+        match action {
+            RowAction::Show => self.show(row.id, cx),
+            RowAction::ToggleCheck => self.toggle_check(row.id, cx),
+            RowAction::ToggleOpen => self.toggle_folder(row.id, cx),
+        }
         cx.notify();
+        true
     }
 
     /// Moves keyboard focus; returns the new focus row.
@@ -303,21 +359,13 @@ impl AppState {
         Some(parent_row)
     }
 
-    /// Opens or closes a folder: its chevron. Focus inside a folder that
-    /// closes moves to the folder.
-    pub fn toggle_folder(&mut self, id: NodeId, cx: &mut Context<Self>) {
-        let Some(explorer) = self.explorer.as_mut() else {
-            return;
-        };
-        explorer.toggle_folder(id);
-        if !explorer.is_open(id)
-            && let Some(focus) = self.focus
-            && focus != id
-            && explorer.tree().subtree(id).contains(&focus.index())
-        {
-            self.focus = Some(id);
+    /// Opens or closes a folder: its chevron. Focus is already on it, and
+    /// the rows above it do not move.
+    fn toggle_folder(&mut self, id: NodeId, cx: &mut Context<Self>) {
+        if let Some(explorer) = self.explorer.as_mut() {
+            explorer.toggle_folder(id);
+            cx.notify();
         }
-        cx.notify();
     }
 
     /// Opens every folder: the toolbar's Expand all.
@@ -353,7 +401,7 @@ impl AppState {
     /// single file shows it; unchecking the file on the stage moves the stage
     /// to the next checked file, else the previous one, else nothing; an
     /// empty stage takes the first checked file.
-    pub fn toggle_check(&mut self, id: NodeId, cx: &mut Context<Self>) {
+    fn toggle_check(&mut self, id: NodeId, cx: &mut Context<Self>) {
         let Some(explorer) = self.explorer.as_mut() else {
             return;
         };
@@ -393,7 +441,7 @@ impl AppState {
 
     /// Shows `id` on the stage if it is a file, checked or not. Does
     /// nothing on a folder.
-    pub fn show(&mut self, id: NodeId, cx: &mut Context<Self>) {
+    fn show(&mut self, id: NodeId, cx: &mut Context<Self>) {
         let Some(explorer) = &self.explorer else {
             return;
         };
@@ -418,6 +466,11 @@ impl AppState {
     }
 
     // Shared steps
+
+    /// Call whenever the tree on screen is replaced or removed.
+    fn tree_replaced(&mut self) {
+        self.tree_generation += 1;
+    }
 
     fn set_focus(&mut self, id: NodeId, row: usize) {
         self.focus = Some(id);

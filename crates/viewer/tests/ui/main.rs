@@ -10,6 +10,7 @@ mod header;
 mod keyboard;
 mod launch;
 mod layout;
+mod races;
 mod refresh;
 mod rows;
 mod scale;
@@ -22,7 +23,8 @@ use std::sync::Arc;
 use explorer::{NodeId, Tree};
 use gpui_kit::test::{TestQueryExt as _, TestWindowExt as _};
 use gpui_kit::{
-    AnyWindowHandle, AppContext as _, Bounds, ElementId, Entity, Point, Role, TestAppContext,
+    AnyWindowHandle, App, AppContext as _, Bounds, ElementId, Entity, InputEvent as _, Modifiers,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Role, TestAppContext,
     Window, WindowBounds, WindowOptions, point, px, size,
 };
 use viewer::{AppState, AppView, Launch};
@@ -98,6 +100,11 @@ fn open_app(cx: &mut TestAppContext, launch: Launch) -> (AnyWindowHandle, Entity
     opened
 }
 
+/// The application state entity.
+fn state(cx: &mut TestAppContext, view: &Entity<AppView>) -> Entity<AppState> {
+    cx.update(|cx| view.read(cx).state().clone())
+}
+
 /// Reads the application state.
 fn read<R>(cx: &mut TestAppContext, view: &Entity<AppView>, f: impl FnOnce(&AppState) -> R) -> R {
     cx.update(|cx| f(view.read(cx).state().read(cx)))
@@ -165,6 +172,41 @@ fn click(cx: &mut TestAppContext, handle: AnyWindowHandle, id: impl Into<Element
     cx.update_window(handle, |_, window, cx| window.click(id, cx))
         .expect("click");
     cx.run_until_parked();
+}
+
+/// Moves the pointer to `position`, presses and releases the left button,
+/// without drawing a frame first or after: the click reaches the listeners
+/// of the last frame drawn, as a click does that the platform delivers
+/// before the next frame.
+fn click_without_frame(window: &mut Window, position: Point<Pixels>, cx: &mut App) {
+    let modifiers = Modifiers::default();
+    let button = MouseButton::Left;
+    let events = [
+        MouseMoveEvent {
+            position,
+            pressed_button: None,
+            modifiers,
+        }
+        .to_platform_input(),
+        MouseDownEvent {
+            button,
+            position,
+            modifiers,
+            click_count: 1,
+            first_mouse: false,
+        }
+        .to_platform_input(),
+        MouseUpEvent {
+            button,
+            position,
+            modifiers,
+            click_count: 1,
+        }
+        .to_platform_input(),
+    ];
+    for event in events {
+        window.dispatch_event(event, cx);
+    }
 }
 
 /// Clicks into the filter input, types `text` there and lets the filter

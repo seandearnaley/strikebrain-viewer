@@ -59,6 +59,7 @@ impl AppState {
     pub fn open_folder(&mut self, root: PathBuf, cx: &mut Context<Self>) {
         self.root = Some(root.clone());
         self.explorer = None;
+        self.tree_replaced();
         self.current = None;
         self.focus = None;
         self.selected = 0;
@@ -213,6 +214,7 @@ impl AppState {
             }
             None => explorer.replace_tree(tree),
         };
+        self.tree_replaced();
         self.focus = self.focus.and_then(|focus| map.get(focus));
         self.status = ScanStatus::Idle;
         self.selection_changed();
@@ -222,6 +224,7 @@ impl AppState {
     /// The folder itself could not be read: show the system's message.
     fn fail(&mut self, err: &ScanError, cx: &mut Context<Self>) {
         self.explorer = None;
+        self.tree_replaced();
         self.current = None;
         self.focus = None;
         self.selected = 0;
@@ -239,6 +242,7 @@ impl AppState {
         self.focus = explorer.rows().first().copied();
         self.focus_row = 0;
         self.explorer = Some(explorer);
+        self.tree_replaced();
         self.current = None;
         self.selected = 0;
         self.status = ScanStatus::Idle;

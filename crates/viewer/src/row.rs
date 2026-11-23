@@ -20,21 +20,10 @@ use gpui_kit::{
 };
 
 use crate::columns::{self, Columns};
+use crate::state::RowAction;
 
 /// Indent per level below the top: 20 px.
 const INDENT: Rems = Rems(1.25);
-
-/// What a row asks its owner to do.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RowEvent {
-    /// A click anywhere but the checkbox and the chevron.
-    Click,
-    /// A click on the checkbox.
-    ToggleCheck,
-    /// A click on the chevron, or an Expand or Collapse request from
-    /// assistive technology.
-    ToggleOpen,
-}
 
 /// What the chevron target holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,7 +46,7 @@ enum Focus {
     Ringed,
 }
 
-type RowHandler = Rc<dyn Fn(&RowEvent, &mut Window, &mut App)>;
+type RowHandler = Rc<dyn Fn(&RowAction, &mut Window, &mut App)>;
 
 /// One row, built fresh each frame from the engine's row view.
 #[derive(IntoElement)]
@@ -79,7 +68,7 @@ pub(crate) struct TreeRow {
 impl TreeRow {
     pub(crate) fn new(
         row: &RowView<'_>,
-        on_event: impl Fn(&RowEvent, &mut Window, &mut App) + 'static,
+        on_event: impl Fn(&RowAction, &mut Window, &mut App) + 'static,
     ) -> Self {
         let disclosure = match (row.kind, row.can_open, row.open) {
             (Kind::Unreadable, ..) => Disclosure::Unreadable,
@@ -163,7 +152,7 @@ impl RenderOnce for TreeRow {
                         } else {
                             AccessibleAction::Expand
                         },
-                        move |_, window, cx| on_disclose(&RowEvent::ToggleOpen, window, cx),
+                        move |_, window, cx| on_disclose(&RowAction::ToggleOpen, window, cx),
                     )
                 },
             )
@@ -178,7 +167,7 @@ impl RenderOnce for TreeRow {
                     row.hover(|style| style.bg(muted.opacity(0.5)))
                 }
             })
-            .on_click(move |_, window, cx| on_click(&RowEvent::Click, window, cx))
+            .on_click(move |_, window, cx| on_click(&RowAction::Show, window, cx))
             .child(
                 div()
                     .h_7()
@@ -287,7 +276,7 @@ impl TreeRow {
             .hover(|style| style.bg(theme.muted))
             .on_click(move |_, window, cx| {
                 cx.stop_propagation();
-                on_event(&RowEvent::ToggleOpen, window, cx);
+                on_event(&RowAction::ToggleOpen, window, cx);
             })
             .child(
                 Icon::new(chevron)
@@ -314,7 +303,7 @@ impl TreeRow {
             .accessibility_label(self.name.clone())
             .on_change(move |_, _, window, cx| {
                 cx.stop_propagation();
-                on_event(&RowEvent::ToggleCheck, window, cx);
+                on_event(&RowAction::ToggleCheck, window, cx);
             })
             .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
             .flex_shrink_0()
