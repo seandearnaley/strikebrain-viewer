@@ -162,6 +162,21 @@ pub fn filter(tree: &Tree, query: &Query, kind: KindFilter) -> Visibility {
     visibility
 }
 
+/// [`filter`] that gives up, returning `None`, once `cancelled` returns
+/// true. It is asked between passes, a few milliseconds apart on a million
+/// names.
+pub(crate) fn filter_until(
+    tree: &Tree,
+    query: &Query,
+    kind: KindFilter,
+    cancelled: &dyn Fn() -> bool,
+) -> Option<Visibility> {
+    run(tree, query, kind, &mut || {
+        if cancelled() { Err(()) } else { Ok(()) }
+    })
+    .ok()
+}
+
 /// The filter, stopping with `check`'s error at the first checkpoint where
 /// it returns one.
 fn run<E>(

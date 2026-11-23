@@ -6,7 +6,6 @@
 //! one backwards pass for subtree ends (and folder sizes, when known).
 
 use std::collections::HashMap;
-use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
@@ -15,9 +14,7 @@ use fixedbitset::FixedBitSet;
 use super::names::{NameArena, extension_of};
 use super::{Kind, Tree, TreeError, canonical_order, to_u32};
 use crate::NodeId;
-
-/// Children to sort before a second thread is worth starting.
-const PARALLEL_SORT_MIN: usize = 1 << 14;
+use crate::sort::sort_each;
 
 /// The parent of the root, and of nodes the tree should drop.
 pub(crate) const NO_PARENT: u32 = u32::MAX;
@@ -115,9 +112,8 @@ impl RawTree {
         (start, ids)
     }
 
-    /// Sorts each folder's slice of `ids` into canonical order. Folders are
-    /// independent, so large trees spread them over threads in contiguous
-    /// runs of about equal length.
+    /// Sorts each folder's slice of `ids` into canonical order, on threads
+    /// when there are many.
     fn sort_siblings(&self, start: &[u32], ids: &mut [u32]) {
         let mut folders = Vec::new();
         let mut rest = ids;
@@ -129,36 +125,14 @@ impl RawTree {
                 folders.push(siblings);
             }
         }
-        let total: usize = folders.iter().map(|siblings| siblings.len()).sum();
-        let threads = std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
-        let run_len = total.div_ceil(threads).max(PARALLEL_SORT_MIN);
-        std::thread::scope(|scope| {
-            let mut run = Vec::new();
-            let mut run_size = 0;
-            for siblings in folders {
-                run_size += siblings.len();
-                run.push(siblings);
-                if run_size >= run_len {
-                    let full = std::mem::take(&mut run);
-                    run_size = 0;
-                    scope.spawn(move || self.sort_runs(full));
-                }
-            }
-            self.sort_runs(run);
+        sort_each(folders, &|&a: &u32, &b: &u32| {
+            canonical_order(
+                self.kind[a as usize],
+                self.names.get(a as usize),
+                self.kind[b as usize],
+                self.names.get(b as usize),
+            )
         });
-    }
-
-    fn sort_runs(&self, folders: Vec<&mut [u32]>) {
-        for siblings in folders {
-            siblings.sort_unstable_by(|&a, &b| {
-                canonical_order(
-                    self.kind[a as usize],
-                    self.names.get(a as usize),
-                    self.kind[b as usize],
-                    self.names.get(b as usize),
-                )
-            });
-        }
     }
 
     /// Raw indices in depth-first pre-order from the root, with each depth.
@@ -354,8 +328,9 @@ mod tests {
     #[test]
     fn a_tree_big_enough_to_sort_on_threads_keeps_canonical_order() {
         let mut raw = RawTree::new("", false).unwrap();
-        // Two folders, each past the threshold, filled in reverse order.
-        let size = super::PARALLEL_SORT_MIN + 10;
+        // Two folders, each past the threshold for sorting on threads,
+        // filled in reverse order.
+        let size = (1 << 14) + 10;
         for folder in ["b", "a"] {
             let dir = raw.push(0, folder, Kind::Dir).unwrap();
             for i in (0..size).rev() {

@@ -4,19 +4,26 @@
 
 mod bits;
 mod content;
+mod explorer;
 mod filter;
+mod remap;
+mod rows;
 mod scan;
 mod selection;
+mod sort;
 mod tree;
 
 pub use content::{
     BINARY_EXTENSIONS, HEAD_LEN, IMAGE_EXTENSIONS, Viewer, format_size, is_binary_extension,
     is_image_extension, viewer_for,
 };
+pub use explorer::{Explorer, FilterJob, FilterResult, Gallery};
 pub use filter::{KindFilter, Query, Visibility, filter};
 pub use fixedbitset::FixedBitSet;
+pub use remap::IdMap;
 pub use scan::{ScanError, ScanOptions, read_sizes, scan};
 pub use selection::{Check, Selection};
+pub use sort::{Direction, Sort, SortKey};
 pub use tree::{Kind, Tree, TreeError, compare_names};
 
 /// Identifies one node of a scanned tree. Ids are positions in depth-first order.

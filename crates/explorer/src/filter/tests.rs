@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use proptest::prelude::*;
 
-use super::{KindFilter, Query, Visibility, filter};
+use super::{KindFilter, Query, Visibility, filter, filter_until};
 use crate::tree::RawTree;
 use crate::tree::tests::{path_sets, tree_of};
 use crate::{Kind, NodeId, Tree};
@@ -218,6 +218,37 @@ fn many_hits_in_a_row_and_far_apart_are_all_found() {
     let (tree, visibility) = run(&list, "hit", KindFilter::All);
     assert_eq!(visible(&tree, &visibility).len(), 301);
     assert!(visibility.is_visible(id(&tree, "zz-hit")));
+}
+
+#[test]
+fn a_cancelled_filter_gives_no_result() {
+    let tree = Tree::from_paths(&["a.txt"]).unwrap();
+    let query = Query::parse("a -b");
+    assert_eq!(filter_until(&tree, &query, KindFilter::All, &|| true), None);
+    // Each later checkpoint also stops the run.
+    for allowed in 1..4 {
+        let calls = std::cell::Cell::new(0);
+        let cancelled = || {
+            calls.set(calls.get() + 1);
+            calls.get() > allowed
+        };
+        assert_eq!(
+            filter_until(&tree, &query, KindFilter::All, &cancelled),
+            None
+        );
+    }
+    // An inactive filter has nothing to cancel.
+    assert_eq!(
+        filter_until(&tree, &Query::default(), KindFilter::All, &|| true),
+        Some(Visibility::all())
+    );
+}
+
+#[test]
+fn a_term_holding_a_nul_matches_nothing() {
+    let (tree, visibility) = run(&["a.txt"], "a\0", KindFilter::All);
+    assert!(visibility.is_active());
+    assert_eq!(visible(&tree, &visibility), Vec::<String>::new());
 }
 
 #[test]

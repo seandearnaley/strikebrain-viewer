@@ -55,6 +55,23 @@ pub(crate) fn or_and(
     }
 }
 
+/// The lowest set bit at `from` or above, if any.
+pub(crate) fn next_one(set: &FixedBitSet, from: usize) -> Option<usize> {
+    if from >= set.len() {
+        return None;
+    }
+    let blocks = set.as_slice();
+    let mut w = from / WORD;
+    let mut word = blocks[w] & (usize::MAX << (from % WORD));
+    loop {
+        if word != 0 {
+            return Some(w * WORD + word.trailing_zeros() as usize);
+        }
+        w += 1;
+        word = *blocks.get(w)?;
+    }
+}
+
 /// The highest set bit below `before`, if any.
 ///
 /// # Panics
@@ -85,7 +102,7 @@ mod tests {
     use fixedbitset::FixedBitSet;
     use proptest::prelude::*;
 
-    use super::{count_and, or_and, prev_one};
+    use super::{count_and, next_one, or_and, prev_one};
 
     fn set(len: usize, bits: &[bool]) -> FixedBitSet {
         let mut set = FixedBitSet::with_capacity(len);
@@ -122,6 +139,16 @@ mod tests {
     }
 
     proptest! {
+        #[test]
+        fn next_one_matches_a_bit_loop(
+            len in 0_usize..300,
+            bits in prop::collection::vec(any::<bool>(), 300),
+            from in 0_usize..310,
+        ) {
+            let set = set(len, &bits);
+            prop_assert_eq!(next_one(&set, from), (from..len).find(|&i| set.contains(i)));
+        }
+
         #[test]
         fn prev_one_matches_a_bit_loop(
             len in 0_usize..300,

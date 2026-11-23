@@ -97,7 +97,7 @@ impl std::error::Error for TreeError {}
 /// before every file has been measured. [`crate::read_sizes`] then fills the
 /// sizes, exactly once, on whatever thread runs it; until then
 /// [`Tree::size`] is `None`. [`Tree::children`] is always canonical order;
-/// a sorted view keeps its own order beside the tree.
+/// an [`crate::Explorer`] keeps any other display order beside the tree.
 ///
 /// Every accessor taking a [`NodeId`] panics if the id is not a node of this
 /// tree.
@@ -323,8 +323,14 @@ impl Tree {
         &self.child_ids[self.child_range(id)]
     }
 
-    /// Where the node's children sit in the shared children list.
-    fn child_range(&self, id: NodeId) -> Range<usize> {
+    /// Every folder's children, folder by folder in id order, each folder's
+    /// in canonical order.
+    pub(crate) fn child_ids(&self) -> &[NodeId] {
+        &self.child_ids
+    }
+
+    /// Where the node's children sit in [`Tree::child_ids`].
+    pub(crate) fn child_range(&self, id: NodeId) -> Range<usize> {
         let i = id.index();
         self.child_start[i] as usize..self.child_start[i + 1] as usize
     }
