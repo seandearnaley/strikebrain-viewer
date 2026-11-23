@@ -216,6 +216,7 @@ impl AppState {
         };
         self.current = current;
         self.focus = self.focus.and_then(|focus| map.get(focus));
+        self.tile = self.tile.and_then(|tile| map.get(tile));
         self.tree_replaced();
         let folder = self.folder_mut(key)?;
         folder.shown = true;
@@ -318,6 +319,10 @@ impl AppState {
         };
         explorer.sizes_loaded();
         let sorted_by_size = explorer.sort().key == SortKey::Size;
+        if sorted_by_size {
+            // The sizes reorder the gallery too.
+            self.gallery_changes += 1;
+        }
         if self.restore_top.is_some() {
             self.landed(cx);
         } else if sorted_by_size {

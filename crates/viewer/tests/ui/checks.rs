@@ -114,15 +114,18 @@ fn unchecking_the_current_file_moves_the_stage_to_its_neighbour(cx: &mut TestApp
     for file in ids {
         check(cx, file);
     }
-    assert_eq!(stage_now(cx, handle).as_deref(), Some("README.md"));
+    // Three checked files show the gallery (milestone 7); the file on the
+    // stage is the one checked last.
+    assert_eq!(current(cx, &view), Some(readme));
 
     // The middle file: the stage moves to the next checked file.
     cx.update_window(handle, |_, window, cx| window.click(row(file10), cx))
         .unwrap();
+    assert_eq!(stage_now(cx, handle).as_deref(), Some("file10.txt"));
     check(cx, file10);
-    assert_eq!(stage_now(cx, handle).as_deref(), Some("README.md"));
+    assert_eq!(current(cx, &view), Some(readme));
 
-    // The last file: no next, so the previous one.
+    // The last file: no next, so the previous one, the only one left.
     check(cx, readme);
     assert_eq!(stage_now(cx, handle).as_deref(), Some("file2.txt"));
 

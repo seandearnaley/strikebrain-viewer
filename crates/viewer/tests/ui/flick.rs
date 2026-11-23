@@ -68,6 +68,8 @@ fn flicking_through_a_thousand_mixed_files_stays_under_a_memory_ceiling(cx: &mut
     click(cx, handle, "select-all");
     press(cx, handle, "tab");
     assert!(is_focused(cx, handle, "stage"));
+    // A thousand checked files show the gallery: Enter opens the first.
+    press(cx, handle, "enter");
     // Warm up: the first files of each kind make the views and caches.
     for _ in 0..10 {
         next(cx, handle);

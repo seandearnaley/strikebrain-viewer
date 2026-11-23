@@ -110,6 +110,8 @@ impl ExplorerPanel {
                     rows_before,
                     focus_before,
                 } => this.rows_moved(*top, *rows_before, *focus_before, cx),
+                // The gallery's own.
+                StateEvent::RevealTile => {}
             }),
             cx.subscribe(&filter, |this, input, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Change) {

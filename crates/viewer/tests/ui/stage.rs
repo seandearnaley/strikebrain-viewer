@@ -140,7 +140,9 @@ fn mixed(dir: &Path) {
         .expect("grow big.txt");
 }
 
-/// Opens `dir`, checks every file and moves keyboard focus to the stage.
+/// Opens `dir`, checks every file and moves keyboard focus to the stage,
+/// in the file view on the first file. With two or more files checked the
+/// stage shows the gallery first (milestone 7): Enter opens its first tile.
 pub(crate) fn open_checked(
     cx: &mut TestAppContext,
     dir: &Path,
@@ -149,6 +151,9 @@ pub(crate) fn open_checked(
     click(cx, handle, "select-all");
     press(cx, handle, "tab");
     assert!(is_focused(cx, handle, "stage"));
+    if read(cx, &view, AppState::shows_gallery) {
+        press(cx, handle, "enter");
+    }
     (handle, view)
 }
 
@@ -428,7 +433,13 @@ fn the_stage_keys_work_while_the_code_view_holds_focus(cx: &mut TestAppContext) 
     press(cx, handle, "left");
     assert_eq!(current(cx, &view), Some(a));
 
+    // Esc from the code view: with two files checked, back to the gallery
+    // with the stage holding focus (milestone 7); Esc there goes to the
+    // explorer.
     click(cx, handle, "stage-code");
+    press(cx, handle, "escape");
+    assert!(read(cx, &view, AppState::shows_gallery));
+    assert!(is_focused(cx, handle, "stage"));
     press(cx, handle, "escape");
     assert!(is_focused(cx, handle, "tree"));
 }

@@ -165,6 +165,11 @@ impl<K: Hash + Eq + Clone, V> Lru<K, V> {
     pub(crate) fn used(&self) -> usize {
         self.used
     }
+
+    /// What the entries may cost together.
+    pub(crate) fn budget(&self) -> usize {
+        self.budget
+    }
 }
 
 #[cfg(test)]
@@ -276,6 +281,7 @@ mod tests {
         assert_eq!(cache.remove(&"a"), Some(2));
         assert_eq!(cache.used(), 0);
         cache.insert("b", 3, 5);
+        assert_eq!(cache.budget(), 10);
         assert_eq!(cache.drain().collect::<Vec<_>>(), [3]);
         assert_eq!((cache.len(), cache.used()), (0, 0));
     }

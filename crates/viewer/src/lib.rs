@@ -19,8 +19,8 @@ pub use launch::{folder_from_url, open_main_window};
 pub use persist::{
     APP_ID, Plan, STATE_FILE_VAR, Saved, SavedView, SavedWindow, StateStore, fit, plan_launch,
 };
-pub use stage::StageProbe;
-pub use state::{AppState, Launch, ScanStatus, StateOptions};
+pub use stage::{GalleryProbe, StageProbe};
+pub use state::{AppState, Launch, ScanStatus, StageView, StateOptions};
 
 use gpui_kit::App;
 

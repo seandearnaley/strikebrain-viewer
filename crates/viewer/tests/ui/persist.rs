@@ -10,7 +10,9 @@ use gpui_kit::{
     AnyWindowHandle, AppContext as _, Entity, ScrollDelta, TestAppContext, WindowBounds, point, px,
     size,
 };
-use viewer::{AppState, AppView, Launch, SAVE_DELAY, Saved, StateStore, open_main_window};
+use viewer::{
+    AppState, AppView, Launch, SAVE_DELAY, Saved, StageView, StateStore, open_main_window,
+};
 
 use crate::{
     checked, click, drag_divider, filter_value, folder, labels, name_of, node, node_at, read, row,
@@ -278,6 +280,53 @@ fn several_folders_come_back_in_order_each_with_its_own_view(cx: &mut TestAppCon
     let (handle, view) = launch(&mut cx, &[], &StateStore::at(store.path()));
     assert_eq!(seen(&mut cx, handle, &view), before);
     assert_eq!(rows_now(&mut cx, handle), rows);
+    cx.quit();
+}
+
+#[gpui_kit::test]
+fn the_stage_comes_back_in_the_view_it_showed(cx: &mut TestAppContext) {
+    let dir = folder(&[("a.rs", "a"), ("b.rs", "b"), ("c.rs", "c")]);
+    let state_dir = tempfile::tempdir().unwrap();
+    let store = StateStore::at(state_dir.path().join("state.json"));
+    // The view, the file on the stage and, while the gallery shows, the
+    // tile with focus.
+    let shows = |cx: &mut TestAppContext, view: &Entity<AppView>| {
+        read(cx, view, |state| {
+            let tree = state.explorer().expect("a tree is on screen").tree();
+            let name = |id| tree.name(id).to_owned();
+            let tile = state.shows_gallery().then(|| state.tile().map(name));
+            (
+                state.stage_view(),
+                state.current().map(name),
+                tile.flatten(),
+            )
+        })
+    };
+
+    // The file view, on a file opened from the gallery.
+    let (handle, view) = launch(cx, &[dir.path()], &store);
+    click(cx, handle, "select-all");
+    let b = node(cx, &view, "b.rs");
+    click(cx, handle, ("tile", b.index()));
+    let file_view = (StageView::File, Some("b.rs".to_owned()), None);
+    assert_eq!(shows(cx, &view), file_view);
+    cx.quit();
+    assert_eq!(saved(store.path()).view.view, StageView::File);
+
+    let mut cx = cx.new_app();
+    let (_, view) = launch(&mut cx, &[], &StateStore::at(store.path()));
+    assert_eq!(shows(&mut cx, &view), file_view);
+    // Back to the gallery, then quit there.
+    let state = view.read_with(&cx, |view, _| view.state().clone());
+    state.update(&mut cx, AppState::show_gallery);
+    cx.run_until_parked();
+    cx.quit();
+    assert_eq!(saved(store.path()).view.view, StageView::Gallery);
+
+    let mut cx = cx.new_app();
+    let (_, view) = launch(&mut cx, &[], &StateStore::at(store.path()));
+    let b = Some("b.rs".to_owned());
+    assert_eq!(shows(&mut cx, &view), (StageView::Gallery, b.clone(), b));
     cx.quit();
 }
 

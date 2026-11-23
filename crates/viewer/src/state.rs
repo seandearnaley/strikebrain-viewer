@@ -8,12 +8,14 @@
 //! The folders and their order live in `state/folders.rs`, scanning them
 //! in `state/scan.rs`, following them on disk in `state/watch.rs`, moving
 //! over the rows in `state/rows.rs`, checks and the stage in
-//! `state/checks.rs`, filtering in `state/filter.rs`, and restoring a
+//! `state/checks.rs`, the gallery and which of the stage's views shows in
+//! `state/gallery.rs`, filtering in `state/filter.rs`, and restoring a
 //! saved view in `state/restore.rs`.
 
 mod checks;
 mod filter;
 mod folders;
+mod gallery;
 mod restore;
 mod rows;
 mod scan;
@@ -28,6 +30,8 @@ use gpui_kit::{Context, EventEmitter, Result, Task};
 
 use crate::persist::SavedView;
 use folders::Folder;
+pub use gallery::StageView;
+pub(crate) use gallery::{DrawnTile, TileMotion};
 use restore::Pending;
 use watch::Watching;
 
@@ -118,9 +122,13 @@ pub(crate) enum StateEvent {
     /// landed, folders opened or closed together, the sort or the tree
     /// changed. The tree keeps the focus row on screen.
     RowsReplaced,
-    /// The stage moved to another file by its own keys. The tree scrolls
-    /// that file's row into view if it is a row, and opens no folder.
+    /// The stage moved to another file by its own keys, or a tile opened
+    /// one. The tree scrolls that file's row into view if it is a row, and
+    /// opens no folder.
     CurrentMoved,
+    /// The gallery's focus moved to a tile the gallery should scroll into
+    /// view: back from the file view or a presentation, or a check changed.
+    RevealTile,
     /// A saved view was restored, or a launch settled: the tree scrolls
     /// this row to its top.
     TopRow(usize),
@@ -162,6 +170,13 @@ pub struct AppState {
     tree_generation: u64,
     /// The file on the stage.
     current: Option<NodeId>,
+    /// Which of the stage's views shows: the gallery or the file.
+    view: StageView,
+    /// The tile with keyboard focus in the gallery, by node.
+    tile: Option<NodeId>,
+    /// Counts changes to the gallery other than a new tree: the checks and
+    /// the order.
+    gallery_changes: u64,
     /// The keyboard focus row, by node so it survives row changes. Always a
     /// row on screen, or `None` when there are no rows.
     focus: Option<NodeId>,
@@ -204,6 +219,8 @@ impl std::fmt::Debug for AppState {
             .field("folders", &self.folders)
             .field("explorer", &self.explorer)
             .field("current", &self.current)
+            .field("view", &self.view)
+            .field("tile", &self.tile)
             .field("focus", &self.focus)
             .field("selected", &self.selected)
             .field("presenting", &self.presenting)
@@ -233,6 +250,9 @@ impl AppState {
             explorer: None,
             tree_generation: 0,
             current: None,
+            view: StageView::File,
+            tile: None,
+            gallery_changes: 0,
             focus: None,
             focus_row: 0,
             selected: 0,

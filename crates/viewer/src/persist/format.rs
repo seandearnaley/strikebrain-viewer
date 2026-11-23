@@ -10,12 +10,14 @@ use gpui_kit::{Bounds, Pixels, WindowBounds, point, px, size};
 use serde::{Deserialize, Serialize};
 
 use super::{Saved, SavedView, SavedWindow};
+use crate::state::StageView;
 
 /// The schema version written. Version 1 is still read.
 const VERSION: u32 = 2;
 
 /// Version 2: every folder with its own open folders and checks; the file
-/// on the stage and the top row by their paths on disk.
+/// on the stage and the top row by their paths on disk; which of the
+/// stage's views showed, `file` in a file saved before the gallery.
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 struct StateFile {
@@ -23,6 +25,7 @@ struct StateFile {
     folders: Vec<FolderFile>,
     show_ignored: bool,
     current: Option<PathBuf>,
+    view: ViewFile,
     query: String,
     kind: KindFile,
     sort: SortFile,
@@ -76,6 +79,14 @@ enum KindFile {
     All,
     Images,
     Text,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum ViewFile {
+    #[default]
+    File,
+    Gallery,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -139,6 +150,10 @@ pub(super) fn encode(saved: &Saved) -> io::Result<Vec<u8>> {
             .collect(),
         show_ignored: view.show_ignored,
         current: view.current.clone(),
+        view: match view.view {
+            StageView::File => ViewFile::File,
+            StageView::Gallery => ViewFile::Gallery,
+        },
         query: view.query.clone(),
         kind: match view.kind {
             KindFilter::All => KindFile::All,
@@ -231,6 +246,10 @@ pub(super) fn decode(bytes: &[u8]) -> Option<Saved> {
             },
         },
         top_row: absolute(file.first_visible_row),
+        view: match file.view {
+            ViewFile::File => StageView::File,
+            ViewFile::Gallery => StageView::Gallery,
+        },
     };
     Some(Saved {
         view,
@@ -250,6 +269,7 @@ fn from_version_1(file: StateFileV1) -> StateFile {
     StateFile {
         version: VERSION,
         current: under(file.current),
+        view: ViewFile::File,
         first_visible_row: under(file.first_visible_row),
         folders: root
             .iter()

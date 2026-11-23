@@ -21,6 +21,12 @@ explorer = { path = "../explorer" }
 # builds this crate, so it adds no code.
 futures = { version = "0.3.34", default-features = false, features = ["std"] }
 gpui-kit = { workspace = true }
+# The gallery's thumbnails: a picture decoded and scaled down to its tile,
+# as a GPUI image (`RenderImage` holds `image::Frame`s). GPUI's own loader
+# decodes at full size and keeps the result. GPUI already builds this crate
+# with these formats; listing it adds no code. Tests and shots also write
+# PNG, JPEG and GIF files with it.
+image = { version = "0.25.10", default-features = false, features = ["bmp", "gif", "ico", "jpeg", "png", "tiff", "webp"] }
 # Live refresh. The 150 ms window runs on GPUI's timer, which tests drive,
 # so neither debouncer crate is used.
 notify = "9.0.0"
@@ -35,10 +41,6 @@ libc = "0.2.191"
 
 [dev-dependencies]
 gpui-kit = { workspace = true, features = ["test-support"] }
-# Stage tests and shots write real PNG, JPEG and GIF files, and the large
-# image probe an 8000 x 6000 photo. GPUI already builds this crate to decode
-# images; listing it adds no code, only a direct path to its encoders.
-image = { version = "0.25.10", default-features = false, features = ["gif", "jpeg", "png"] }
 # Refresh and Show ignored tests scan real folders.
 tempfile = "3.27.0"
 

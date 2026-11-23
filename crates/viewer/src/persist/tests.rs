@@ -9,7 +9,7 @@ use super::{
     APP_ID, FolderSnapshot, Saved, SavedView, SavedWindow, Snapshot, SnapshotView, StateStore,
     decode, encode, fit, plan_launch, resolve, split_app_id,
 };
-use crate::state::Launch;
+use crate::state::{Launch, StageView};
 
 /// One folder's part, with open folders and checks.
 fn saved_folder(path: PathBuf) -> SavedFolder {
@@ -44,6 +44,7 @@ fn full(root: &Path) -> Saved {
                 direction: Direction::Descending,
             },
             top_row: Some(root.join("src/app")),
+            view: StageView::Gallery,
         },
         explorer_width: Some(412.5),
         window: Some(SavedWindow {
@@ -72,6 +73,15 @@ fn a_state_survives_the_trip_through_json() {
         text.contains("\"first_visible_row\": \"/projects/demo/src/app\""),
         "{text}"
     );
+    assert!(text.contains("\"view\": \"gallery\""), "{text}");
+}
+
+#[test]
+fn a_state_saved_before_the_gallery_shows_the_file() {
+    let before = br#"{"version": 2, "folders": [{"root": "/p"}], "current": "/p/a.txt"}"#;
+    let saved = decode(before).unwrap();
+    assert_eq!(saved.view.view, StageView::File);
+    assert_eq!(saved.view.current, Some(PathBuf::from("/p/a.txt")));
 }
 
 #[test]

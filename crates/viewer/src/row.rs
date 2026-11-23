@@ -494,7 +494,7 @@ impl TreeRow {
 /// A file's icon by its lowercase extension, in the kinds the stage tells
 /// apart: a picture, Markdown, other text or code, and anything else (a
 /// known binary format), as the Images and Text kinds sort them.
-fn file_icon(extension: &str) -> AssetIcon {
+pub(crate) fn file_icon(extension: &str) -> AssetIcon {
     if is_image_extension(extension) {
         AssetIcon::FileImage
     } else if matches!(extension, "md" | "markdown") {

@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use explorer::{Explorer, SavedFolder, SortKey};
 use gpui_kit::Context;
 
-use super::{AppState, StateEvent};
+use super::{AppState, StageView, StateEvent};
 use crate::persist::{FolderSnapshot, SavedView, SnapshotView};
 
 /// The parts of a saved view that wait for the folders to land; empty for
@@ -22,6 +22,7 @@ use crate::persist::{FolderSnapshot, SavedView, SnapshotView};
 pub(super) struct Pending {
     current: Option<PathBuf>,
     top_row: Option<PathBuf>,
+    view: StageView,
 }
 
 impl AppState {
@@ -36,6 +37,7 @@ impl AppState {
         self.restore = Some(Pending {
             current: view.current,
             top_row: view.top_row,
+            view: view.view,
         });
         view.folders
     }
@@ -80,9 +82,10 @@ impl AppState {
         }
     }
 
-    /// Applies the sort, the file on the stage and the top row of a saved
-    /// view once every folder is on screen. A file on the stage that is
-    /// gone gives way to the first checked file.
+    /// Applies the sort, the file on the stage, the stage's view and the
+    /// top row of a saved view once every folder is on screen. A file on
+    /// the stage that is gone gives way to the first checked file; the
+    /// gallery comes back only while two or more files are checked.
     fn finish_restore(&mut self, pending: Pending, cx: &mut Context<Self>) {
         let Some(explorer) = self.explorer.as_mut() else {
             return self.rows_replaced(cx);
@@ -98,6 +101,7 @@ impl AppState {
             self.current = current;
         }
         self.selection_changed();
+        self.restore_view(pending.view, cx);
         if waits_for_sizes {
             self.restore_top = pending.top_row;
             self.rows_replaced(cx);
@@ -147,6 +151,7 @@ impl AppState {
             _ => pending.and_then(|pending| pending.current.clone()),
         };
         let sort = self.sort;
+        let view = pending.map_or(self.view, |pending| pending.view);
         let folders: Vec<FolderSnapshot> = self
             .folders
             .iter()
@@ -177,6 +182,7 @@ impl AppState {
                 kind: self.kind,
                 sort,
                 top_row,
+                view,
             },
         }
     }

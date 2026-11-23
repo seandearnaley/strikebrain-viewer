@@ -1,7 +1,8 @@
 //! Keyboard commands: GPUI actions and the keys bound to them.
 //!
 //! Each pane declares a key context while it holds focus: the explorer's
-//! tree [`EXPLORER`], its filter input [`FILTER`] and the stage [`STAGE`].
+//! tree [`EXPLORER`], its filter input [`FILTER`] and the stage [`STAGE`],
+//! or [`GALLERY`] while the stage shows its grid of checked files.
 //! Before a tree is on screen (no folder, or the first scans still
 //! running) the explorer's body holds focus in the tree's place, in
 //! [`EXPLORER_BODY`]; a folder that cannot be read is a row of the tree.
@@ -27,8 +28,11 @@ pub(crate) const EXPLORER: &str = "Explorer";
 /// The key context around the explorer's filter input.
 pub(crate) const FILTER: &str = "Filter";
 
-/// The key context the stage declares.
+/// The key context the stage declares while it shows one file.
 pub(crate) const STAGE: &str = "Stage";
+
+/// The key context the stage declares while it shows the gallery.
+pub(crate) const GALLERY: &str = "Gallery";
 
 /// The key context of the explorer's body while no tree is on screen.
 pub(crate) const EXPLORER_BODY: &str = "ExplorerBody";
@@ -130,6 +134,36 @@ actions!(
         Present,
         /// Ends the presentation.
         LeavePresentation,
+        /// Esc in the file view: back to the gallery with two or more files
+        /// checked, otherwise to the explorer.
+        ShowGallery,
+    ]
+);
+
+actions!(
+    gallery,
+    [
+        /// Moves tile focus one tile back: from a row's first tile to the
+        /// end of the row above.
+        FocusPreviousTile,
+        /// Moves tile focus one tile on: from a row's last tile to the
+        /// start of the row below.
+        FocusNextTile,
+        /// Moves tile focus one row up.
+        FocusTileAbove,
+        /// Moves tile focus one row down, or to the last tile when the row
+        /// below is too short to have one under it.
+        FocusTileBelow,
+        /// Moves tile focus to the first tile.
+        FocusFirstTile,
+        /// Moves tile focus to the last tile.
+        FocusLastTile,
+        /// Moves tile focus a screen of rows up.
+        FocusTilePageUp,
+        /// Moves tile focus a screen of rows down.
+        FocusTilePageDown,
+        /// Opens the focused tile's file in the file view.
+        OpenTile,
     ]
 );
 
@@ -179,12 +213,30 @@ pub(crate) fn bindings() -> Vec<KeyBinding> {
             KeyBinding::new("end", ScrollToBottom, stage),
             KeyBinding::new("space", Present, stage),
             KeyBinding::new("enter", Present, stage),
-            KeyBinding::new("escape", FocusExplorer, stage),
+            KeyBinding::new("escape", ShowGallery, stage),
             KeyBinding::new("cmd-f", FocusFilter, stage),
             KeyBinding::new("tab", NextPane, stage),
             KeyBinding::new("shift-tab", PreviousPane, stage),
         ]);
     }
+    // The gallery's keys: focus moves over the tiles.
+    let gallery = Some(GALLERY);
+    bindings.extend([
+        KeyBinding::new("left", FocusPreviousTile, gallery),
+        KeyBinding::new("right", FocusNextTile, gallery),
+        KeyBinding::new("up", FocusTileAbove, gallery),
+        KeyBinding::new("down", FocusTileBelow, gallery),
+        KeyBinding::new("home", FocusFirstTile, gallery),
+        KeyBinding::new("end", FocusLastTile, gallery),
+        KeyBinding::new("pageup", FocusTilePageUp, gallery),
+        KeyBinding::new("pagedown", FocusTilePageDown, gallery),
+        KeyBinding::new("enter", OpenTile, gallery),
+        KeyBinding::new("space", Present, gallery),
+        KeyBinding::new("escape", FocusExplorer, gallery),
+        KeyBinding::new("cmd-f", FocusFilter, gallery),
+        KeyBinding::new("tab", NextPane, gallery),
+        KeyBinding::new("shift-tab", PreviousPane, gallery),
+    ]);
     // The presentation's keys, likewise. Space moves on, as in a slideshow.
     for presentation in [Some(PRESENTATION), Some(PRESENTATION_EDITOR)] {
         bindings.extend([
@@ -260,7 +312,8 @@ mod tests {
     fn escape_clears_the_filter_or_leaves_it_and_command_f_finds_it() {
         assert_bound("escape", Some(EXPLORER), &ClearFilter);
         assert_bound("escape", Some(FILTER), &CancelFilter);
-        assert_bound("escape", Some(STAGE), &FocusExplorer);
+        assert_bound("escape", Some(STAGE), &ShowGallery);
+        assert_bound("escape", Some(GALLERY), &FocusExplorer);
         assert_bound("cmd-f", Some(EXPLORER), &FocusFilter);
         assert_bound("cmd-f", Some(STAGE), &FocusFilter);
         assert_bound("cmd-f", Some(EXPLORER_BODY), &FocusFilter);
@@ -279,9 +332,26 @@ mod tests {
             assert_bound("end", Some(context), &ScrollToBottom);
             assert_bound("space", Some(context), &Present);
             assert_bound("enter", Some(context), &Present);
-            assert_bound("escape", Some(context), &FocusExplorer);
+            assert_bound("escape", Some(context), &ShowGallery);
             assert_bound("cmd-f", Some(context), &FocusFilter);
         }
+    }
+
+    #[test]
+    fn the_gallery_moves_tile_focus_opens_and_presents() {
+        let gallery = Some(GALLERY);
+        assert_bound("left", gallery, &FocusPreviousTile);
+        assert_bound("right", gallery, &FocusNextTile);
+        assert_bound("up", gallery, &FocusTileAbove);
+        assert_bound("down", gallery, &FocusTileBelow);
+        assert_bound("home", gallery, &FocusFirstTile);
+        assert_bound("end", gallery, &FocusLastTile);
+        assert_bound("pageup", gallery, &FocusTilePageUp);
+        assert_bound("pagedown", gallery, &FocusTilePageDown);
+        assert_bound("enter", gallery, &OpenTile);
+        assert_bound("space", gallery, &Present);
+        assert_bound("escape", gallery, &FocusExplorer);
+        assert_bound("cmd-f", gallery, &FocusFilter);
     }
 
     #[test]
@@ -312,7 +382,14 @@ mod tests {
 
     #[test]
     fn tab_and_shift_tab_move_between_panes_from_each_pane() {
-        for context in [EXPLORER, FILTER, STAGE, STAGE_EDITOR, EXPLORER_BODY] {
+        for context in [
+            EXPLORER,
+            FILTER,
+            STAGE,
+            STAGE_EDITOR,
+            GALLERY,
+            EXPLORER_BODY,
+        ] {
             assert_bound("tab", Some(context), &NextPane);
             assert_bound("shift-tab", Some(context), &PreviousPane);
         }

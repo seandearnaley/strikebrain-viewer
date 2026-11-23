@@ -23,8 +23,7 @@ impl AppState {
         } else {
             self.leave_unchecked_current(current_was_checked);
         }
-        self.selection_changed();
-        cx.notify();
+        self.checks_changed(cx);
     }
 
     /// Checks every file the filter shows: the toolbar's Select all.
@@ -33,8 +32,7 @@ impl AppState {
             return;
         };
         explorer.select_all();
-        self.selection_changed();
-        cx.notify();
+        self.checks_changed(cx);
     }
 
     /// Unchecks every file, hidden ones included: Clear.
@@ -45,11 +43,18 @@ impl AppState {
         let current_was_checked = self.current.is_some_and(|c| explorer.is_selected(c));
         explorer.clear_selection();
         self.leave_unchecked_current(current_was_checked);
+        self.checks_changed(cx);
+    }
+
+    /// After the person changed the checks: the stage shows what they hold
+    /// (see `state/gallery.rs`).
+    fn checks_changed(&mut self, cx: &mut Context<Self>) {
         self.selection_changed();
+        self.show_for_checks(cx);
         cx.notify();
     }
 
-    /// Shows `id` on the stage if it is a file, checked or not. Does
+    /// Shows `id` in the file view if it is a file, checked or not. Does
     /// nothing on a folder.
     pub(super) fn show(&mut self, id: NodeId, cx: &mut Context<Self>) {
         let Some(explorer) = &self.explorer else {
@@ -57,6 +62,7 @@ impl AppState {
         };
         if explorer.tree().is_file(id) {
             self.current = Some(id);
+            self.view = super::StageView::File;
             cx.notify();
         }
     }
@@ -91,19 +97,27 @@ impl AppState {
     }
 
     /// Space or Enter on the stage: starts the presentation of the file on
-    /// the stage. Does nothing with no file there.
+    /// the stage, or from the gallery of its focused tile. Does nothing with
+    /// no file there.
     pub fn start_presenting(&mut self, cx: &mut Context<Self>) {
-        if self.current.is_some() && !self.presenting {
+        if self.presenting {
+            return;
+        }
+        if self.shows_gallery() && self.tile.is_some() {
+            self.current = self.tile;
+        }
+        if self.current.is_some() {
             self.presenting = true;
             cx.notify();
         }
     }
 
-    /// Esc in the presentation: back to the explorer and the stage, on the
-    /// same file.
+    /// Esc in the presentation: back to the explorer and the view it
+    /// started from, on the same file; the gallery focused on its tile.
     pub fn stop_presenting(&mut self, cx: &mut Context<Self>) {
         if self.presenting {
             self.presenting = false;
+            self.back_from_presenting(cx);
             cx.notify();
         }
     }
@@ -139,16 +153,19 @@ impl AppState {
         }
     }
 
-    /// After any change to the checks: recount, and give an empty stage the
-    /// first checked file.
+    /// After any change to the checks: recount, give an empty stage the
+    /// first checked file, and keep the gallery's view and focus on what it
+    /// holds now.
     pub(super) fn selection_changed(&mut self) {
         let Some(explorer) = &self.explorer else {
             self.selected = 0;
+            self.settle_view();
             return;
         };
         self.selected = explorer.selection().count();
         if self.current.is_none() {
             self.current = explorer.gallery().next();
         }
+        self.settle_view();
     }
 }

@@ -1,11 +1,15 @@
-//! The stage: the right pane, which shows one file at a time.
+//! The stage: the right pane. It has two views: the gallery, a grid of the
+//! checked files (`stage/gallery.rs`), and the file view, which shows one
+//! file at a time and is described here. The state says which shows.
 //!
 //! The file is the state's `current`. The stage reads its first 8 KB off
 //! the UI thread and shows it in the viewer the engine picks: an image
 //! (`stage/images.rs`), Markdown or code (`stage/text.rs`), or, for
 //! anything else, its name and size. Below the file, the file's place in
-//! the gallery ("2 / 3") while it is in the gallery. With no file the
-//! stage draws nothing.
+//! the gallery ("2 / 3") while it is in the gallery, and with two or more
+//! files checked a grid button left of it that goes back to the gallery.
+//! With no file the stage draws nothing. While the gallery shows, the file
+//! view rests: nothing is read for it.
 //!
 //! Loading: every read carries the tree and the file it was started for,
 //! and its result is dropped unless that is still the file asked for.
@@ -25,7 +29,9 @@
 //!
 //! The stage takes keyboard focus in the [`STAGE`] key context: ← and →
 //! move through the gallery, the vertical keys scroll text, Space and
-//! Enter present, Esc returns to the explorer.
+//! Enter present, Esc returns to the gallery, or to the explorer with
+//! fewer than two files checked. While the gallery shows it declares
+//! [`GALLERY`](crate::keys::GALLERY) and hands the gallery its keys.
 //!
 //! Loading lives in `stage/loading.rs` and drawing in `stage/render.rs`.
 //!
@@ -35,6 +41,7 @@
 //! Esc leaves, shows no position, and gives an image the whole window.
 
 mod cache;
+mod gallery;
 mod images;
 mod load;
 mod loading;
@@ -54,6 +61,8 @@ use crate::keys::{LeavePresentation, NextFile, Present, PreviousFile};
 use crate::state::AppState;
 
 use cache::Lru;
+use gallery::Gallery;
+pub use gallery::GalleryProbe;
 use images::StageImages;
 use load::Stamp;
 use text::{Scroll, TextViews};
@@ -68,18 +77,27 @@ struct Asked {
     /// The tree generation and `current`.
     staged: (u64, Option<NodeId>),
     /// "2 / 3": `current`'s place in the gallery, and the gallery's size.
-    /// Not shown while presenting.
+    /// Shown in the file view only.
     position: Option<(usize, usize)>,
     presenting: bool,
+    /// The gallery shows, not the file view.
+    gallery: bool,
+    /// The file view offers the way back to the gallery: two or more
+    /// files are checked.
+    back: bool,
 }
 
 impl Asked {
     fn of(state: &AppState) -> Self {
         let presenting = state.is_presenting();
+        let gallery = state.shows_gallery();
+        let file_view = !presenting && !gallery;
         Self {
             staged: state.staged(),
-            position: state.position().filter(|_| !presenting),
+            position: state.position().filter(|_| file_view),
             presenting,
+            gallery,
+            back: file_view && state.selected_count() >= 2,
         }
     }
 }
@@ -230,6 +248,7 @@ pub(crate) struct Stage {
     images: Entity<StageImages>,
     texts: Lru<Arc<Path>, CachedText>,
     text_views: TextViews,
+    gallery: Entity<Gallery>,
     renders: usize,
     loads: usize,
     _observe: Subscription,
@@ -259,9 +278,14 @@ impl Stage {
         // The state changes on every key in the tree; the stage acts only
         // when what it is asked to show does.
         let observe = cx.observe_in(&state, window, |this, _, window, cx| this.sync(window, cx));
+        let focus_handle = cx.focus_handle();
+        let gallery = {
+            let (state, focus) = (state.clone(), focus_handle.clone());
+            cx.new(|cx| Gallery::new(state, focus, cx))
+        };
         let mut this = Self {
             state,
-            focus_handle: cx.focus_handle(),
+            focus_handle,
             asked: Asked::default(),
             content: Content::Blank,
             showing: None,
@@ -270,12 +294,18 @@ impl Stage {
             images: cx.new(StageImages::new),
             texts: Lru::new(TEXT_CACHE_BYTES),
             text_views: TextViews::new(window, cx),
+            gallery,
             renders: 0,
             loads: 0,
             _observe: observe,
         };
         this.sync(window, cx);
         this
+    }
+
+    /// What the gallery holds, for tests and probes.
+    pub(crate) fn gallery_probe(&self, cx: &App) -> GalleryProbe {
+        self.gallery.read(cx).probe()
     }
 
     /// What the stage holds, for tests and probes.
@@ -309,6 +339,20 @@ impl Stage {
 
     fn present(&mut self, _: &Present, _: &mut Window, cx: &mut Context<Self>) {
         self.state.update(cx, AppState::start_presenting);
+    }
+
+    /// Esc in the file view, and its grid button: back to the gallery with
+    /// keyboard focus on the stage, its ring showing after a key; with
+    /// fewer than two files checked, Esc goes to the explorer.
+    fn show_gallery(&mut self, key: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.state.update(cx, AppState::show_gallery) {
+            window.focus(&self.focus_handle, cx);
+            if key {
+                self.gallery.update(cx, Gallery::key_pressed);
+            }
+        } else if key {
+            window.dispatch_action(Box::new(crate::keys::FocusExplorer), cx);
+        }
     }
 
     fn leave_presentation(

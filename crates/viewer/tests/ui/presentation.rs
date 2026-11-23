@@ -96,6 +96,8 @@ fn space_on_the_stage_presents_and_escape_restores_the_split(cx: &mut TestAppCon
     drag_divider(cx, handle, 400.);
     press(cx, handle, "tab");
     assert!(is_focused(cx, handle, "stage"));
+    // Three checked files show the gallery: Enter opens the first.
+    press(cx, handle, "enter");
     let before = current(cx, &view);
     assert_eq!(layout(cx, handle), Layout::Split(px(400.)));
 

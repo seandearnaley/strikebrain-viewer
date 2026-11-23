@@ -8,6 +8,7 @@ mod checks;
 mod filter;
 mod flick;
 mod folders;
+mod gallery;
 mod header;
 mod keyboard;
 mod launch;

@@ -6,7 +6,7 @@ use gpui_kit::{
 };
 use viewer::AppView;
 
-use crate::{PROJECT, focus, node, open_app, press, tree};
+use crate::{PROJECT, click, focus, node, open_app, press, tree};
 
 fn stage_renders(cx: &mut TestAppContext, view: &Entity<AppView>) -> usize {
     cx.update(|cx| view.read(cx).stage_probe(cx).renders())
@@ -49,4 +49,24 @@ fn moving_focus_in_the_tree_leaves_the_stage_alone(cx: &mut TestAppContext) {
     // Enter shows the file: now the stage draws.
     key(cx, handle, "enter");
     assert!(stage_renders(cx, &view) > before);
+}
+
+#[gpui_kit::test]
+fn moving_focus_in_the_tree_leaves_the_gallery_alone(cx: &mut TestAppContext) {
+    let (handle, view) = open_app(cx, tree(PROJECT));
+    click(cx, handle, "select-all");
+    press(cx, handle, "down");
+    let gallery_renders =
+        |cx: &mut TestAppContext| cx.update(|cx| view.read(cx).gallery_probe(cx).renders());
+    let before = (stage_renders(cx, &view), gallery_renders(cx));
+    assert!(before.1 > 0, "the gallery shows");
+
+    for _ in 0..3 {
+        key(cx, handle, "down");
+    }
+    assert_eq!((stage_renders(cx, &view), gallery_renders(cx)), before);
+
+    // Space checks the focus row's file: the gallery changes and draws.
+    key(cx, handle, "space");
+    assert!(gallery_renders(cx) > before.1);
 }

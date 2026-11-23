@@ -13,20 +13,34 @@ use super::{Asked, CachedText, Content, File, Showing, Stage};
 
 impl Stage {
     /// Follows the state: starts reading a new file, and redraws when the
-    /// gallery position changes or the presentation starts or ends.
+    /// gallery position changes, the presentation starts or ends, or the
+    /// gallery shows or hides. While the gallery shows nothing is read for
+    /// the file view; back from it, another file than the one the view last
+    /// showed starts blank rather than showing the old one meanwhile.
     pub(super) fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let asked = Asked::of(self.state.read(cx));
         if asked == self.asked {
             return;
         }
-        let new_file = asked.staged != self.asked.staged;
-        let redraw =
-            (asked.position, asked.presenting) != (self.asked.position, self.asked.presenting);
-        self.asked = asked;
-        if new_file {
+        let was = std::mem::replace(&mut self.asked, asked);
+        if asked.gallery {
+            self.load = None;
+            self.preload = None;
+        } else if asked.staged != was.staged || was.gallery {
+            if was.gallery {
+                let file = self.asked_file(cx).map(|file| file.path);
+                let same = file
+                    .zip(self.showing.as_ref())
+                    .is_some_and(|(file, showing)| file == showing.path);
+                if !same {
+                    self.content = Content::Blank;
+                    self.showing = None;
+                }
+            }
             self.start_load(window, cx);
         }
-        if redraw {
+        let shape = |asked: Asked| (asked.position, asked.presenting, asked.gallery, asked.back);
+        if shape(asked) != shape(was) {
             cx.notify();
         }
     }

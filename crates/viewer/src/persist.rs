@@ -24,7 +24,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use explorer::{KindFilter, SavedFolder, Sort, ViewSnapshot};
 use gpui_kit::{Bounds, Pixels, WindowBounds, point, size};
 
-use crate::state::Launch;
+use crate::state::{Launch, StageView};
 
 /// The bundle identifier. It also names the config folder on macOS.
 pub const APP_ID: &str = "ai.brainstrike.viewer";
@@ -52,6 +52,8 @@ pub struct SavedView {
     pub sort: Sort,
     /// The row at the top of the tree's scroll, by its path on disk.
     pub top_row: Option<PathBuf>,
+    /// Which of the stage's views showed: the gallery or the file.
+    pub view: StageView,
 }
 
 /// Where the window was, relative to the display it was on, and that

@@ -245,6 +245,7 @@ impl AppState {
         self.folders.retain(|folder| folder.path != path);
         self.current = current;
         self.focus = self.focus.and_then(|focus| map.get(focus));
+        self.tile = self.tile.and_then(|tile| map.get(tile));
         if self.focus.is_none()
             && let Some((id, at)) = in_place
         {

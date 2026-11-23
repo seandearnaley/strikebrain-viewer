@@ -32,7 +32,7 @@ use crate::keys::{
 };
 use crate::menus;
 use crate::persist::{SavedView, SavedWindow, Snapshot, StateStore};
-use crate::stage::{Stage, StageProbe};
+use crate::stage::{GalleryProbe, Stage, StageProbe};
 use crate::state::{AppState, Launch, StateOptions};
 use crate::theme;
 
@@ -219,6 +219,13 @@ impl AppView {
     #[must_use]
     pub fn stage_probe(&self, cx: &App) -> StageProbe {
         self.stage.read(cx).probe(cx)
+    }
+
+    /// What the gallery holds: its layout, the rows it drew and its cache
+    /// of thumbnails.
+    #[must_use]
+    pub fn gallery_probe(&self, cx: &App) -> GalleryProbe {
+        self.stage.read(cx).gallery_probe(cx)
     }
 
     /// The title this view gave the window: the folder's name with one

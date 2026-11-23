@@ -1,5 +1,6 @@
 //! Reading a file for the stage. Everything here blocks on the disk, so it
-//! runs on the background executor, never on the UI thread.
+//! runs on the background executor, never on the UI thread. The gallery's
+//! tiles read through the same checks (`stage/gallery/read.rs`).
 //!
 //! [`load`] reads the first 8 KB and asks the engine's
 //! [`viewer_for`](explorer::viewer_for) which viewer the file needs; for text
@@ -63,7 +64,7 @@ pub(crate) struct Stamp {
 }
 
 impl Stamp {
-    fn of(metadata: &Metadata) -> Self {
+    pub(super) fn of(metadata: &Metadata) -> Self {
         Self {
             len: metadata.len(),
             modified: metadata.modified().ok(),
@@ -181,7 +182,7 @@ fn try_load(path: &Path, name: &str, held: Held) -> io::Result<Loaded> {
 
 /// The largest picture the stage decodes, by its size on disk: lower for an
 /// animation, whose every frame is decoded at once.
-fn image_limit(name: &str, head: &[u8]) -> u64 {
+pub(super) fn image_limit(name: &str, head: &[u8]) -> u64 {
     if is_animated(name, head) {
         ANIMATED_IMAGE_LIMIT
     } else {
@@ -207,7 +208,7 @@ fn is_animated(name: &str, head: &[u8]) -> bool {
 /// open file gives it; `None` for anything else. The open never waits:
 /// a FIFO put in the file's place since its metadata was read would
 /// otherwise wait for a writer, and hold a thread, forever.
-fn open_regular(path: &Path) -> io::Result<Option<(File, Metadata)>> {
+pub(super) fn open_regular(path: &Path) -> io::Result<Option<(File, Metadata)>> {
     let file = open_without_waiting(path)?;
     let metadata = file.metadata()?;
     Ok(metadata.is_file().then_some((file, metadata)))

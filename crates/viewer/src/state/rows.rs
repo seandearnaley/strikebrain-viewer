@@ -141,6 +141,8 @@ impl AppState {
             let sort = explorer.sort().clicked(key);
             explorer.set_sort(sort);
             self.sort = sort;
+            // The gallery's order is the display order.
+            self.gallery_changes += 1;
             self.rows_replaced(cx);
         }
     }
