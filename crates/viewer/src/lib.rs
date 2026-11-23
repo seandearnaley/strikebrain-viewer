@@ -2,11 +2,16 @@
 
 mod app;
 mod assets;
+mod explorer_panel;
 pub mod keys;
+mod row;
+mod stage;
+mod state;
 pub mod theme;
 
 pub use app::{AppView, EXPLORER_MIN_WIDTH, EXPLORER_WIDTH};
 pub use assets::AppAssets;
+pub use state::{AppState, Launch, Motion, ScanStatus};
 
 use gpui_kit::App;
 
