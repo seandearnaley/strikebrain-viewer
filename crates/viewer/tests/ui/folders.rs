@@ -257,7 +257,7 @@ fn title(cx: &mut TestAppContext, view: &Entity<AppView>) -> String {
 /// Adds `paths` as the picker or the Dock would, and lets every task run.
 fn add(cx: &mut TestAppContext, view: &Entity<AppView>, paths: &[&std::path::Path]) {
     let paths = paths.iter().map(|path| path.to_path_buf()).collect();
-    crate::state(cx, view).update(cx, |state, cx| state.add_folders(paths, Vec::new(), cx));
+    crate::state(cx, view).update(cx, |state, cx| state.open_paths(paths, Vec::new(), cx));
     cx.run_until_parked();
 }
 
@@ -358,8 +358,8 @@ fn a_folder_asked_for_inside_one_still_scanning_waits_for_its_scan(cx: &mut Test
     // Both asked for before the outer folder's first scan has run.
     let state = crate::state(cx, &view);
     state.update(cx, |state, cx| {
-        state.add_folders(vec![dir.path().to_owned()], Vec::new(), cx);
-        state.add_folders(vec![src.clone()], Vec::new(), cx);
+        state.open_paths(vec![dir.path().to_owned()], Vec::new(), cx);
+        state.open_paths(vec![src.clone()], Vec::new(), cx);
     });
     cx.run_until_parked();
     // Listed by the outer folder: the tree opens to its row, the focus row.
@@ -376,8 +376,8 @@ fn a_folder_asked_for_inside_one_still_scanning_waits_for_its_scan(cx: &mut Test
     let (handle, view) = open_app(cx, Launch::Empty);
     let state = crate::state(cx, &view);
     state.update(cx, |state, cx| {
-        state.add_folders(vec![dir.path().to_owned()], Vec::new(), cx);
-        state.add_folders(vec![target.clone()], Vec::new(), cx);
+        state.open_paths(vec![dir.path().to_owned()], Vec::new(), cx);
+        state.open_paths(vec![target.clone()], Vec::new(), cx);
     });
     cx.run_until_parked();
     let mut rows = under(dir.path(), &["src", ".gitignore"]);

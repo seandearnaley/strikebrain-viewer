@@ -1,7 +1,7 @@
-//! Opening the main window as the app launches: the folders from the
-//! command line or the saved ones, the saved view and window, and folders
-//! the system hands over later ("Open With", a folder dropped on the Dock
-//! icon) as `file://` URLs.
+//! Opening the main window as the app launches: the folders and files from
+//! the command line or the saved folders, the saved view and window, and
+//! what the system hands over later ("Open With", a folder or a file
+//! dropped on the Dock icon) as `file://` URLs.
 
 use std::path::PathBuf;
 
@@ -14,7 +14,8 @@ use crate::app::{AppView, Session};
 use crate::menus::APP_NAME;
 use crate::persist::{SavedWindow, StateStore, fit, plan_launch};
 
-/// Opens the main window. `folders` are the command line's; the saved state
+/// Opens the main window. `folders` are the command line's paths, folders
+/// or files; the saved state
 /// comes from `store`, which then also receives the window's state as it
 /// changes. With `watch` the folders are followed on disk, as the app does;
 /// tests that need determinism leave it off. Closing the window quits, so
@@ -92,10 +93,10 @@ fn placement(saved: &SavedWindow, cx: &App) -> (WindowBounds, Option<gpui_kit::D
     (bounds, Some(display.id()))
 }
 
-/// The folder a `file://` URL names, percent-decoded; `None` for any other
+/// The folder or file a `file://` URL names, percent-decoded; `None` for any other
 /// URL or a malformed one.
 #[must_use]
-pub fn folder_from_url(url: &str) -> Option<PathBuf> {
+pub fn path_from_url(url: &str) -> Option<PathBuf> {
     let path = url.strip_prefix("file://")?;
     // A host part, if any, ends at the first slash; only the local host is
     // ours.
@@ -124,20 +125,20 @@ pub fn folder_from_url(url: &str) -> Option<PathBuf> {
 mod tests {
     use std::path::PathBuf;
 
-    use super::folder_from_url;
+    use super::path_from_url;
 
     #[test]
-    fn a_file_url_names_its_folder() {
+    fn a_file_url_names_its_path() {
         assert_eq!(
-            folder_from_url("file:///Users/sean/My%20Folder/"),
+            path_from_url("file:///Users/sean/My%20Folder/"),
             Some(PathBuf::from("/Users/sean/My Folder/"))
         );
         assert_eq!(
-            folder_from_url("file://localhost/tmp/caf%C3%A9"),
+            path_from_url("file://localhost/tmp/caf%C3%A9"),
             Some(PathBuf::from("/tmp/café"))
         );
         assert_eq!(
-            folder_from_url("file:///plain"),
+            path_from_url("file:///plain"),
             Some(PathBuf::from("/plain"))
         );
         for bad in [
@@ -147,7 +148,7 @@ mod tests {
             "file:///bad%zz",
             "file:///bad%FF",
         ] {
-            assert_eq!(folder_from_url(bad), None, "{bad}");
+            assert_eq!(path_from_url(bad), None, "{bad}");
         }
     }
 }

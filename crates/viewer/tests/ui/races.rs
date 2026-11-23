@@ -137,10 +137,10 @@ fn a_second_folder_added_before_the_first_lands_keeps_its_place(cx: &mut TestApp
 
     let state = state(cx, &view);
     state.update(cx, |state, cx| {
-        state.add_folders(vec![first.path().to_owned()], Vec::new(), cx);
+        state.open_paths(vec![first.path().to_owned()], Vec::new(), cx);
     });
     state.update(cx, |state, cx| {
-        state.add_folders(vec![second.path().to_owned()], Vec::new(), cx);
+        state.open_paths(vec![second.path().to_owned()], Vec::new(), cx);
     });
     cx.run_until_parked();
 
@@ -164,7 +164,7 @@ fn a_query_typed_during_the_first_scan_applies_when_the_tree_lands(cx: &mut Test
 
     // The scan has not run: the filter is on screen, the tree is not.
     state(cx, &view).update(cx, |state, cx| {
-        state.add_folders(vec![dir.path().to_owned()], Vec::new(), cx);
+        state.open_paths(vec![dir.path().to_owned()], Vec::new(), cx);
     });
     cx.update_window(handle, |_, window, cx| {
         window.click("filter", cx);
@@ -272,7 +272,7 @@ fn sizes_read_for_a_replaced_tree_never_land(cx: &mut TestAppContext) {
     });
 
     state.update(cx, |state, cx| {
-        state.add_folders(vec![dir.path().to_owned()], Vec::new(), cx);
+        state.open_paths(vec![dir.path().to_owned()], Vec::new(), cx);
     });
     cx.run_until_parked();
 
@@ -300,7 +300,7 @@ fn a_scan_slower_than_200_ms_shows_the_progress_bar_until_it_lands(cx: &mut Test
     let status = |cx: &mut TestAppContext| read(cx, &view, |state| state.status().clone());
 
     state(cx, &view).update(cx, |state, cx| {
-        state.add_folders(vec![dir.path().to_owned()], Vec::new(), cx);
+        state.open_paths(vec![dir.path().to_owned()], Vec::new(), cx);
     });
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
@@ -349,7 +349,7 @@ fn a_fast_scan_never_shows_the_progress_bar(cx: &mut TestAppContext) {
     });
 
     state.update(cx, |state, cx| {
-        state.add_folders(vec![dir.path().to_owned()], Vec::new(), cx);
+        state.open_paths(vec![dir.path().to_owned()], Vec::new(), cx);
     });
     cx.run_until_parked();
 
@@ -390,7 +390,7 @@ fn sizes_landing_under_a_size_sort_keep_the_focus_row_on_screen(cx: &mut TestApp
     });
 
     state.update(cx, |state, cx| {
-        state.add_folders(vec![dir.path().to_owned()], Vec::new(), cx);
+        state.open_paths(vec![dir.path().to_owned()], Vec::new(), cx);
     });
     cx.run_until_parked();
 

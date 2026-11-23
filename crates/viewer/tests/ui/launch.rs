@@ -8,6 +8,7 @@ use viewer::{AppState, AppView, Launch};
 
 use crate::{
     fixture_folder, folder, labels, name_of, node, node_at, open_app, read, row, rows_now, stage,
+    under,
 };
 
 /// The first top-level folder of the tree on screen.
@@ -150,7 +151,7 @@ fn a_folder_already_open_or_inside_one_is_not_added_again_but_shown(cx: &mut Tes
     let state = crate::state(cx, &view);
     let inner = dir.path().join("deep/inner");
     state.update(cx, |state, cx| {
-        state.add_folders(
+        state.open_paths(
             vec![dir.path().join("deep/.."), inner.clone()],
             Vec::new(),
             cx,
@@ -187,7 +188,7 @@ fn a_folder_added_around_open_folders_takes_them_in(cx: &mut TestAppContext) {
 
     let state = crate::state(cx, &view);
     state.update(cx, |state, cx| {
-        state.add_folders(vec![dir.path().to_owned()], Vec::new(), cx);
+        state.open_paths(vec![dir.path().to_owned()], Vec::new(), cx);
     });
     cx.run_until_parked();
     // One folder now, holding the other, which stays open, with its check.
@@ -211,4 +212,88 @@ fn a_folder_added_around_open_folders_takes_them_in(cx: &mut TestAppContext) {
     assert_eq!(checked, [format!("{}/one/a.txt", name_of(dir.path()))]);
     let title = cx.update(|cx| view.read(cx).title().cloned());
     assert_eq!(title.as_deref(), Some(name_of(dir.path()).as_str()));
+}
+
+#[gpui_kit::test]
+fn a_file_argument_opens_its_folder_and_shows_the_file(cx: &mut TestAppContext) {
+    let dir = folder(&[("notes/a.txt", "a"), ("notes/b.txt", "b"), ("c.txt", "c")]);
+    let file = dir.path().join("notes/b.txt");
+    let (handle, view) = open_app(cx, Launch::Folders(vec![file.clone()]));
+
+    // The folder the file is in opens, not the file's place above it.
+    let notes = dir.path().join("notes");
+    assert_eq!(rows_now(cx, handle), under(&notes, &["a.txt", "b.txt"]));
+    let title = cx.update(|cx| view.read(cx).title().cloned());
+    assert_eq!(title.as_deref(), Some("notes"));
+    // The file is on the stage, unchecked, and its row is the focus row.
+    let b = node_at(cx, &view, &file);
+    assert_eq!(crate::current(cx, &view), Some(b));
+    assert_eq!(crate::focus(cx, &view), Some(b));
+    assert_eq!(read(cx, &view, AppState::selected_count), 0);
+}
+
+#[gpui_kit::test]
+fn a_file_handed_over_shows_in_the_open_folder_or_adds_its_own(cx: &mut TestAppContext) {
+    let dir = folder(&[("deep/down/a.txt", "a"), ("b.txt", "b")]);
+    let other = folder(&[("c.txt", "c")]);
+    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
+    assert_eq!(rows_now(cx, handle), under(dir.path(), &["deep", "b.txt"]));
+
+    // A file the open folder lists: no folder is added, the folders above
+    // the file open, and it shows.
+    let inside = dir.path().join("deep/down/a.txt");
+    view.update(cx, |view, cx| view.open_path(inside.clone(), cx));
+    cx.run_until_parked();
+    assert_eq!(
+        rows_now(cx, handle),
+        under(dir.path(), &["deep", "down", "a.txt", "b.txt"])
+    );
+    let a = node_at(cx, &view, &inside);
+    assert_eq!(crate::current(cx, &view), Some(a));
+    assert_eq!(crate::focus(cx, &view), Some(a));
+
+    // A file elsewhere: its folder is added after those open, and it shows
+    // once that folder's scan lands.
+    let outside = other.path().join("c.txt");
+    view.update(cx, |view, cx| view.open_path(outside.clone(), cx));
+    cx.run_until_parked();
+    let rows = rows_now(cx, handle);
+    assert_eq!(rows[rows.len() - 2..], under(other.path(), &["c.txt"]));
+    let c = node_at(cx, &view, &outside);
+    assert_eq!(crate::current(cx, &view), Some(c));
+    assert_eq!(crate::focus(cx, &view), Some(c));
+}
+
+#[gpui_kit::test]
+fn a_file_gone_before_its_folder_is_read_never_shows(cx: &mut TestAppContext) {
+    let dir = folder(&[("a.txt", "a")]);
+    let other = folder(&[("c.txt", "c")]);
+    let (_, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
+
+    // Asked for, then gone from disk before its folder is read.
+    let file = other.path().join("c.txt");
+    view.update(cx, |view, cx| view.open_path(file.clone(), cx));
+    std::fs::remove_file(&file).unwrap();
+    cx.run_until_parked();
+    assert_eq!(crate::current(cx, &view), None);
+
+    // It is forgotten: coming back later does not put it on the stage.
+    std::fs::write(&file, "c").unwrap();
+    let state = crate::state(cx, &view);
+    state.update(cx, AppState::refresh);
+    cx.run_until_parked();
+    assert_eq!(crate::current(cx, &view), None);
+}
+
+#[gpui_kit::test]
+fn a_file_handed_over_to_an_empty_window_opens_its_folder_and_shows(cx: &mut TestAppContext) {
+    let dir = folder(&[("a.txt", "a"), ("b.txt", "b")]);
+    let (handle, view) = open_app(cx, Launch::Empty);
+    let file = dir.path().join("b.txt");
+    view.update(cx, |view, cx| view.open_path(file.clone(), cx));
+    cx.run_until_parked();
+    assert_eq!(rows_now(cx, handle), under(dir.path(), &["a.txt", "b.txt"]));
+    let b = node_at(cx, &view, &file);
+    assert_eq!(crate::current(cx, &view), Some(b));
+    assert_eq!(crate::focus(cx, &view), Some(b));
 }

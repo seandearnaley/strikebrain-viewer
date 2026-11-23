@@ -323,7 +323,7 @@ fn tab_and_command_f_work_during_the_first_scan(cx: &mut TestAppContext) {
     let (handle, view) = open_app(cx, Launch::Empty);
     // Keys arrive before the scan has run.
     state(cx, &view).update(cx, |state, cx| {
-        state.add_folders(vec![dir.path().to_owned()], Vec::new(), cx);
+        state.open_paths(vec![dir.path().to_owned()], Vec::new(), cx);
     });
     cx.update_window(handle, |_, window, cx| {
         window.press("cmd-f", cx);

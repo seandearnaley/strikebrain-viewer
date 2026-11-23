@@ -127,7 +127,7 @@ fn the_title_names_the_one_folder_open_and_otherwise_the_app(cx: &mut TestAppCon
     // A folder the system hands over ("Open With", the Dock) is added too.
     let second = folder(&[("b.txt", "b")]);
     view.update(cx, |view, cx| {
-        view.add_folder(second.path().to_owned(), cx);
+        view.open_path(second.path().to_owned(), cx);
     });
     cx.run_until_parked();
     let rows = rows_now(cx, handle);

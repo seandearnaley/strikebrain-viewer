@@ -249,11 +249,12 @@ impl AppView {
             .as_f32()
     }
 
-    /// Adds `folder` beside the folders on screen: the system's "Open
-    /// With" and a folder dropped on the Dock icon.
-    pub fn add_folder(&mut self, folder: PathBuf, cx: &mut Context<Self>) {
+    /// Opens `path` beside the folders on screen: the system's "Open
+    /// With", and a folder or a file dropped on the Dock icon. A file
+    /// opens its folder and shows on the stage.
+    pub fn open_path(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         self.state.update(cx, |state, cx| {
-            state.add_folders(vec![folder], Vec::new(), cx);
+            state.open_paths(vec![path], Vec::new(), cx);
         });
     }
 

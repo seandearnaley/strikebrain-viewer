@@ -100,6 +100,7 @@ Neither was added. Rebuild and restart instead.
 - Folders are told apart by their canonical paths, and `realpath` does not join macOS firmlinks: `/System/Volumes/Data/Users/x` and `/Users/x` stay different, so the same folder added under both is listed twice. The picker and Finder give `/Users/...`.
 - A saved folder that no longer exists at launch is dropped from the saved state, as the design asks, even when it is only on a volume not mounted that day.
 - A change to `.git/info/exclude` or the global git excludes does not trigger a rescan; a `.gitignore` change does.
+- "Open With" lists the app only for the types `crates/viewer/bundle/Info.plist` names: macOS ignores a catch-all claim there. A source format macOS has no text type for needs its extension in the Source Code entry. To see what macOS offers after a change, `just bundle`, then ask `NSWorkspace.shared.urlsForApplications(toOpen:)` for a sample file. Windows and Linux hand the file over as an argument, which works; nothing registers the app with them.
 - `just shot` draws offscreen. To see the real window, `just bundle`, launch the app, find its window id with `CGWindowListCopyWindowInfo` and run `screencapture -x -o -l <id> out.png`. While the screen is locked `screencapture` captures nothing.
 - Run the bundled binary with `STRIKEBRAIN_VIEWER_STATE=<temp file>` when trying it; without it the run writes your own saved state.
 - GPUI Base 0.10.0 draws the code view's caret line number in the foreground colour whatever the theme says; line 1 stands out when a file opens.

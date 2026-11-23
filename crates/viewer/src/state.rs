@@ -40,7 +40,8 @@ use watch::Watching;
 pub enum Launch {
     /// No folder: the explorer offers "Add Folder".
     Empty,
-    /// Scan these folders, each a top-level folder, in this order.
+    /// Scan these folders, each a top-level folder, in this order. A file
+    /// among them opens its folder and shows on the stage.
     Folders(Vec<PathBuf>),
     /// Show a tree that is already built, such as a `Tree::from_paths`
     /// fixture, as it is: its top-level entries are the top rows. Nothing
@@ -201,6 +202,8 @@ pub struct AppState {
     show_ignored: bool,
     /// How many scans have started, across folders; each scan's number.
     scans: u64,
+    /// Files asked for, each waiting for a tree that lists it to show.
+    asked_files: Vec<PathBuf>,
     /// The parts of a saved view that wait for the folders to land.
     restore: Option<Pending>,
     /// The saved top row, waiting for sizes before a Size sort settles.
@@ -267,6 +270,7 @@ impl AppState {
             filter_task: None,
             show_ignored: false,
             scans: 0,
+            asked_files: Vec::new(),
             restore: None,
             restore_top: None,
             watching: options.watch.then_some(Watching {
@@ -282,7 +286,7 @@ impl AppState {
                 // The launch settles once every folder is on screen: at
                 // its saved top row, or at the top.
                 state.restore.get_or_insert_with(Pending::default);
-                state.add_folders(folders, waiting.unwrap_or_default(), cx);
+                state.open_paths(folders, waiting.unwrap_or_default(), cx);
             }
             Launch::Tree(tree) => {
                 state.show_tree(tree);
