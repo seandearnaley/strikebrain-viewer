@@ -12,7 +12,8 @@
 //! lists open folders takes them in when it lands (see `state/scan.rs`).
 //!
 //! A file asked for opens its folder by the same rule, then shows on the
-//! stage once a tree lists it.
+//! stage once a tree lists it. Files asked for together are checked, so
+//! they show as the gallery.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -145,7 +146,8 @@ impl AppState {
     /// tree lists, is not added: its row opens and becomes the focus row.
     /// One inside a folder whose first scan runs waits for that scan. A
     /// file opens its folder so, then shows on the stage with its row the
-    /// focus row; of several files the last one shows. `waiting` holds
+    /// focus row. Several files in one call are checked as well, so they
+    /// show as the gallery, with the files checked before. `waiting` holds
     /// saved views, each applied when its folder's first scan lands.
     pub fn open_paths(
         &mut self,
@@ -153,11 +155,12 @@ impl AppState {
         mut waiting: Vec<SavedFolder>,
         cx: &mut Context<Self>,
     ) {
+        let together = paths.iter().filter(|path| path.is_file()).count() > 1;
         for path in paths {
             let mut path = resolve(&path);
             if path.is_file() {
                 let folder = path.parent().map(Path::to_path_buf);
-                self.asked_files.push(path.clone());
+                self.asked_files.push((path.clone(), together));
                 path = folder.unwrap_or(path);
             }
             let saved = waiting
@@ -191,8 +194,9 @@ impl AppState {
         cx.notify();
     }
 
-    /// Shows each file asked for that a tree now lists, in the file view
-    /// with its row the focus row. A file whose folder is still to land
+    /// Shows each file asked for that a tree now lists, with its row the
+    /// focus row: in the file view, or checked into the gallery when it
+    /// was asked for with others. A file whose folder is still to land
     /// waits, as does every file while a launch settles, so the saved view
     /// does not replace it. One that no tree lists once its folder landed
     /// (deleted meanwhile, or its folder could not be read) is forgotten.
@@ -200,16 +204,20 @@ impl AppState {
         if self.asked_files.is_empty() || self.restore.is_some() {
             return;
         }
-        for path in std::mem::take(&mut self.asked_files) {
+        for (path, check) in std::mem::take(&mut self.asked_files) {
             if let Some(id) = self.listed(&path) {
-                self.show(id, cx);
+                if check {
+                    self.check_and_show(id, cx);
+                } else {
+                    self.show(id, cx);
+                }
                 self.reveal(id, cx);
             } else if self
                 .folders
                 .iter()
                 .any(|folder| !folder.shown && folder.holds(&path))
             {
-                self.asked_files.push(path);
+                self.asked_files.push((path, check));
             }
         }
     }
@@ -277,7 +285,8 @@ impl AppState {
             .and_then(|at| Some((*rows.get(at)?, at)));
         let none_left = explorer.tree().folders().len() == 0;
         self.folders.retain(|folder| folder.path != path);
-        self.asked_files.retain(|file| !file.starts_with(&path));
+        self.asked_files
+            .retain(|(file, _)| !file.starts_with(&path));
         self.current = current;
         self.focus = self.focus.and_then(|focus| map.get(focus));
         self.tile = self.tile.and_then(|tile| map.get(tile));

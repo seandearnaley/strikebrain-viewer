@@ -202,8 +202,9 @@ pub struct AppState {
     show_ignored: bool,
     /// How many scans have started, across folders; each scan's number.
     scans: u64,
-    /// Files asked for, each waiting for a tree that lists it to show.
-    asked_files: Vec<PathBuf>,
+    /// Files asked for, each waiting for a tree that lists it to show, and
+    /// whether to check it: it was asked for with others.
+    asked_files: Vec<(PathBuf, bool)>,
     /// The parts of a saved view that wait for the folders to land.
     restore: Option<Pending>,
     /// The saved top row, waiting for sizes before a Size sort settles.
