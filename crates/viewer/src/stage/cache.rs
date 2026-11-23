@@ -1,10 +1,14 @@
 //! A least-recently-used map with a budget, for the stage's caches.
 //!
-//! Each entry has a cost, and the costs together never exceed the budget:
-//! the image cache gives each image a cost of 1 and a budget of 8; the text
-//! cache gives each text its length in bytes and a budget of 32 MB. Making
-//! room evicts the entries used longest ago and hands them back, so the
-//! caller can release what they hold (an image's GPU texture).
+//! Each entry has a cost, and the costs together stay within the budget;
+//! the cache may also hold at most so many entries. The text cache gives
+//! each text its length in bytes and a budget of 32 MB. The image cache
+//! holds at most 8 images and 512 MB of decoded pixels: an image's cost is
+//! known only once it is decoded, so it comes in at no cost and is given
+//! its cost then ([`Lru::set_cost`]), which may evict others, but never the
+//! image on the stage. Making room evicts the entries used longest ago and
+//! hands them back, so the caller can release what they hold (an image's
+//! GPU texture).
 
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -13,6 +17,8 @@ use std::hash::Hash;
 #[derive(Debug)]
 pub(crate) struct Lru<K, V> {
     budget: usize,
+    /// The most entries it holds, whatever they cost.
+    max_len: usize,
     used: usize,
     /// Counts uses; an entry's stamp is the count at its last use.
     clock: u64,
@@ -29,8 +35,15 @@ struct Slot<V> {
 impl<K: Hash + Eq + Clone, V> Lru<K, V> {
     /// An empty cache whose entries may cost `budget` together.
     pub(crate) fn new(budget: usize) -> Self {
+        Self::with_max_len(budget, usize::MAX)
+    }
+
+    /// An empty cache of at most `max_len` entries, which may cost `budget`
+    /// together.
+    pub(crate) fn with_max_len(budget: usize, max_len: usize) -> Self {
         Self {
             budget,
+            max_len,
             used: 0,
             clock: 0,
             entries: HashMap::new(),
@@ -50,23 +63,40 @@ impl<K: Hash + Eq + Clone, V> Lru<K, V> {
         self.entries.get(key).map(|slot| &slot.value)
     }
 
+    /// The entry for `key`, to change, leaving its place in the order alone.
+    pub(crate) fn peek_mut(&mut self, key: &K) -> Option<&mut V> {
+        self.entries.get_mut(key).map(|slot| &mut slot.value)
+    }
+
+    /// Every entry, in no particular order.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
+        self.entries.iter().map(|(key, slot)| (key, &slot.value))
+    }
+
     /// Stores `value` as the most recently used entry and returns what it
     /// pushed out: a value it replaced under the same key, then the least
     /// recently used entries until the new one fits. A value that costs
     /// more than the whole budget is not kept; it comes straight back.
     pub(crate) fn insert(&mut self, key: K, value: V, cost: usize) -> Vec<V> {
+        self.insert_keeping(key, value, cost, None)
+    }
+
+    /// Stores `value` as [`Lru::insert`] does, but never evicts `keep` to
+    /// make room.
+    pub(crate) fn insert_keeping(
+        &mut self,
+        key: K,
+        value: V,
+        cost: usize,
+        keep: Option<&K>,
+    ) -> Vec<V> {
         let mut evicted: Vec<V> = self.remove(&key).into_iter().collect();
         if cost > self.budget {
             evicted.push(value);
             return evicted;
         }
-        while self.used + cost > self.budget {
-            let Some(oldest) = self
-                .entries
-                .iter()
-                .min_by_key(|(_, slot)| slot.last_used)
-                .map(|(key, _)| key.clone())
-            else {
+        while self.used + cost > self.budget || self.entries.len() >= self.max_len {
+            let Some(oldest) = self.oldest(keep) else {
                 break;
             };
             evicted.extend(self.remove(&oldest));
@@ -82,6 +112,35 @@ impl<K: Hash + Eq + Clone, V> Lru<K, V> {
             },
         );
         evicted
+    }
+
+    /// Gives the entry for `key` the cost it turned out to have, then
+    /// evicts the entries used longest ago, `key` among them but never
+    /// `keep`, until the costs fit the budget or only `keep` is left.
+    /// Returns what it evicted.
+    pub(crate) fn set_cost(&mut self, key: &K, cost: usize, keep: Option<&K>) -> Vec<V> {
+        let Some(slot) = self.entries.get_mut(key) else {
+            return Vec::new();
+        };
+        self.used = self.used - slot.cost + cost;
+        slot.cost = cost;
+        let mut evicted = Vec::new();
+        while self.used > self.budget {
+            let Some(oldest) = self.oldest(keep) else {
+                break;
+            };
+            evicted.extend(self.remove(&oldest));
+        }
+        evicted
+    }
+
+    /// The key used longest ago, other than `keep`.
+    fn oldest(&self, keep: Option<&K>) -> Option<K> {
+        self.entries
+            .iter()
+            .filter(|(key, _)| Some(*key) != keep)
+            .min_by_key(|(_, slot)| slot.last_used)
+            .map(|(key, _)| key.clone())
     }
 
     /// Takes the entry for `key` out.
@@ -132,6 +191,42 @@ mod tests {
             assert_eq!(cache.len(), 8);
             assert_eq!(cache.used(), 8);
         }
+    }
+
+    #[test]
+    fn at_most_so_many_entries_whatever_they_cost() {
+        let mut cache = Lru::with_max_len(100, 2);
+        cache.insert("a", 1, 0);
+        cache.insert("b", 2, 0);
+        assert_eq!(cache.insert("c", 3, 0), [1]);
+        assert_eq!(cache.len(), 2);
+    }
+
+    #[test]
+    fn a_cost_learned_later_evicts_the_oldest_but_never_the_kept() {
+        // Images: their cost is known once decoded.
+        let mut cache = Lru::with_max_len(10, 8);
+        for key in ["a", "b", "c", "d"] {
+            cache.insert(key, key, 0);
+        }
+        assert_eq!(cache.set_cost(&"a", 4, None), Vec::<&str>::new());
+        assert_eq!(cache.set_cost(&"b", 4, None), Vec::<&str>::new());
+        // c needs room: a, used longest ago, goes.
+        assert_eq!(cache.set_cost(&"c", 4, None), ["a"]);
+        assert_eq!(cache.used(), 8);
+        // d is on the stage and larger than the whole budget: kept, and
+        // everything else goes.
+        let mut evicted = cache.set_cost(&"d", 12, Some(&"d"));
+        evicted.sort_unstable();
+        assert_eq!(evicted, ["b", "c"]);
+        assert_eq!((cache.len(), cache.used()), (1, 12));
+        // A neighbour decoded next to it is not kept: the stage's image is.
+        assert_eq!(
+            cache.insert_keeping("e", "e", 0, Some(&"d")),
+            Vec::<&str>::new()
+        );
+        assert_eq!(cache.set_cost(&"e", 1, Some(&"d")), ["e"]);
+        assert!(cache.peek(&"d").is_some());
     }
 
     #[test]

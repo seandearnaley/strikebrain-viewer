@@ -4,7 +4,9 @@
 //! [`load`] reads the first 8 KB and asks the engine's
 //! [`viewer_for`](explorer::viewer_for) which viewer the file needs; for text
 //! it then reads the rest, up to [`TEXT_LIMIT`], and decodes it lossily.
-//! Markdown over [`MARKDOWN_LIMIT`] opens in the code view.
+//! Markdown over [`MARKDOWN_LIMIT`] opens in the code view; a picture over
+//! [`IMAGE_LIMIT`], or an animation over [`ANIMATED_IMAGE_LIMIT`], is
+//! unsupported.
 //! Only regular files are read: a symlink to a FIFO, a device or a folder
 //! is unsupported, since opening a FIFO waits for a writer and reading a
 //! device may never end. (The scan leaves FIFOs and devices out; a symlink
@@ -25,6 +27,25 @@ use gpui_kit::SharedString;
 /// the screen in about 0.1 s and scrolls at 2.6 ms a frame; its colours
 /// follow some 13 s later from the background. See the spec's Risks.
 pub(crate) const TEXT_LIMIT: u64 = 10 * 1024 * 1024;
+
+const MB: u64 = 1024 * 1024;
+
+/// Pictures larger than this on disk are unsupported: 64 MB. GPUI decodes a
+/// picture whole, at full size: a 64 MB JPEG is some 100 to 200 megapixels,
+/// 0.4 to 0.8 GB of pixels, more than the image cache's budget alone (the
+/// cache keeps the picture on the stage whatever its size). Measured in
+/// milestone 3: an 8000 x 6000 photo of 44 MB decodes in 0.6 s to 183 MB.
+pub(crate) const IMAGE_LIMIT: u64 = 64 * MB;
+
+/// GIFs and animated WebP pictures larger than this are unsupported:
+/// 16 MB. GPUI decodes every frame up front, and an animation compresses
+/// far better than a photo: a 16 MB GIF can hold a thousand frames.
+pub(crate) const ANIMATED_IMAGE_LIMIT: u64 = 16 * MB;
+
+/// The gallery's pictures either side of the stage's are decoded ahead only
+/// up to this size on disk: 8 MB, a photo of some 25 megapixels, 100 MB of
+/// pixels. Two of them and the picture on the stage fit the image cache.
+pub(crate) const PRELOAD_LIMIT: u64 = 8 * MB;
 
 /// Markdown files larger than this open in the code view: 256 KB.
 /// Measured (release, M4 Max): a document's first frame takes 0.18 to 0.21 s
@@ -131,6 +152,7 @@ fn try_load(path: &Path, name: &str, held: Held) -> io::Result<Loaded> {
         len: Some(stamp.len),
     };
     Ok(match viewer {
+        Viewer::Image if stamp.len > image_limit(name, &bytes) => unsupported,
         Viewer::Image => Loaded::Image(stamp),
         Viewer::Unsupported => unsupported,
         _ if stamp.len > TEXT_LIMIT => unsupported,
@@ -155,6 +177,30 @@ fn try_load(path: &Path, name: &str, held: Held) -> io::Result<Loaded> {
             }
         }
     })
+}
+
+/// The largest picture the stage decodes, by its size on disk: lower for an
+/// animation, whose every frame is decoded at once.
+fn image_limit(name: &str, head: &[u8]) -> u64 {
+    if is_animated(name, head) {
+        ANIMATED_IMAGE_LIMIT
+    } else {
+        IMAGE_LIMIT
+    }
+}
+
+/// Whether a picture may hold many frames: a GIF, by its name or its
+/// content (GPUI decodes by content), or a WebP whose header says it is
+/// animated (`RIFF`, size, `WEBPVP8X`, chunk size, then flags; bit 1 is
+/// animation).
+fn is_animated(name: &str, head: &[u8]) -> bool {
+    let gif_name = name
+        .rsplit_once('.')
+        .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("gif"));
+    let animated_webp = head.starts_with(b"RIFF")
+        && head.get(8..16) == Some(b"WEBPVP8X".as_slice())
+        && head.get(20).is_some_and(|flags| flags & 0x02 != 0);
+    gif_name || head.starts_with(b"GIF8") || animated_webp
 }
 
 /// Opens the regular file at `path` for reading, with its metadata as the
@@ -274,6 +320,48 @@ mod tests {
                 len: Some(TEXT_LIMIT + 1)
             }
         );
+    }
+
+    /// A sparse file of `len` bytes that starts with `head`.
+    fn sparse(dir: &Path, name: &str, head: &[u8], len: u64) -> std::path::PathBuf {
+        let path = write(dir, name, head);
+        File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(len)
+            .unwrap();
+        path
+    }
+
+    #[test]
+    fn pictures_over_their_limits_are_unsupported() {
+        let dir = tempfile::tempdir().unwrap();
+        let viewer = |path: &Path, name: &str| match load(path, name, Held::default()) {
+            Loaded::Image(_) => "image",
+            Loaded::Unsupported { .. } => "unsupported",
+            other => panic!("{other:?}"),
+        };
+        let still = sparse(dir.path(), "still.png", b"", IMAGE_LIMIT);
+        assert_eq!(viewer(&still, "still.png"), "image");
+        let still = sparse(dir.path(), "still.png", b"", IMAGE_LIMIT + 1);
+        assert_eq!(viewer(&still, "still.png"), "unsupported");
+
+        // Every frame of an animation is decoded at once: a lower limit,
+        // for a GIF by its name or its content, and an animated WebP.
+        let gif = sparse(dir.path(), "a.gif", b"GIF89a", ANIMATED_IMAGE_LIMIT);
+        assert_eq!(viewer(&gif, "a.gif"), "image");
+        let gif = sparse(dir.path(), "a.gif", b"GIF89a", ANIMATED_IMAGE_LIMIT + 1);
+        assert_eq!(viewer(&gif, "a.gif"), "unsupported");
+        let disguised = sparse(dir.path(), "b.png", b"GIF89a", ANIMATED_IMAGE_LIMIT + 1);
+        assert_eq!(viewer(&disguised, "b.png"), "unsupported");
+        let mut animated = b"RIFF\0\0\0\0WEBPVP8X\x0a\0\0\0".to_vec();
+        animated.push(0x02);
+        let webp = sparse(dir.path(), "c.webp", &animated, ANIMATED_IMAGE_LIMIT + 1);
+        assert_eq!(viewer(&webp, "c.webp"), "unsupported");
+        let still_webp = b"RIFF\0\0\0\0WEBPVP8 ";
+        let webp = sparse(dir.path(), "d.webp", still_webp, ANIMATED_IMAGE_LIMIT + 1);
+        assert_eq!(viewer(&webp, "d.webp"), "image");
     }
 
     #[test]

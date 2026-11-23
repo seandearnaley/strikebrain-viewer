@@ -12,8 +12,9 @@
 //! Starting a read replaces the task of the one before, which cancels it,
 //! so flicking through files never queues work. Until a read lands the
 //! stage keeps showing what it showed. Images decode in GPUI's image
-//! loader, through a cache of 8 (`stage/images.rs`); the gallery files
-//! either side of the current one are decoded ahead. Text is kept in a
+//! loader, through a cache of 8 images and 512 MB (`stage/images.rs`); the
+//! gallery files either side of the current one are decoded ahead, up to
+//! 8 MB on disk. Text is kept in a
 //! 32 MB cache. Both caches remember each file's size and modification
 //! time, so after a refresh a changed file is read again and an unchanged
 //! one is not.
@@ -156,6 +157,7 @@ pub struct StageProbe {
     renders: usize,
     loads: usize,
     images: usize,
+    image_bytes: usize,
     texts: usize,
     text_bytes: usize,
     scroll: f32,
@@ -178,6 +180,12 @@ impl StageProbe {
     #[must_use]
     pub fn images(&self) -> usize {
         self.images
+    }
+
+    /// How many bytes of decoded pixels the image cache holds.
+    #[must_use]
+    pub fn image_bytes(&self) -> usize {
+        self.image_bytes
     }
 
     /// How many texts the text cache holds.
@@ -275,6 +283,7 @@ impl Stage {
             renders: self.renders,
             loads: self.loads,
             images: self.images.read(cx).len(),
+            image_bytes: self.images.read(cx).bytes(),
             texts: self.texts.len(),
             text_bytes: self.texts.used(),
         }
@@ -384,7 +393,7 @@ impl Stage {
             Loaded::Image(stamp) => {
                 let resource = Resource::Path(Arc::clone(&file.path));
                 self.images.update(cx, |images, cx| {
-                    images.prepare(&resource, stamp, window, cx);
+                    images.prepare(&resource, stamp, true, window, cx);
                 });
                 let showing = Showing::new(&file, Viewer::Image, Some(stamp));
                 (Content::Image(file, stamp.len()), showing)
@@ -426,6 +435,9 @@ impl Stage {
                 (content, showing)
             }
         };
+        if !matches!(content, Content::Image(..)) {
+            self.images.update(cx, |images, _| images.leave_stage());
+        }
         self.loads += 1;
         self.show(content, Some(showing), window, cx);
         self.preload_neighbours(window, cx);
@@ -481,9 +493,11 @@ impl Stage {
         self.preload = Some(cx.spawn_in(window, async move |this, cx| {
             let stamped: Vec<(Arc<Path>, Stamp)> = cx
                 .background_spawn(async move {
+                    // A large picture is decoded only when asked for.
                     paths
                         .into_iter()
                         .filter_map(|path| load::stamp(&path).map(|stamp| (path, stamp)))
+                        .filter(|(_, stamp)| stamp.len() <= load::PRELOAD_LIMIT)
                         .collect()
                 })
                 .await;
@@ -493,7 +507,7 @@ impl Stage {
                 }
                 this.images.update(cx, |images, cx| {
                     for (path, stamp) in stamped {
-                        images.prepare(&Resource::Path(path), stamp, window, cx);
+                        images.prepare(&Resource::Path(path), stamp, false, window, cx);
                     }
                 });
             })

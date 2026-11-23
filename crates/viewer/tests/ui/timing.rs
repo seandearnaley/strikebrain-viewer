@@ -528,6 +528,41 @@ fn timing_markdown_around_its_size_limit(cx: &mut TestAppContext) {
     }
 }
 
+/// Flicking through eight 6000 x 4000 photos, 92 MB of pixels each: what
+/// the image cache holds, and the process's memory.
+#[gpui_kit::test]
+#[ignore = "probe; run in release with --ignored --nocapture"]
+#[expect(clippy::print_stderr, reason = "the probe reports its measurements")]
+fn timing_flicking_through_large_photos(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().expect("a temporary folder");
+    let photo = noisy_jpeg(6000, 4000);
+    for ix in 0..8 {
+        crate::write(dir.path(), &format!("{ix}.jpg"), &photo);
+    }
+    let (handle, view) = crate::stage::open_checked(cx, dir.path());
+    let before = resident_mb().unwrap_or_default();
+    for step in 0..8 {
+        if step > 0 {
+            let shown = timed(cx, handle, |cx| {
+                cx.update_window(handle, |_, window, cx| window.press("right", cx))
+                    .expect("press a key");
+            });
+            eprint!("step {step}: {shown:.2?}; ");
+        }
+        let probe = cx.update(|cx| view.read(cx).stage_probe(cx));
+        eprintln!(
+            "{} images, {:.0} MB of pixels; RSS {:.0} MB",
+            probe.images(),
+            megabytes(probe.image_bytes() as u64),
+            resident_mb().unwrap_or_default(),
+        );
+    }
+    eprintln!(
+        "{:.1} MB a photo on disk; RSS before {before:.0} MB",
+        megabytes(photo.len() as u64)
+    );
+}
+
 #[gpui_kit::test]
 #[ignore = "probe; run in release with --ignored --nocapture"]
 #[expect(clippy::print_stderr, reason = "the probe reports its measurements")]

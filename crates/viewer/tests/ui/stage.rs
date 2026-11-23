@@ -483,8 +483,43 @@ fn the_image_cache_holds_at_most_eight_while_flicking(cx: &mut TestAppContext) {
         assert!(matches!(shown(cx, handle), Some(Shown::Image(_))));
         assert!(probe(cx, &view).images() <= 8);
     }
-    // The current image and its neighbour decoded ahead are both kept.
+    // The current image and its neighbour decoded ahead are both kept,
+    // their decoded pixels counted: 16 x 16 x 4 bytes each.
     assert_eq!(probe(cx, &view).images(), 8);
+    assert_eq!(probe(cx, &view).image_bytes(), 8 * 16 * 16 * 4);
+}
+
+#[gpui_kit::test]
+fn a_large_neighbour_is_not_decoded_ahead_and_a_huge_picture_is_unsupported(
+    cx: &mut TestAppContext,
+) {
+    const MB: u64 = 1024 * 1024;
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "a.png", png(4, 4));
+    // Sparse: a picture's size on disk without writing it.
+    let sized = |name: &str, len: u64| {
+        write(dir.path(), name, png(4, 4));
+        std::fs::File::options()
+            .write(true)
+            .open(dir.path().join(name))
+            .and_then(|file| file.set_len(len))
+            .unwrap();
+    };
+    sized("b.png", 9 * MB);
+    sized("c.png", 64 * MB + 1);
+    let (handle, view) = open_checked(cx, dir.path());
+    // a.png on the stage; b.png, its neighbour, is over 8 MB.
+    assert_eq!(shown(cx, handle), Some(Shown::Image("a.png".into())));
+    assert_eq!(probe(cx, &view).images(), 1);
+    press(cx, handle, "right");
+    assert_eq!(shown(cx, handle), Some(Shown::Image("b.png".into())));
+    // Over 64 MB: its name and size, never decoded.
+    press(cx, handle, "right");
+    assert_eq!(shown(cx, handle), Some(Shown::Unsupported("c.png".into())));
+    cx.update_window(handle, |_, window, _| {
+        assert_eq!(window.find("stage-size").label(), Some("64.0 MB"));
+    })
+    .unwrap();
 }
 
 #[gpui_kit::test]
