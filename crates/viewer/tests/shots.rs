@@ -644,6 +644,37 @@ fn main() {
                 .expect("next file");
         }
 
+        // The presentation: the stage alone, from the first file.
+        let mut cx = context();
+        let (handle, _) = open_sized(
+            &mut cx,
+            Launch::Folder(stage.path().to_owned()),
+            size(px(1200.), px(760.)),
+        );
+        click(&mut cx, handle, "select-all");
+        cx.update_window(handle, |_, window, cx| {
+            window.press("tab", cx);
+            window.press("space", cx);
+        })
+        .expect("present");
+        for name in [
+            "present-landscape",
+            "present-portrait",
+            "present-icon",
+            "present-markdown",
+            "present-code",
+        ] {
+            written.push(save(
+                &mut cx,
+                handle,
+                mode,
+                &dir,
+                &format!("{name}-{suffix}"),
+            ));
+            cx.update_window(handle, |_, window, cx| window.press("right", cx))
+                .expect("next file");
+        }
+
         // A file outside the gallery: no position.
         let mut cx = context();
         let (handle, view) = open_sized(
