@@ -94,7 +94,8 @@ pub struct Plan {
 }
 
 /// Decides what a launch opens. Folders from the command line open,
-/// exactly those, each taking its saved view if it was saved. With none,
+/// exactly those, each taking its saved view if it was saved; a file there
+/// stands for its folder. With none,
 /// the saved folders reopen with their views; one that no longer exists is
 /// dropped. The filter, the sort, Show ignored, the file on the stage and
 /// the top row come back with any saved folder that opens. The window and
@@ -111,7 +112,10 @@ pub fn plan_launch(folders: Vec<PathBuf>, saved: Option<Saved>) -> Plan {
             .map(|folder| folder.path.clone())
             .collect()
     } else {
-        let asked: Vec<PathBuf> = folders.iter().map(|folder| resolve(folder)).collect();
+        let asked: Vec<PathBuf> = folders
+            .iter()
+            .map(|path| folder_of(resolve(path)))
+            .collect();
         view.folders.retain(|folder| asked.contains(&folder.path));
         folders
     };
@@ -124,6 +128,14 @@ pub fn plan_launch(folders: Vec<PathBuf>, saved: Option<Saved>) -> Plan {
         view: (!view.folders.is_empty()).then_some(view),
         explorer_width: saved.explorer_width,
         window: saved.window,
+    }
+}
+
+/// The folder `path` opens: its own, or the one a file is in.
+fn folder_of(path: PathBuf) -> PathBuf {
+    match path.parent() {
+        Some(folder) if path.is_file() => folder.to_path_buf(),
+        _ => path,
     }
 }
 

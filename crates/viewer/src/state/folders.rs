@@ -10,6 +10,9 @@
 //! could not be read) is added as a folder of its own. One inside a folder
 //! whose first scan runs waits for that scan to decide. A folder whose scan
 //! lists open folders takes them in when it lands (see `state/scan.rs`).
+//!
+//! A file asked for opens its folder by the same rule, then shows on the
+//! stage once a tree lists it.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -131,25 +134,32 @@ impl AppState {
             let Some(folders) = paths? else {
                 return Ok(());
             };
-            this.update(cx, |this, cx| this.add_folders(folders, Vec::new(), cx))
+            this.update(cx, |this, cx| this.open_paths(folders, Vec::new(), cx))
         })
         .detach_and_log_err(cx);
     }
 
-    /// Adds each folder of `paths` as a top-level folder, after those open,
-    /// and scans it: from the picker, the command line, "Open With" or the
-    /// Dock. A folder already open, or one an open folder's tree lists, is
-    /// not added: its row opens and becomes the focus row. One inside a
-    /// folder whose first scan runs waits for that scan. `waiting` holds
+    /// Opens each of `paths`: from the picker, the command line, "Open
+    /// With" or the Dock. A folder is added as a top-level folder, after
+    /// those open, and scanned. One already open, or one an open folder's
+    /// tree lists, is not added: its row opens and becomes the focus row.
+    /// One inside a folder whose first scan runs waits for that scan. A
+    /// file opens its folder so, then shows on the stage with its row the
+    /// focus row; of several files the last one shows. `waiting` holds
     /// saved views, each applied when its folder's first scan lands.
-    pub fn add_folders(
+    pub fn open_paths(
         &mut self,
         paths: Vec<PathBuf>,
         mut waiting: Vec<SavedFolder>,
         cx: &mut Context<Self>,
     ) {
         for path in paths {
-            let path = resolve(&path);
+            let mut path = resolve(&path);
+            if path.is_file() {
+                let folder = path.parent().map(Path::to_path_buf);
+                self.asked_files.push(path.clone());
+                path = folder.unwrap_or(path);
+            }
             let saved = waiting
                 .iter()
                 .position(|view| view.path == path)
@@ -177,7 +187,31 @@ impl AppState {
             self.follow(key, cx);
             self.start_scan(key, cx);
         }
+        self.settle_asked_files(cx);
         cx.notify();
+    }
+
+    /// Shows each file asked for that a tree now lists, in the file view
+    /// with its row the focus row. A file whose folder is still to land
+    /// waits, as does every file while a launch settles, so the saved view
+    /// does not replace it. One that no tree lists once its folder landed
+    /// (deleted meanwhile, or its folder could not be read) is forgotten.
+    pub(super) fn settle_asked_files(&mut self, cx: &mut Context<Self>) {
+        if self.asked_files.is_empty() || self.restore.is_some() {
+            return;
+        }
+        for path in std::mem::take(&mut self.asked_files) {
+            if let Some(id) = self.listed(&path) {
+                self.show(id, cx);
+                self.reveal(id, cx);
+            } else if self
+                .folders
+                .iter()
+                .any(|folder| !folder.shown && folder.holds(&path))
+            {
+                self.asked_files.push(path);
+            }
+        }
     }
 
     /// The node at `path` in the tree on screen, if a folder there lists
@@ -218,7 +252,7 @@ impl AppState {
         cx: &mut Context<Self>,
     ) {
         for (path, saved) in asked {
-            self.add_folders(vec![path], saved.into_iter().collect(), cx);
+            self.open_paths(vec![path], saved.into_iter().collect(), cx);
         }
     }
 
@@ -243,6 +277,7 @@ impl AppState {
             .and_then(|at| Some((*rows.get(at)?, at)));
         let none_left = explorer.tree().folders().len() == 0;
         self.folders.retain(|folder| folder.path != path);
+        self.asked_files.retain(|file| !file.starts_with(&path));
         self.current = current;
         self.focus = self.focus.and_then(|focus| map.get(focus));
         self.tile = self.tile.and_then(|tile| map.get(tile));

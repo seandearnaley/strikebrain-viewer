@@ -2,23 +2,24 @@ use std::path::PathBuf;
 
 use futures::StreamExt as _;
 use futures::channel::mpsc;
-use viewer::{AppAssets, StateStore, folder_from_url, open_main_window};
+use viewer::{AppAssets, StateStore, open_main_window, path_from_url};
 
 fn main() {
-    // `strikebrain-viewer <folder>...` opens those folders; with none the
-    // folders open last time reopen, as they were seen.
+    // `strikebrain-viewer <folder or file>...` opens those folders, and a
+    // file's folder with the file on the stage; with none the folders open
+    // last time reopen, as they were seen.
     let asked: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
     let store = StateStore::in_config_dir();
 
-    // Folders the system hands over while running: "Open With", or a
-    // folder dropped on the Dock icon. They arrive as `file://` URLs, off
-    // any GPUI context, so they wait in a channel for the window.
-    let (handed_over, mut folders) = mpsc::unbounded::<PathBuf>();
+    // Folders and files the system hands over, at launch or while running:
+    // "Open With", or a drop on the Dock icon. They arrive as `file://`
+    // URLs, off any GPUI context, so they wait in a channel for the window.
+    let (handed_over, mut paths) = mpsc::unbounded::<PathBuf>();
     let app = gpui_kit::application().with_assets(AppAssets);
     app.on_open_urls(move |urls| {
-        for folder in urls.iter().filter_map(|url| folder_from_url(url)) {
+        for path in urls.iter().filter_map(|url| path_from_url(url)) {
             // The app is quitting when nothing listens.
-            handed_over.unbounded_send(folder).unwrap_or_default();
+            handed_over.unbounded_send(path).unwrap_or_default();
         }
     });
     app.run(move |cx| {
@@ -29,9 +30,9 @@ fn main() {
         let (_, view) = open_main_window(asked, store, true, cx).expect("open the main window");
         let view = view.downgrade();
         cx.spawn(async move |cx| {
-            while let Some(folder) = folders.next().await {
+            while let Some(path) = paths.next().await {
                 // The window is gone only as the app quits.
-                let opened = view.update(cx, |view, cx| view.add_folder(folder, cx));
+                let opened = view.update(cx, |view, cx| view.open_path(path, cx));
                 opened.unwrap_or_default();
             }
         })

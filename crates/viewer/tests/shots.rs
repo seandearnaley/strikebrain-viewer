@@ -186,7 +186,7 @@ fn open_slowly(cx: &mut HeadlessAppContext, view: &Entity<AppView>, root: PathBu
     let state = cx.update(|cx| view.read(cx).state().clone());
     cx.update(|cx| {
         state.update(cx, |state, cx| {
-            state.add_folders(vec![root], Vec::new(), cx);
+            state.open_paths(vec![root], Vec::new(), cx);
         });
     });
     let executor = cx.background_executor.clone();

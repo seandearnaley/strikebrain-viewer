@@ -176,6 +176,7 @@ impl AppState {
             let asked = self.take_folder(key);
             self.settle_asked_inside(asked, cx);
             self.landed(cx);
+            self.settle_asked_files(cx);
             return None;
         }
         if error.is_none() {
@@ -251,6 +252,7 @@ impl AppState {
             .folder_mut(key)
             .map_or_else(Vec::new, |folder| std::mem::take(&mut folder.asked_inside));
         self.settle_asked_inside(asked, cx);
+        self.settle_asked_files(cx);
         self.scan_settled(key, cx);
         (readable && !tree.has_sizes()).then_some(tree)
     }

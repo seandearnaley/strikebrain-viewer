@@ -39,7 +39,7 @@ just bundle
 open "target/release/bundle/osx/Strikebrain Viewer.app"
 ```
 
-This builds the release binary and wraps it in a signed (ad hoc) `.app`. You can then drop a folder on its Dock icon, or choose it in Finder's Open With, to add it.
+This builds the release binary and wraps it in a signed (ad hoc) `.app`. You can then drop a folder or a file on its Dock icon, or choose it in Finder's Open With: a folder is added, and a file opens its folder and shows.
 
 ## Develop
 
