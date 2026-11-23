@@ -1,0 +1,35 @@
+[workspace]
+resolver = "3"
+members = ["crates/explorer"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.100"
+publish = false
+
+[workspace.dependencies]
+gpui-kit = { version = "=0.10.0", features = ["syntect"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+# Keeps our code in debug while the UI stack runs optimized.
+# Taken from https://gpui-kit.com/docs/installation.md
+[profile.dev]
+debug = "limited"
+split-debuginfo = "unpacked"
+
+[profile.dev.package]
+gpui-pre = { opt-level = 3 }
+gpui-pre-platform = { opt-level = 3 }
+gpui-kit = { opt-level = 3 }
+gpui-component = { opt-level = 3 }
+gpui-kit-assets = { opt-level = 3 }
+taffy = { opt-level = 3 }
+rustybuzz = { opt-level = 3 }
+ttf-parser = { opt-level = 3 }
