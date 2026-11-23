@@ -15,6 +15,7 @@ mod redraw;
 mod refresh;
 mod rows;
 mod scale;
+mod stage;
 mod timing;
 mod toolbar;
 
@@ -92,12 +93,12 @@ impl Drop for Locked {
     }
 }
 
-/// Writes `text` to `root/path`, making its folders.
-fn write(root: &Path, path: &str, text: &str) {
+/// Writes `bytes` to `root/path`, making its folders.
+fn write(root: &Path, path: &str, bytes: impl AsRef<[u8]>) {
     let path = root.join(path);
     std::fs::create_dir_all(path.parent().expect("a file has a folder"))
         .expect("make the file's folder");
-    std::fs::write(path, text).expect("write the file");
+    std::fs::write(path, bytes).expect("write the file");
 }
 
 /// Opens the app in a 1000 x 700 window with the app's key bindings.
@@ -168,11 +169,22 @@ fn rows_now(cx: &mut TestAppContext, handle: AnyWindowHandle) -> Vec<String> {
     .expect("read the rows")
 }
 
-/// The name on the stage, if any.
+/// The name on the stage, if any: what an unsupported file shows, which
+/// every file of a tree built in memory is.
 fn stage(window: &Window) -> Option<String> {
     window
         .try_find("stage-file")
         .map(|file| file.label().expect("the stage names its file").to_owned())
+}
+
+/// The name on the stage once every task has run and a frame is drawn.
+fn stage_now(cx: &mut TestAppContext, handle: AnyWindowHandle) -> Option<String> {
+    cx.run_until_parked();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        stage(window)
+    })
+    .expect("read the stage")
 }
 
 fn current(cx: &mut TestAppContext, view: &Entity<AppView>) -> Option<NodeId> {

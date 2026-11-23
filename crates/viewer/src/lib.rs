@@ -12,6 +12,7 @@ mod theme;
 
 pub use app::{AppView, EXPLORER_MIN_WIDTH, EXPLORER_WIDTH};
 pub use assets::AppAssets;
+pub use stage::StageProbe;
 pub use state::{AppState, Launch, ScanStatus};
 
 use gpui_kit::App;

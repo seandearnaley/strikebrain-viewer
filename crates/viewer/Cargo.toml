@@ -15,6 +15,10 @@ gpui-kit = { workspace = true }
 
 [dev-dependencies]
 gpui-kit = { workspace = true, features = ["test-support"] }
+# Stage tests and shots write real PNG, JPEG and GIF files, and the large
+# image probe an 8000 x 6000 photo. GPUI already builds this crate to decode
+# images; listing it adds no code, only a direct path to its encoders.
+image = { version = "0.25.10", default-features = false, features = ["gif", "jpeg", "png"] }
 # Refresh and Show ignored tests scan real folders.
 tempfile = "3.27.0"
 

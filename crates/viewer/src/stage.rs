@@ -1,38 +1,194 @@
 //! The stage: the right pane, which shows one file at a time.
 //!
-//! For now it shows only the current file's name, centred, so `current` is
-//! visible. Milestone 3 replaces this with the image, Markdown and code
-//! viewers. It takes keyboard focus in the [`STAGE`] key context.
+//! The file is the state's `current`. The stage reads its first 8 KB off
+//! the UI thread and shows it in the viewer the engine picks: an image
+//! (`stage/images.rs`), Markdown or code (`stage/text.rs`), or, for
+//! anything else, its name and size. Below the file, the file's place in
+//! the gallery ("2 / 3") while it is in the gallery. With no file the
+//! stage draws nothing.
 //!
-//! The root view embeds it cached, so it redraws only when it notifies:
-//! when the file it shows changes, not on every change to the state.
+//! Loading: every read carries the tree and the file it was started for,
+//! and its result is dropped unless that is still the file asked for.
+//! Starting a read replaces the task of the one before, which cancels it,
+//! so flicking through files never queues work. Until a read lands the
+//! stage keeps showing what it showed. Images decode in GPUI's image
+//! loader, through a cache of 8 (`stage/images.rs`); the gallery files
+//! either side of the current one are decoded ahead. Text is kept in a
+//! 32 MB cache. Both caches remember each file's size and modification
+//! time, so after a refresh a changed file is read again and an unchanged
+//! one is not.
+//!
+//! The root view embeds the stage cached: it redraws only when it
+//! notifies, which it does when the file, its place in the gallery or
+//! what it shows changes, not on every change to the state.
+//!
+//! The stage takes keyboard focus in the [`STAGE`] key context: ← and →
+//! move through the gallery, the vertical keys scroll text, Space and
+//! Enter present (milestone 4), Esc returns to the explorer.
 
-use gpui_kit::component::ActiveTheme as _;
+mod cache;
+mod images;
+mod load;
+mod text;
+
+use std::path::Path;
+use std::sync::Arc;
+
+use explorer::{NodeId, Viewer, format_size, is_image_extension};
+use gpui_kit::component::{ActiveTheme as _, v_flex};
 use gpui_kit::{
-    App, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement as _, Render, Role,
-    SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, TestSupportExt as _,
-    Window, div, prelude::*,
+    AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable, Hsla, IntoElement,
+    ObjectFit, ParentElement as _, Render, Resource, Result, Role, SharedString,
+    StatefulInteractiveElement as _, Styled as _, StyledImage as _, Subscription, Task,
+    TestSupportExt as _, Window, div, img, prelude::*, px,
 };
 
-use explorer::NodeId;
-
-use crate::keys::STAGE;
+use crate::keys::{
+    NextFile, Present, PreviousFile, STAGE, ScrollDown, ScrollPageDown, ScrollPageUp,
+    ScrollToBottom, ScrollToTop, ScrollUp,
+};
 use crate::state::AppState;
+use crate::theme::TABULAR_FIGURES;
 
-/// The stage pane. Draws nothing while no file is current.
+use cache::Lru;
+use images::StageImages;
+use load::{Loaded, Stamp};
+use text::{Scroll, TextViews};
+
+/// How much loaded text the stage keeps: 32 MB.
+const TEXT_CACHE_BYTES: usize = 32 * 1024 * 1024;
+
+/// What the state asks the stage to show. The stage redraws when it
+/// changes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Asked {
+    /// The tree generation and `current`.
+    staged: (u64, Option<NodeId>),
+    /// "2 / 3": `current`'s place in the gallery, and the gallery's size.
+    position: Option<(usize, usize)>,
+}
+
+impl Asked {
+    fn of(state: &AppState) -> Self {
+        Self {
+            staged: state.staged(),
+            position: state.position(),
+        }
+    }
+}
+
+/// The file asked for, as the stage reads it.
+#[derive(Clone, Debug)]
+struct File {
+    /// The tree generation and the node: what a read was started for.
+    staged: (u64, Option<NodeId>),
+    path: Arc<Path>,
+    name: SharedString,
+    /// The size the scan read, if it has.
+    size: Option<u64>,
+    /// The extension, or the name for a file without one: the code view's
+    /// language.
+    language: SharedString,
+    /// A tree built in memory, with no folder behind it: nothing is read.
+    in_memory: bool,
+}
+
+/// What the stage shows.
+#[derive(Clone, Debug)]
+enum Content {
+    Blank,
+    /// An image file and its size in bytes.
+    Image(File, u64),
+    Markdown(File),
+    Code(File),
+    Unsupported {
+        name: SharedString,
+        size: Option<u64>,
+    },
+}
+
+/// A text the stage has read, and the file version it came from.
+#[derive(Clone, Debug)]
+struct CachedText {
+    stamp: Stamp,
+    text: SharedString,
+}
+
+/// What the stage holds, for tests and probes: its caches, how often it
+/// has rendered and how many reads it has shown.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StageProbe {
+    renders: usize,
+    loads: usize,
+    images: usize,
+    texts: usize,
+    text_bytes: usize,
+    scroll: f32,
+}
+
+impl StageProbe {
+    /// How many times the stage has rendered.
+    #[must_use]
+    pub fn renders(&self) -> usize {
+        self.renders
+    }
+
+    /// How many reads have landed and been shown.
+    #[must_use]
+    pub fn loads(&self) -> usize {
+        self.loads
+    }
+
+    /// How many images the image cache holds, decoded or decoding.
+    #[must_use]
+    pub fn images(&self) -> usize {
+        self.images
+    }
+
+    /// How many texts the text cache holds.
+    #[must_use]
+    pub fn texts(&self) -> usize {
+        self.texts
+    }
+
+    /// How many bytes of text the text cache holds.
+    #[must_use]
+    pub fn text_bytes(&self) -> usize {
+        self.text_bytes
+    }
+
+    /// How far the text on the stage is scrolled down, in pixels; 0 at
+    /// the top and for anything but text.
+    #[must_use]
+    pub fn scroll(&self) -> f32 {
+        self.scroll
+    }
+}
+
+/// The stage pane. See the module docs.
 pub(crate) struct Stage {
     state: Entity<AppState>,
     focus_handle: FocusHandle,
-    /// What the stage last showed; it redraws only when this changes.
-    shown: (u64, Option<NodeId>),
-    /// How many times `render` ran: a probe for the view cache.
+    asked: Asked,
+    content: Content,
+    /// The read of the file asked for. Replacing it cancels the one before.
+    load: Option<Task<Result<()>>>,
+    /// Stamps the gallery neighbours to decode ahead. Replaced likewise.
+    preload: Option<Task<Result<()>>>,
+    images: Entity<StageImages>,
+    texts: Lru<Arc<Path>, CachedText>,
+    text_views: TextViews,
     renders: usize,
+    loads: usize,
     _observe: Subscription,
 }
 
 impl std::fmt::Debug for Stage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Stage").finish_non_exhaustive()
+        f.debug_struct("Stage")
+            .field("asked", &self.asked)
+            .field("content", &self.content)
+            .finish_non_exhaustive()
     }
 }
 
@@ -43,65 +199,405 @@ impl Focusable for Stage {
 }
 
 impl Stage {
-    pub(crate) fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
-        // The state changes on every key in the tree; the stage redraws only
-        // when the file it shows does.
-        let observe = cx.observe(&state, |this, state, cx| {
-            let staged = state.read(cx).staged();
-            if staged != this.shown {
-                this.shown = staged;
-                cx.notify();
-            }
-        });
-        let shown = state.read(cx).staged();
-        Self {
+    pub(crate) fn new(
+        state: Entity<AppState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        // The state changes on every key in the tree; the stage acts only
+        // when what it is asked to show does.
+        let observe = cx.observe_in(&state, window, |this, _, window, cx| this.sync(window, cx));
+        let mut this = Self {
             state,
             focus_handle: cx.focus_handle(),
-            shown,
+            asked: Asked::default(),
+            content: Content::Blank,
+            load: None,
+            preload: None,
+            images: cx.new(StageImages::new),
+            texts: Lru::new(TEXT_CACHE_BYTES),
+            text_views: TextViews::new(window, cx),
             renders: 0,
+            loads: 0,
             _observe: observe,
+        };
+        this.sync(window, cx);
+        this
+    }
+
+    /// What the stage holds, for tests and probes.
+    pub(crate) fn probe(&self, cx: &App) -> StageProbe {
+        let scroll = match self.content {
+            Content::Code(_) => self.text_views.code_scroll(cx),
+            Content::Markdown(_) => self.text_views.markdown_scroll(),
+            Content::Blank | Content::Image(..) | Content::Unsupported { .. } => px(0.),
+        };
+        StageProbe {
+            scroll: scroll.as_f32(),
+            renders: self.renders,
+            loads: self.loads,
+            images: self.images.read(cx).len(),
+            texts: self.texts.len(),
+            text_bytes: self.texts.used(),
         }
     }
 
-    /// How many times the stage has rendered.
-    pub(crate) fn renders(&self) -> usize {
-        self.renders
+    // Loading
+
+    /// Follows the state: starts reading a new file, and redraws when the
+    /// gallery position changes.
+    fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let asked = Asked::of(self.state.read(cx));
+        if asked == self.asked {
+            return;
+        }
+        let new_file = asked.staged != self.asked.staged;
+        let moved = asked.position != self.asked.position;
+        self.asked = asked;
+        if new_file {
+            self.start_load(window, cx);
+        }
+        if moved {
+            cx.notify();
+        }
     }
+
+    /// The file the state asks for, if any.
+    fn asked_file(&self, cx: &App) -> Option<File> {
+        let state = self.state.read(cx);
+        let id = self.asked.staged.1?;
+        let tree = state.explorer()?.tree();
+        let name = tree.name(id);
+        let extension = tree.extension(id);
+        let language = if extension.is_empty() {
+            name
+        } else {
+            extension
+        };
+        Some(File {
+            staged: self.asked.staged,
+            path: tree.abs_path(id).into(),
+            name: name.to_owned().into(),
+            size: tree.size(id),
+            language: language.to_owned().into(),
+            in_memory: tree.root_path().as_os_str().is_empty(),
+        })
+    }
+
+    /// Reads the file asked for on the background executor, replacing any
+    /// read still running.
+    fn start_load(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.load = None;
+        self.preload = None;
+        let Some(file) = self.asked_file(cx) else {
+            return self.show(Content::Blank, window, cx);
+        };
+        if file.in_memory {
+            // A tree from paths alone: its files are names, not files.
+            let content = Content::Unsupported {
+                name: file.name,
+                size: file.size,
+            };
+            return self.show(content, window, cx);
+        }
+        let cached = self.texts.peek(&file.path).map(|text| text.stamp);
+        let (path, name) = (Arc::clone(&file.path), file.name.clone());
+        self.load = Some(cx.spawn_in(window, async move |this, cx| {
+            let loaded = cx
+                .background_spawn(async move { load::load(&path, &name, cached) })
+                .await;
+            this.update_in(cx, |this, window, cx| {
+                this.finish_load(file, loaded, window, cx);
+            })
+        }));
+    }
+
+    /// Shows a read, if it is for the file still asked for.
+    fn finish_load(
+        &mut self,
+        file: File,
+        loaded: Loaded,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if file.staged != self.asked.staged {
+            return;
+        }
+        self.load = None;
+        let content = match loaded {
+            Loaded::Image(stamp) => {
+                let resource = Resource::Path(Arc::clone(&file.path));
+                self.images.update(cx, |images, cx| {
+                    images.prepare(&resource, stamp, window, cx);
+                });
+                Content::Image(file, stamp.len())
+            }
+            Loaded::Text {
+                viewer,
+                stamp,
+                text,
+            } => {
+                let text = if let Some(text) = text {
+                    let entry = CachedText {
+                        stamp,
+                        text: text.clone(),
+                    };
+                    self.texts.insert(Arc::clone(&file.path), entry, text.len());
+                    text
+                } else if let Some(cached) = self.texts.get(&file.path) {
+                    cached.text.clone()
+                } else {
+                    // Gone since the read started: read it whole.
+                    return self.start_load(window, cx);
+                };
+                if viewer == Viewer::Markdown {
+                    self.text_views.show_markdown(&file.path, stamp, &text, cx);
+                    Content::Markdown(file)
+                } else {
+                    self.text_views
+                        .show_code(&file.path, stamp, &text, &file.language, window, cx);
+                    Content::Code(file)
+                }
+            }
+            Loaded::Unsupported { len } => Content::Unsupported {
+                name: file.name,
+                size: len.or(file.size),
+            },
+        };
+        self.loads += 1;
+        self.show(content, window, cx);
+        self.preload_neighbours(window, cx);
+    }
+
+    /// Puts `content` on the stage. Keyboard focus inside a view that is
+    /// going away moves to the stage itself.
+    fn show(&mut self, content: Content, window: &mut Window, cx: &mut Context<Self>) {
+        if self.focus_handle.contains_focused(window, cx) && !self.focus_handle.is_focused(window) {
+            window.focus(&self.focus_handle, cx);
+        }
+        self.content = content;
+        cx.notify();
+    }
+
+    /// Starts decoding the gallery images either side of the file on the
+    /// stage, so ← and → find them ready.
+    fn preload_neighbours(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let state = self.state.read(cx);
+        let (Some(explorer), Some(current)) = (state.explorer(), state.current()) else {
+            return;
+        };
+        let tree = explorer.tree();
+        let paths: Vec<Arc<Path>> = [
+            explorer.gallery_next(current),
+            explorer.gallery_previous(current),
+        ]
+        .into_iter()
+        .flatten()
+        .filter(|&id| is_image_extension(tree.extension(id)))
+        .map(|id| tree.abs_path(id).into())
+        .collect();
+        if paths.is_empty() {
+            return;
+        }
+        let staged = self.asked.staged;
+        self.preload = Some(cx.spawn_in(window, async move |this, cx| {
+            let stamped: Vec<(Arc<Path>, Stamp)> = cx
+                .background_spawn(async move {
+                    paths
+                        .into_iter()
+                        .filter_map(|path| load::stamp(&path).map(|stamp| (path, stamp)))
+                        .collect()
+                })
+                .await;
+            this.update_in(cx, |this, window, cx| {
+                if this.asked.staged != staged {
+                    return;
+                }
+                this.images.update(cx, |images, cx| {
+                    for (path, stamp) in stamped {
+                        images.prepare(&Resource::Path(path), stamp, window, cx);
+                    }
+                });
+            })
+        }));
+    }
+
+    // Keys
+
+    fn next_file(&mut self, _: &NextFile, _: &mut Window, cx: &mut Context<Self>) {
+        self.state.update(cx, AppState::show_next);
+    }
+
+    fn previous_file(&mut self, _: &PreviousFile, _: &mut Window, cx: &mut Context<Self>) {
+        self.state.update(cx, AppState::show_previous);
+    }
+
+    fn scroll(&mut self, scroll: Scroll, cx: &mut Context<Self>) {
+        match self.content {
+            Content::Code(_) => self.text_views.scroll_code(scroll, cx),
+            Content::Markdown(_) => {
+                self.text_views.scroll_markdown(scroll);
+                cx.notify();
+            }
+            Content::Blank | Content::Image(..) | Content::Unsupported { .. } => {}
+        }
+    }
+
+    // Rendering
+
+    fn render_content(&self, cx: &App) -> Option<AnyElement> {
+        Some(match &self.content {
+            Content::Blank => return None,
+            Content::Image(file, len) => self.render_image(file, *len, cx),
+            Content::Markdown(file) => self
+                .text_views
+                .render_markdown(file.name.clone())
+                .into_any_element(),
+            Content::Code(file) => self
+                .text_views
+                .render_code(file.name.clone())
+                .into_any_element(),
+            Content::Unsupported { name, size } => {
+                unsupported(name.clone(), *size, cx.theme().muted_foreground)
+            }
+        })
+    }
+
+    /// The image, scaled down to fit and never up, centred. A file GPUI
+    /// cannot decode shows as unsupported.
+    ///
+    /// An `img` gives itself the picture's aspect ratio, and as a block's
+    /// child it takes its height from its width, so a tall picture would
+    /// run off the bottom. As the only item of a flex frame placed by its
+    /// insets, its full height is the frame's.
+    fn render_image(&self, file: &File, len: u64, cx: &App) -> AnyElement {
+        let name = file.name.clone();
+        let (fallback_name, muted) = (name.clone(), cx.theme().muted_foreground);
+        div()
+            .id("stage-image")
+            .test_support()
+            .role(Role::Image)
+            .aria_label(name)
+            .absolute()
+            .inset_0()
+            .flex()
+            .p_6()
+            .child(
+                img(Arc::clone(&file.path))
+                    .image_cache(&self.images)
+                    // An id lets an animated GIF play; each file starts
+                    // from its first frame.
+                    .id(("image", file.staged.1.map_or(0, NodeId::index)))
+                    .size_full()
+                    .object_fit(ObjectFit::ScaleDown)
+                    .with_fallback(move || unsupported(fallback_name.clone(), Some(len), muted)),
+            )
+            .into_any_element()
+    }
+
+    /// The file's place in the gallery, quiet and centred.
+    fn render_position(at: usize, of: usize, cx: &App) -> impl IntoElement {
+        let text: SharedString = format!("{at} / {of}").into();
+        let theme = cx.theme();
+        div()
+            .id("stage-position")
+            .test_support()
+            .role(Role::Label)
+            .aria_label(text.clone())
+            .flex_shrink_0()
+            .h_8()
+            .w_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .font_family(theme.mono_font_family.clone())
+            .font_features(TABULAR_FIGURES.clone())
+            .text_xs()
+            .text_color(theme.muted_foreground)
+            .child(text)
+    }
+}
+
+/// A file the stage cannot show: its name and size, centred and muted.
+fn unsupported(name: SharedString, size: Option<u64>, muted: Hsla) -> AnyElement {
+    let size: Option<SharedString> = size.map(|bytes| format_size(bytes).into());
+    v_flex()
+        .id("stage-unsupported")
+        .test_support()
+        .role(Role::Group)
+        .aria_label(name.clone())
+        .size_full()
+        .items_center()
+        .justify_center()
+        .gap_1()
+        .px_8()
+        .text_color(muted)
+        .child(
+            div()
+                .id("stage-file")
+                .test_support()
+                .role(Role::Label)
+                .aria_label(name.clone())
+                .max_w_full()
+                .truncate()
+                .text_sm()
+                .child(name),
+        )
+        .when_some(size, |view, size| {
+            view.child(
+                div()
+                    .id("stage-size")
+                    .test_support()
+                    .role(Role::Label)
+                    .aria_label(size.clone())
+                    .text_xs()
+                    .font_features(TABULAR_FIGURES.clone())
+                    .child(size),
+            )
+        })
+        .into_any_element()
 }
 
 impl Render for Stage {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.renders += 1;
-        let state = self.state.read(cx);
-        let name: Option<SharedString> = state
-            .current()
-            .and_then(|id| state.name(id))
-            .map(|name| name.to_owned().into());
+        let content = self.render_content(cx);
         let theme = cx.theme();
 
-        div()
+        v_flex()
             .id("stage")
             .test_support()
             .track_focus(&self.focus_handle)
             .key_context(STAGE)
+            .on_action(cx.listener(Self::next_file))
+            .on_action(cx.listener(Self::previous_file))
+            .on_action(cx.listener(|this, _: &ScrollUp, _, cx| this.scroll(Scroll::Up, cx)))
+            .on_action(cx.listener(|this, _: &ScrollDown, _, cx| this.scroll(Scroll::Down, cx)))
+            .on_action(cx.listener(|this, _: &ScrollPageUp, _, cx| {
+                this.scroll(Scroll::PageUp, cx);
+            }))
+            .on_action(cx.listener(|this, _: &ScrollPageDown, _, cx| {
+                this.scroll(Scroll::PageDown, cx);
+            }))
+            .on_action(cx.listener(|this, _: &ScrollToTop, _, cx| this.scroll(Scroll::Top, cx)))
+            .on_action(cx.listener(|this, _: &ScrollToBottom, _, cx| {
+                this.scroll(Scroll::Bottom, cx);
+            }))
+            // Milestone 4 starts the presentation here.
+            .on_action(|_: &Present, _, _| {})
             .size_full()
-            .flex()
-            .items_center()
-            .justify_center()
             .bg(theme.background)
             .text_color(theme.foreground)
-            .when_some(name, |stage, name| {
-                stage.child(
-                    div()
-                        .id("stage-file")
-                        .test_support()
-                        .role(Role::Label)
-                        .aria_label(name.clone())
-                        .max_w_full()
-                        .px_4()
-                        .truncate()
-                        .child(name),
-                )
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .children(content),
+            )
+            .when_some(self.asked.position, |stage, (at, of)| {
+                stage.child(Self::render_position(at, of, cx))
             })
     }
 }

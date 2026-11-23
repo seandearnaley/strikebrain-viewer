@@ -13,19 +13,19 @@
 //! the pane's edge and the divider.
 
 use std::rc::Rc;
-use std::sync::{Arc, LazyLock};
 
 use explorer::{Check, Kind, NodeId, RowView, format_size};
 use gpui_kit::base::{Checkbox, CheckboxIndicator, CheckboxState, RoleOverride};
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, h_flex};
 use gpui_kit::{
-    AccessibleAction, App, Font, FontFeatures, IntoElement, MouseButton, ParentElement as _,
-    Pixels, Rems, RenderOnce, Role, SharedString, StatefulInteractiveElement, Styled as _,
-    TestSupportExt as _, Toggled, Window, container_query, div, font, prelude::*, rems,
+    AccessibleAction, App, Font, IntoElement, MouseButton, ParentElement as _, Pixels, Rems,
+    RenderOnce, Role, SharedString, StatefulInteractiveElement, Styled as _, TestSupportExt as _,
+    Toggled, Window, container_query, div, font, prelude::*, rems,
 };
 
 use crate::columns::{self, Columns};
 use crate::state::RowAction;
+use crate::theme::TABULAR_FIGURES;
 
 /// Indent per level below the top: 20 px.
 const INDENT: Rems = Rems(1.25);
@@ -33,11 +33,6 @@ const INDENT: Rems = Rems(1.25);
 /// How far the focus ring stays in from the pane's edge and the divider:
 /// 2 px.
 const RING_INSET: Rems = Rems(0.125);
-
-/// Tabular figures, so sizes line up digit under digit. Made once; each row
-/// clones the `Arc`.
-static TABULAR_FIGURES: LazyLock<FontFeatures> =
-    LazyLock::new(|| FontFeatures(Arc::new(vec![("tnum".into(), 1)])));
 
 /// What the chevron target holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

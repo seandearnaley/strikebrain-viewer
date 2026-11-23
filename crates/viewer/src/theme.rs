@@ -6,9 +6,17 @@
 //! [`follow_system`] switches when it changes.
 
 use std::rc::Rc;
+use std::sync::{Arc, LazyLock};
 
+use gpui_kit::component::highlighter::{HighlightTheme, HighlightThemeStyle, ThemeStyle};
 use gpui_kit::component::{Colorize as _, Theme, ThemeConfig, ThemeConfigColors, ThemeMode, hsl};
-use gpui_kit::{App, SharedString, Window};
+use gpui_kit::{App, FontFeatures, Hsla, SharedString, Window};
+
+/// Tabular figures, so numbers line up digit under digit: sizes in the
+/// tree, the stage's size and position. Made once; each use clones the
+/// `Arc`.
+pub(crate) static TABULAR_FIGURES: LazyLock<FontFeatures> =
+    LazyLock::new(|| FontFeatures(Arc::new(vec![("tnum".into(), 1)])));
 
 /// One colour as `(hue, saturation %, lightness %)`, light then dark.
 type Pair = ((f32, f32, f32), (f32, f32, f32));
@@ -44,6 +52,18 @@ const SEGMENTED_TRACK: Pair = ((30., 15., 94.), (30., 8., 5.));
 const WARNING: Pair = ((30., 90., 29.), (38., 88., 60.));
 const DANGER: Pair = ((8., 55., 39.), (8., 50., 75.));
 const POPOVER: Pair = ((0., 0., 100.), (30., 6., 14.));
+
+// Code, in the stage's code view and in Markdown code blocks: quiet colours
+// on brainstrike's warm neutrals, the keywords in its primary blue. The Kit's
+// default light palette puts comments in a bright blue.
+const COMMENT: Pair = ((30., 8., 50.), (30., 6., 52.));
+const KEYWORD: Pair = ((215., 55., 42.), (215., 60., 72.));
+const STRING: Pair = ((135., 35., 30.), (105., 30., 66.));
+const FUNCTION: Pair = ((260., 32., 45.), (255., 50., 80.));
+const TYPE: Pair = ((185., 45., 30.), (180., 35., 66.));
+const NUMBER: Pair = ((25., 70., 40.), (32., 70., 66.));
+const SPECIAL: Pair = ((8., 50., 45.), (8., 55., 72.));
+const ATTRIBUTE: Pair = ((38., 45., 35.), (38., 45., 62.));
 
 /// Installs brainstrike's light and dark themes and applies the one that
 /// matches the system appearance. Call once, after `gpui_kit::init`.
@@ -92,6 +112,7 @@ fn config(mode: ThemeMode) -> ThemeConfig {
     colors.popover_foreground = pick(FOREGROUND);
 
     let mut config = ThemeConfig::default();
+    config.highlight = Some(highlight(mode));
     config.name = if mode.is_dark() {
         "Brainstrike Dark".into()
     } else {
@@ -100,6 +121,60 @@ fn config(mode: ThemeMode) -> ThemeConfig {
     config.mode = mode;
     config.colors = colors;
     config
+}
+
+/// The syntax colours for `mode`, over the Kit's defaults for it. Each
+/// theme carries its own, so code turns dark with the rest of the window;
+/// a theme without one keeps whichever palette came before.
+fn highlight(mode: ThemeMode) -> HighlightThemeStyle {
+    let pick = |(light, dark): Pair| -> Hsla {
+        let (h, s, l) = if mode.is_dark() { dark } else { light };
+        hsl(h, s, l)
+    };
+    let defaults = if mode.is_dark() {
+        HighlightTheme::default_dark()
+    } else {
+        HighlightTheme::default_light()
+    };
+    let mut style = defaults.style.clone();
+    // The editor sits on the stage's own background, gutter included.
+    style.editor_background = Some(pick(BACKGROUND));
+    style.editor_gutter_background = Some(pick(BACKGROUND));
+    style.editor_foreground = Some(pick(FOREGROUND));
+    // A viewer has no line being edited: no band behind the caret's line.
+    style.editor_active_line = None;
+    style.editor_line_number = Some(pick(MUTED_FOREGROUND));
+    style.editor_active_line_number = Some(pick(FOREGROUND));
+
+    let syntax = &mut style.syntax;
+    // `ThemeStyle` cannot be made outside the Kit, so a style the defaults
+    // leave out starts as a copy of one they set.
+    syntax.comment_doc = syntax.comment_doc.or(syntax.comment);
+    syntax.boolean = syntax.boolean.or(syntax.number);
+    syntax.string_escape = syntax.string_escape.or(syntax.number);
+    syntax.preproc = syntax.preproc.or(syntax.attribute);
+    let paint = |style: &mut Option<ThemeStyle>, pair: Pair| {
+        if let Some(style) = style {
+            style.color = Some(pick(pair));
+        }
+    };
+    paint(&mut syntax.comment, COMMENT);
+    paint(&mut syntax.comment_doc, COMMENT);
+    paint(&mut syntax.keyword, KEYWORD);
+    paint(&mut syntax.tag, KEYWORD);
+    paint(&mut syntax.string, STRING);
+    paint(&mut syntax.string_escape, NUMBER);
+    paint(&mut syntax.function, FUNCTION);
+    paint(&mut syntax.type_, TYPE);
+    paint(&mut syntax.number, NUMBER);
+    paint(&mut syntax.boolean, NUMBER);
+    paint(&mut syntax.constant, NUMBER);
+    paint(&mut syntax.variable_special, SPECIAL);
+    paint(&mut syntax.attribute, ATTRIBUTE);
+    paint(&mut syntax.preproc, ATTRIBUTE);
+    paint(&mut syntax.property, FOREGROUND);
+    paint(&mut syntax.title, FOREGROUND);
+    style
 }
 
 #[cfg(test)]
@@ -125,11 +200,35 @@ mod tests {
         for mode in [ThemeMode::Light, ThemeMode::Dark] {
             let colors = config(mode).colors;
             let parse = |hex: Option<SharedString>| {
-                gpui_kit::Hsla::parse_hex(&hex.expect("a colour")).expect("a hex colour")
+                Hsla::parse_hex(&hex.expect("a colour")).expect("a hex colour")
             };
             let (ring, foreground) = (parse(colors.ring), parse(colors.foreground));
             assert!((ring.a - RING_ALPHA).abs() < 0.01, "{mode:?}: {ring:?}");
             assert_eq!(ring.alpha(1.).to_hex(), foreground.to_hex(), "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn code_takes_quiet_colours_from_its_own_mode() {
+        for mode in [ThemeMode::Light, ThemeMode::Dark] {
+            let config = config(mode);
+            let style = config
+                .highlight
+                .expect("each theme carries its code colours");
+            let pick = |(light, dark): Pair| {
+                let (h, s, l) = if mode.is_dark() { dark } else { light };
+                hsl(h, s, l)
+            };
+            let color = |style: Option<ThemeStyle>| style.and_then(|style| style.color);
+            assert_eq!(color(style.syntax.comment), Some(pick(COMMENT)), "{mode:?}");
+            assert_eq!(color(style.syntax.comment_doc), Some(pick(COMMENT)));
+            assert_eq!(color(style.syntax.keyword), Some(pick(KEYWORD)));
+            assert_eq!(color(style.syntax.boolean), Some(pick(NUMBER)));
+            // The editor and its gutter sit on the stage's background, and
+            // no line is marked as being edited.
+            assert_eq!(style.editor_background, Some(pick(BACKGROUND)));
+            assert_eq!(style.editor_gutter_background, Some(pick(BACKGROUND)));
+            assert_eq!(style.editor_active_line, None);
         }
     }
 }

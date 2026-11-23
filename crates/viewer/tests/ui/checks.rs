@@ -4,7 +4,7 @@ use gpui_kit::AppContext as _;
 use gpui_kit::TestAppContext;
 use gpui_kit::test::TestWindowExt as _;
 
-use crate::{PROJECT, current, node, open_app, row, stage, tree};
+use crate::{PROJECT, current, node, open_app, row, stage_now, tree};
 
 #[gpui_kit::test]
 fn a_mixed_folder_completes_on_click(cx: &mut TestAppContext) {
@@ -64,9 +64,9 @@ fn space_toggles_the_checkbox(cx: &mut TestAppContext) {
         window.press("down", cx);
         window.press("space", cx);
         assert_eq!(window.find(row(file2)).checked(), Some(true));
-        assert_eq!(stage(window).as_deref(), Some("file2.txt"));
     })
     .unwrap();
+    assert_eq!(stage_now(cx, handle).as_deref(), Some("file2.txt"));
 }
 
 #[gpui_kit::test]
@@ -74,15 +74,14 @@ fn checking_a_file_shows_it_on_the_stage(cx: &mut TestAppContext) {
     let (handle, view) = open_app(cx, tree(PROJECT));
     let file10 = node(cx, &view, "file10.txt");
 
-    cx.update_window(handle, |_, window, cx| {
-        window.render_frame(cx);
-        assert_eq!(stage(window), None);
+    assert_eq!(stage_now(cx, handle), None);
 
+    cx.update_window(handle, |_, window, cx| {
         window.within(row(file10)).click("check", cx);
-        assert_eq!(stage(window).as_deref(), Some("file10.txt"));
         assert_eq!(window.find(row(file10)).selected(), Some(true));
     })
     .unwrap();
+    assert_eq!(stage_now(cx, handle).as_deref(), Some("file10.txt"));
     assert_eq!(current(cx, &view), Some(file10));
 }
 
@@ -93,11 +92,11 @@ fn clicking_a_file_row_shows_it_checked_or_not(cx: &mut TestAppContext) {
 
     cx.update_window(handle, |_, window, cx| {
         window.click(row(readme), cx);
-        assert_eq!(stage(window).as_deref(), Some("README.md"));
         assert_eq!(window.find(row(readme)).checked(), Some(false));
         assert_eq!(window.find(row(readme)).selected(), Some(true));
     })
     .unwrap();
+    assert_eq!(stage_now(cx, handle).as_deref(), Some("README.md"));
 }
 
 #[gpui_kit::test]
@@ -106,43 +105,48 @@ fn unchecking_the_current_file_moves_the_stage_to_its_neighbour(cx: &mut TestApp
     let ids = ["file2.txt", "file10.txt", "README.md"].map(|path| node(cx, &view, path));
     let [file2, file10, readme] = ids;
 
-    cx.update_window(handle, |_, window, cx| {
-        for file in ids {
+    let check = |cx: &mut TestAppContext, file| {
+        cx.update_window(handle, |_, window, cx| {
             window.within(row(file)).click("check", cx);
-        }
-        assert_eq!(stage(window).as_deref(), Some("README.md"));
+        })
+        .unwrap();
+    };
+    for file in ids {
+        check(cx, file);
+    }
+    assert_eq!(stage_now(cx, handle).as_deref(), Some("README.md"));
 
-        // The middle file: the stage moves to the next checked file.
-        window.click(row(file10), cx);
-        window.within(row(file10)).click("check", cx);
-        assert_eq!(stage(window).as_deref(), Some("README.md"));
+    // The middle file: the stage moves to the next checked file.
+    cx.update_window(handle, |_, window, cx| window.click(row(file10), cx))
+        .unwrap();
+    check(cx, file10);
+    assert_eq!(stage_now(cx, handle).as_deref(), Some("README.md"));
 
-        // The last file: no next, so the previous one.
-        window.within(row(readme)).click("check", cx);
-        assert_eq!(stage(window).as_deref(), Some("file2.txt"));
+    // The last file: no next, so the previous one.
+    check(cx, readme);
+    assert_eq!(stage_now(cx, handle).as_deref(), Some("file2.txt"));
 
-        // The only file: the stage empties.
-        window.within(row(file2)).click("check", cx);
-        assert_eq!(stage(window), None);
-    })
-    .unwrap();
+    // The only file: the stage empties.
+    check(cx, file2);
+    assert_eq!(stage_now(cx, handle), None);
 }
 
 #[gpui_kit::test]
 fn enter_shows_a_file_and_does_nothing_on_a_folder(cx: &mut TestAppContext) {
     let (handle, view) = open_app(cx, tree(PROJECT));
 
-    cx.update_window(handle, |_, window, cx| {
-        // Focus starts on the first row, the docs folder.
-        window.press("enter", cx);
-        assert_eq!(stage(window), None);
+    // Focus starts on the first row, the docs folder.
+    cx.update_window(handle, |_, window, cx| window.press("enter", cx))
+        .unwrap();
+    assert_eq!(stage_now(cx, handle), None);
 
+    cx.update_window(handle, |_, window, cx| {
         window.press("down", cx);
         window.press("down", cx);
         window.press("enter", cx);
-        assert_eq!(stage(window).as_deref(), Some("file2.txt"));
     })
     .unwrap();
+    assert_eq!(stage_now(cx, handle).as_deref(), Some("file2.txt"));
     let file2 = node(cx, &view, "file2.txt");
     assert_eq!(current(cx, &view), Some(file2));
     cx.update_window(handle, |_, window, _| {

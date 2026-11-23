@@ -9,7 +9,7 @@ use viewer::AppView;
 use crate::{PROJECT, focus, node, open_app, press, tree};
 
 fn stage_renders(cx: &mut TestAppContext, view: &Entity<AppView>) -> usize {
-    cx.update(|cx| view.read(cx).stage_renders(cx))
+    cx.update(|cx| view.read(cx).stage_probe(cx).renders())
 }
 
 /// Presses `key` as the platform delivers it, with no forced redraw: the

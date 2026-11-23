@@ -14,7 +14,7 @@ use gpui_kit::{
 
 use crate::explorer_panel::{ExplorerFocus, ExplorerPanel};
 use crate::keys::{FocusExplorer, FocusFilter, NextPane, OpenFolder, PreviousPane};
-use crate::stage::Stage;
+use crate::stage::{Stage, StageProbe};
 use crate::state::{AppState, Launch};
 use crate::theme;
 
@@ -58,7 +58,7 @@ impl AppView {
     pub fn new(launch: Launch, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let app_state = cx.new(|cx| AppState::new(launch, cx));
         let explorer = cx.new(|cx| ExplorerPanel::new(app_state.clone(), window, cx));
-        let stage = cx.new(|cx| Stage::new(app_state.clone(), cx));
+        let stage = cx.new(|cx| Stage::new(app_state.clone(), window, cx));
         let subscriptions = [
             cx.observe_in(&app_state, window, |this, _, window, cx| {
                 this.sync_title(window, cx);
@@ -84,11 +84,12 @@ impl AppView {
         &self.state
     }
 
-    /// How many times the stage pane has rendered: a probe that tests use
-    /// to see that work in the explorer leaves the stage alone.
+    /// What the stage holds and how often it has rendered: a probe that
+    /// tests use to see that work in the explorer leaves the stage alone
+    /// and that its caches stay within their budgets.
     #[must_use]
-    pub fn stage_renders(&self, cx: &App) -> usize {
-        self.stage.read(cx).renders()
+    pub fn stage_probe(&self, cx: &App) -> StageProbe {
+        self.stage.read(cx).probe(cx)
     }
 
     /// The title this view gave the window: the open folder's name.
