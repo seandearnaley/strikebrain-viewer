@@ -3,10 +3,11 @@
 use gpui_kit::AppContext as _;
 use gpui_kit::TestAppContext;
 use gpui_kit::test::TestWindowExt as _;
+use viewer::Launch;
 
 use crate::{
-    PROJECT, click, filter_value, focus, is_focused, node, open_app, press, row, rows_now, tree,
-    type_query,
+    PROJECT, click, filter_value, fixture_folder, focus, folder, is_focused, node, open_app, press,
+    row, rows_now, state, tree, type_query,
 };
 
 #[gpui_kit::test]
@@ -264,4 +265,60 @@ fn escape_on_the_stage_returns_to_the_tree(cx: &mut TestAppContext) {
     assert!(is_focused(cx, handle, "stage"));
     press(cx, handle, "escape");
     assert!(is_focused(cx, handle, "tree"));
+}
+
+#[gpui_kit::test]
+fn tab_moves_between_the_panes_with_no_folder_open(cx: &mut TestAppContext) {
+    let (handle, _) = open_app(cx, Launch::Empty);
+    assert!(is_focused(cx, handle, "explorer-body"));
+
+    press(cx, handle, "tab");
+    assert!(is_focused(cx, handle, "stage"));
+    press(cx, handle, "tab");
+    assert!(is_focused(cx, handle, "explorer-body"));
+    press(cx, handle, "shift-tab");
+    assert!(is_focused(cx, handle, "stage"));
+    press(cx, handle, "shift-tab");
+    assert!(is_focused(cx, handle, "explorer-body"));
+    // No filter on screen: ⌘F leaves focus where it is.
+    press(cx, handle, "cmd-f");
+    assert!(is_focused(cx, handle, "explorer-body"));
+}
+
+#[gpui_kit::test]
+fn tab_and_command_f_work_when_the_folder_cannot_be_read(cx: &mut TestAppContext) {
+    let (handle, _) = open_app(cx, Launch::Folder(fixture_folder().join("no-such-folder")));
+    assert!(is_focused(cx, handle, "explorer-body"));
+
+    press(cx, handle, "cmd-f");
+    assert!(is_focused(cx, handle, "filter"));
+    press(cx, handle, "escape");
+    assert!(is_focused(cx, handle, "explorer-body"));
+    press(cx, handle, "tab");
+    assert!(is_focused(cx, handle, "stage"));
+    press(cx, handle, "tab");
+    assert!(is_focused(cx, handle, "filter"));
+    press(cx, handle, "tab");
+    assert!(is_focused(cx, handle, "explorer-body"));
+    press(cx, handle, "shift-tab");
+    assert!(is_focused(cx, handle, "filter"));
+}
+
+#[gpui_kit::test]
+fn tab_and_command_f_work_during_the_first_scan(cx: &mut TestAppContext) {
+    let dir = folder(&[("a.txt", "a")]);
+    let (handle, view) = open_app(cx, Launch::Empty);
+    // Keys arrive before the scan has run.
+    state(cx, &view).update(cx, |state, cx| state.open_folder(dir.path().to_owned(), cx));
+    cx.update_window(handle, |_, window, cx| {
+        window.press("cmd-f", cx);
+        assert_eq!(window.find("filter").focused(), Some(true));
+        window.press("tab", cx);
+        assert_eq!(window.find("explorer-body").focused(), Some(true));
+        window.press("tab", cx);
+        assert_eq!(window.find("stage").focused(), Some(true));
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(rows_now(cx, handle), ["a.txt"]);
 }

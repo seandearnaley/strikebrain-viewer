@@ -25,8 +25,8 @@ use gpui_kit::{
 };
 
 use crate::keys::{
-    ClearFilter, Collapse, EXPLORER, Expand, FocusFirst, FocusLast, FocusNext, FocusNextPage,
-    FocusPrevious, FocusPreviousPage, OpenFolder, ShowFile, ToggleCheck,
+    ClearFilter, Collapse, EXPLORER, EXPLORER_BODY, Expand, FocusFirst, FocusLast, FocusNext,
+    FocusNextPage, FocusPrevious, FocusPreviousPage, OpenFolder, ShowFile, ToggleCheck,
 };
 use crate::row::TreeRow;
 use crate::state::{AppState, DrawnRow, Motion, RowAction, ScanStatus, StateEvent};
@@ -380,11 +380,14 @@ impl ExplorerPanel {
     }
 
     /// The body when there is no tree. It holds keyboard focus in the tree's
-    /// place, without the tree's key context, so ⌘O reaches the root view.
+    /// place, in its own key context: Tab, shift-Tab and ⌘F reach the root
+    /// view, and the tree's keys have nothing to act on.
     fn render_without_tree(&self, content: Option<AnyElement>) -> AnyElement {
         div()
             .id("explorer-body")
+            .test_support()
             .track_focus(&self.focus_handle)
+            .key_context(EXPLORER_BODY)
             .flex_1()
             .min_h_0()
             .w_full()

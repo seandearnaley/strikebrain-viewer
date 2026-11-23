@@ -2,8 +2,10 @@
 //!
 //! Each pane declares a key context while it holds focus: the explorer's
 //! tree [`EXPLORER`], its filter input [`FILTER`] and the stage [`STAGE`].
-//! Tab moves between those three panes in each of them. Opening a folder
-//! and quitting bind everywhere.
+//! Before a tree is on screen (no folder, a first scan, a folder that
+//! cannot be read) the explorer's body holds focus in the tree's place, in
+//! [`EXPLORER_BODY`]. Tab moves between the panes from each of them.
+//! Opening a folder and quitting bind everywhere.
 
 use gpui_kit::{KeyBinding, actions};
 
@@ -15,6 +17,9 @@ pub const FILTER: &str = "Filter";
 
 /// The key context the stage declares.
 pub const STAGE: &str = "Stage";
+
+/// The key context of the explorer's body while no tree is on screen.
+pub const EXPLORER_BODY: &str = "ExplorerBody";
 
 actions!(
     explorer,
@@ -71,6 +76,7 @@ actions!(
 #[must_use]
 pub fn bindings() -> Vec<KeyBinding> {
     let (explorer, filter, stage) = (Some(EXPLORER), Some(FILTER), Some(STAGE));
+    let body = Some(EXPLORER_BODY);
     vec![
         KeyBinding::new("up", FocusPrevious, explorer),
         KeyBinding::new("down", FocusNext, explorer),
@@ -93,6 +99,9 @@ pub fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-f", FocusFilter, stage),
         KeyBinding::new("tab", NextPane, stage),
         KeyBinding::new("shift-tab", PreviousPane, stage),
+        KeyBinding::new("cmd-f", FocusFilter, body),
+        KeyBinding::new("tab", NextPane, body),
+        KeyBinding::new("shift-tab", PreviousPane, body),
         KeyBinding::new("cmd-o", OpenFolder, None),
         KeyBinding::new("cmd-q", Quit, None),
     ]
@@ -153,11 +162,12 @@ mod tests {
         assert_bound("escape", Some(STAGE), &FocusExplorer);
         assert_bound("cmd-f", Some(EXPLORER), &FocusFilter);
         assert_bound("cmd-f", Some(STAGE), &FocusFilter);
+        assert_bound("cmd-f", Some(EXPLORER_BODY), &FocusFilter);
     }
 
     #[test]
     fn tab_and_shift_tab_move_between_panes_from_each_pane() {
-        for context in [EXPLORER, FILTER, STAGE] {
+        for context in [EXPLORER, FILTER, STAGE, EXPLORER_BODY] {
             assert_bound("tab", Some(context), &NextPane);
             assert_bound("shift-tab", Some(context), &PreviousPane);
         }
