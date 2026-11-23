@@ -63,6 +63,7 @@ impl Explorer {
     /// will apply.
     #[must_use]
     pub fn filter_job(&mut self, text: &str, kind: KindFilter) -> FilterJob {
+        self.catch_up();
         let generation = self.next_generation();
         self.requested = (text.to_owned(), kind);
         FilterJob {
@@ -80,6 +81,7 @@ impl Explorer {
     /// was started, or the tree was replaced, after its job was made; or
     /// another explorer made the job.
     pub fn apply_filter(&mut self, result: FilterResult) -> bool {
+        self.catch_up();
         let current = Arc::ptr_eq(&result.owner, &self.generation)
             && Arc::ptr_eq(&result.tree, &self.tree)
             && result.generation == self.generation.load(Ordering::Relaxed);
@@ -93,6 +95,7 @@ impl Explorer {
     /// Runs the filter for `text` and `kind` here and shows it: for small
     /// trees, and for tests. Supersedes every running job.
     pub fn set_filter(&mut self, text: &str, kind: KindFilter) {
+        self.catch_up();
         self.next_generation();
         self.requested = (text.to_owned(), kind);
         let visibility = filter(&self.tree, &Query::parse(text), kind);

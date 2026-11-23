@@ -108,6 +108,9 @@ pub(crate) fn sibling_order(a: Rank, b: Rank, direction: Direction) -> Ordering 
 pub(crate) struct DisplayOrder {
     /// `None` for the tree's own order, which needs no copy.
     permuted: Option<Permuted>,
+    /// A Size order built before the tree had sizes, so every size counted
+    /// as 0. It is stale once the sizes arrive.
+    awaiting_sizes: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -126,7 +129,10 @@ impl DisplayOrder {
         if sort == Sort::default() {
             return Self::default();
         }
-        let keys = keys(tree, sort.key);
+        // One look at the sizes: another thread may store them meanwhile,
+        // and the keys must not mix zeros with real sizes.
+        let sizes = tree.sizes();
+        let keys = keys(tree, sort.key, sizes);
         let rank = |id: NodeId| Rank {
             folder: tree.kind(id).is_folder(),
             key: keys[id.index()],
@@ -161,7 +167,14 @@ impl DisplayOrder {
                 pre_order,
                 position,
             }),
+            awaiting_sizes: sort.key == SortKey::Size && sizes.is_none(),
         }
+    }
+
+    /// Whether the order was built by size before `tree` had sizes, and
+    /// the sizes have since arrived.
+    pub(crate) fn is_stale(&self, tree: &Tree) -> bool {
+        self.awaiting_sizes && tree.has_sizes()
     }
 
     /// The folder's children in display order.
@@ -189,11 +202,11 @@ impl DisplayOrder {
     }
 }
 
-/// Each node's sort key: see [`Rank::key`].
-fn keys(tree: &Tree, key: SortKey) -> Vec<u64> {
+/// Each node's sort key: see [`Rank::key`]. Without `sizes`, every size is 0.
+fn keys(tree: &Tree, key: SortKey, sizes: Option<&[u64]>) -> Vec<u64> {
     match key {
         SortKey::Name => (0..tree.node_count()).map(|i| i as u64).collect(),
-        SortKey::Size => tree.ids().map(|id| tree.size(id).unwrap_or(0)).collect(),
+        SortKey::Size => sizes.map_or_else(|| vec![0; tree.node_count()], <[u64]>::to_vec),
         SortKey::Type => type_keys(tree),
     }
 }

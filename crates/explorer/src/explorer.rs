@@ -16,9 +16,7 @@ use fixedbitset::FixedBitSet;
 use crate::remap::IdMap;
 use crate::rows::flatten;
 use crate::sort::DisplayOrder;
-use crate::{
-    Check, Kind, KindFilter, NodeId, Query, Selection, Sort, SortKey, Tree, Visibility, filter,
-};
+use crate::{Check, Kind, KindFilter, NodeId, Query, Selection, Sort, Tree, Visibility, filter};
 
 mod filtering;
 mod gallery;
@@ -125,6 +123,7 @@ impl Explorer {
     /// only changes the filter's temporary state, and only for a folder the
     /// filter opened. Files, unreadable folders and the root are ignored.
     pub fn toggle_folder(&mut self, id: NodeId) {
+        self.catch_up();
         if id == NodeId::ROOT {
             return;
         }
@@ -145,6 +144,7 @@ impl Explorer {
     /// Opens every folder. Under an active filter, reopens the folders
     /// closed by hand and leaves the stored open folders as they are.
     pub fn expand_all(&mut self) {
+        self.catch_up();
         if self.visibility.is_active() {
             self.collapsed.clear();
         } else {
@@ -157,6 +157,7 @@ impl Explorer {
     /// the query or kind changes, and leaves the stored open folders as they
     /// are.
     pub fn collapse_all(&mut self) {
+        self.catch_up();
         if self.visibility.is_active() {
             self.collapsed = self.all_folders();
         } else {
@@ -168,6 +169,7 @@ impl Explorer {
     /// Opens every folder above `id` so it is on screen, and returns its
     /// row. `None` for the root, or for a node the active filter hides.
     pub fn reveal(&mut self, id: NodeId) -> Option<usize> {
+        self.catch_up();
         if id == NodeId::ROOT || !self.visibility.is_visible(id) {
             return None;
         }
@@ -215,18 +217,21 @@ impl Explorer {
     /// files included; otherwise checks every file of the folder that the
     /// filter shows.
     pub fn toggle_check(&mut self, id: NodeId) {
+        self.catch_up();
         self.selection
             .toggle(&self.tree, self.visibility.universe(), id);
     }
 
     /// Checks every file the filter shows. Checked files stay checked.
     pub fn select_all(&mut self) {
+        self.catch_up();
         self.selection
             .select_all(&self.tree, self.visibility.universe());
     }
 
     /// Unchecks everything.
     pub fn clear_selection(&mut self) {
+        self.catch_up();
         self.selection.clear();
     }
 
@@ -238,6 +243,7 @@ impl Explorer {
 
     /// Re-sorts every folder's children and rebuilds the rows.
     pub fn set_sort(&mut self, sort: Sort) {
+        self.catch_up();
         if sort != self.sort {
             self.sort = sort;
             self.order = DisplayOrder::new(&self.tree, sort);
@@ -246,12 +252,11 @@ impl Explorer {
     }
 
     /// Call after [`crate::read_sizes`] filled this tree's sizes: a Size
-    /// sort is redone with them.
+    /// sort made before they arrived is redone with them. Every other
+    /// method that changes the view checks for that too, so a forgotten
+    /// call leaves the order stale only until the next change.
     pub fn sizes_loaded(&mut self) {
-        if self.sort.key == SortKey::Size {
-            self.order = DisplayOrder::new(&self.tree, self.sort);
-            self.rebuild_rows();
-        }
+        self.catch_up();
     }
 
     /// The filter's result on the current tree.
@@ -298,6 +303,15 @@ impl Explorer {
         }
         self.visibility = visibility;
         self.rebuild_rows();
+    }
+
+    /// Redoes a Size sort that was made before the tree had sizes, once
+    /// they are in. Every method that changes the view calls this first.
+    fn catch_up(&mut self) {
+        if self.order.is_stale(&self.tree) {
+            self.order = DisplayOrder::new(&self.tree, self.sort);
+            self.rebuild_rows();
+        }
     }
 
     /// Every folder's bit.

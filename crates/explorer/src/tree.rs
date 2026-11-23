@@ -256,14 +256,19 @@ impl Tree {
     /// [`crate::read_sizes`] runs.
     #[must_use]
     pub fn size(&self, id: NodeId) -> Option<u64> {
-        let sizes = self.sizes.get()?;
-        Some(sizes[id.index()])
+        self.sizes().map(|sizes| sizes[id.index()])
     }
 
     /// Whether [`Tree::size`] has values.
     #[must_use]
     pub fn has_sizes(&self) -> bool {
         self.sizes.get().is_some()
+    }
+
+    /// Every node's size in id order, once known. Sizes are written once,
+    /// so a caller that needs many takes this one snapshot.
+    pub(crate) fn sizes(&self) -> Option<&[u64]> {
+        self.sizes.get().map(|sizes| &sizes[..])
     }
 
     /// Stores sizes given for files (folders' entries are ignored) and sums

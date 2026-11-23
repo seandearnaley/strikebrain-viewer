@@ -390,6 +390,32 @@ fn a_size_sort_is_redone_when_sizes_arrive() {
 }
 
 #[test]
+fn a_size_sort_catches_up_on_the_next_change_without_being_told() {
+    use std::path::PathBuf;
+
+    use crate::Kind;
+    use crate::tree::RawTree;
+
+    let mut raw = RawTree::new("root", false).unwrap();
+    let dir = raw.push(0, "dir", Kind::Dir).unwrap();
+    raw.push(dir, "inner", Kind::File).unwrap();
+    raw.push(0, "a", Kind::File).unwrap();
+    raw.push(0, "b", Kind::File).unwrap();
+    let tree = Arc::new(raw.build(PathBuf::from("/root")).unwrap());
+    let mut explorer = Explorer::new(Arc::clone(&tree));
+    explorer.set_sort(Sort {
+        key: SortKey::Size,
+        direction: Direction::Descending,
+    });
+    assert_eq!(rows(&explorer), ["dir", "a", "b"]);
+    // Ids: root 0, dir 1, inner 2, a 3, b 4.
+    tree.set_sizes(vec![0, 0, 1, 2, 3]);
+    // The app forgot `sizes_loaded`; any change to the view catches up.
+    explorer.toggle_folder(id(&explorer, "dir"));
+    assert_eq!(rows(&explorer), ["dir", "dir/inner", "b", "a"]);
+}
+
+#[test]
 fn the_gallery_follows_display_order_and_ignores_the_filter() {
     let mut explorer = explorer(&SAMPLE);
     explorer.select_all();

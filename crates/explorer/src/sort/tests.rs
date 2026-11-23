@@ -138,6 +138,25 @@ fn unknown_sizes_sort_by_name() {
 }
 
 #[test]
+fn only_a_size_order_built_before_the_sizes_goes_stale_when_they_arrive() {
+    let mut raw = RawTree::new("root", false).unwrap();
+    for name in ["a", "b"] {
+        raw.push(0, name, Kind::File).unwrap();
+    }
+    let tree = raw.build(PathBuf::from("/root")).unwrap();
+    let by_size = DisplayOrder::new(&tree, sort(SortKey::Size, DESCENDING));
+    let by_type = DisplayOrder::new(&tree, sort(SortKey::Type, DESCENDING));
+    assert!(!by_size.is_stale(&tree));
+    tree.set_sizes(vec![0, 1, 2]);
+    assert!(by_size.is_stale(&tree));
+    assert!(!by_type.is_stale(&tree));
+    assert!(!DisplayOrder::default().is_stale(&tree));
+    let rebuilt = DisplayOrder::new(&tree, sort(SortKey::Size, DESCENDING));
+    assert!(!rebuilt.is_stale(&tree));
+    assert_eq!(top(&tree, sort(SortKey::Size, DESCENDING)), ["b", "a"]);
+}
+
+#[test]
 fn a_header_click_flips_the_same_column_and_starts_another_ascending() {
     let name = Sort::default();
     let name_down = name.clicked(SortKey::Name);
