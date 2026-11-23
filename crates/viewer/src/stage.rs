@@ -24,7 +24,12 @@
 //!
 //! The stage takes keyboard focus in the [`STAGE`] key context: ← and →
 //! move through the gallery, the vertical keys scroll text, Space and
-//! Enter present (milestone 4), Esc returns to the explorer.
+//! Enter present, Esc returns to the explorer.
+//!
+//! The presentation is this same stage, which the root view then lays out
+//! alone: it keeps its file, caches and scroll positions. While presenting
+//! it declares the [`PRESENTATION`] key context, where Space moves on and
+//! Esc leaves, shows no position, and gives an image the whole window.
 
 mod cache;
 mod images;
@@ -44,8 +49,8 @@ use gpui_kit::{
 };
 
 use crate::keys::{
-    NextFile, Present, PreviousFile, STAGE, ScrollDown, ScrollPageDown, ScrollPageUp,
-    ScrollToBottom, ScrollToTop, ScrollUp,
+    LeavePresentation, NextFile, PRESENTATION, Present, PreviousFile, STAGE, ScrollDown,
+    ScrollPageDown, ScrollPageUp, ScrollToBottom, ScrollToTop, ScrollUp,
 };
 use crate::state::AppState;
 use crate::theme::TABULAR_FIGURES;
@@ -65,14 +70,18 @@ struct Asked {
     /// The tree generation and `current`.
     staged: (u64, Option<NodeId>),
     /// "2 / 3": `current`'s place in the gallery, and the gallery's size.
+    /// Not shown while presenting.
     position: Option<(usize, usize)>,
+    presenting: bool,
 }
 
 impl Asked {
     fn of(state: &AppState) -> Self {
+        let presenting = state.is_presenting();
         Self {
             staged: state.staged(),
-            position: state.position(),
+            position: state.position().filter(|_| !presenting),
+            presenting,
         }
     }
 }
@@ -245,19 +254,20 @@ impl Stage {
     // Loading
 
     /// Follows the state: starts reading a new file, and redraws when the
-    /// gallery position changes.
+    /// gallery position changes or the presentation starts or ends.
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let asked = Asked::of(self.state.read(cx));
         if asked == self.asked {
             return;
         }
         let new_file = asked.staged != self.asked.staged;
-        let moved = asked.position != self.asked.position;
+        let redraw =
+            (asked.position, asked.presenting) != (self.asked.position, self.asked.presenting);
         self.asked = asked;
         if new_file {
             self.start_load(window, cx);
         }
-        if moved {
+        if redraw {
             cx.notify();
         }
     }
@@ -432,6 +442,19 @@ impl Stage {
         self.state.update(cx, AppState::show_previous);
     }
 
+    fn present(&mut self, _: &Present, _: &mut Window, cx: &mut Context<Self>) {
+        self.state.update(cx, AppState::start_presenting);
+    }
+
+    fn leave_presentation(
+        &mut self,
+        _: &LeavePresentation,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.state.update(cx, AppState::stop_presenting);
+    }
+
     fn scroll(&mut self, scroll: Scroll, cx: &mut Context<Self>) {
         match self.content {
             Content::Code(_) => self.text_views.scroll_code(scroll, cx),
@@ -460,8 +483,9 @@ impl Stage {
         })
     }
 
-    /// The image, scaled down to fit and never up, centred. A file GPUI
-    /// cannot decode shows as unsupported.
+    /// The image, scaled down to fit and never up, centred: inset from the
+    /// pane's edges, or using the whole window while presenting. A file
+    /// GPUI cannot decode shows as unsupported.
     ///
     /// An `img` gives itself the picture's aspect ratio, and as a block's
     /// child it takes its height from its width, so a tall picture would
@@ -478,7 +502,7 @@ impl Stage {
             .absolute()
             .inset_0()
             .flex()
-            .p_6()
+            .when(!self.asked.presenting, Styled::p_6)
             .child(
                 img(Arc::clone(&file.path))
                     .image_cache(&self.images)
@@ -565,9 +589,15 @@ impl Render for Stage {
             .id("stage")
             .test_support()
             .track_focus(&self.focus_handle)
-            .key_context(STAGE)
+            .key_context(if self.asked.presenting {
+                PRESENTATION
+            } else {
+                STAGE
+            })
             .on_action(cx.listener(Self::next_file))
             .on_action(cx.listener(Self::previous_file))
+            .on_action(cx.listener(Self::present))
+            .on_action(cx.listener(Self::leave_presentation))
             .on_action(cx.listener(|this, _: &ScrollUp, _, cx| this.scroll(Scroll::Up, cx)))
             .on_action(cx.listener(|this, _: &ScrollDown, _, cx| this.scroll(Scroll::Down, cx)))
             .on_action(cx.listener(|this, _: &ScrollPageUp, _, cx| {
@@ -580,8 +610,6 @@ impl Render for Stage {
             .on_action(cx.listener(|this, _: &ScrollToBottom, _, cx| {
                 this.scroll(Scroll::Bottom, cx);
             }))
-            // Milestone 4 starts the presentation here.
-            .on_action(|_: &Present, _, _| {})
             .size_full()
             .bg(theme.background)
             .text_color(theme.foreground)

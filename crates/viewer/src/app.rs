@@ -1,11 +1,16 @@
 //! The root view: the explorer and the stage side by side, and keyboard
-//! focus moving between the panes: filter, tree, stage.
+//! focus moving between the panes: filter, tree, stage. While presenting,
+//! the same stage alone, fullscreen.
 //!
 //! Both panes are embedded as cached views: a frame reuses a pane's last
 //! drawing unless that pane notified, so a key in the tree never rebuilds
 //! the stage.
+//!
+//! The split's sizes live in an entity this view owns rather than in the
+//! split element's own state, which lasts only while the split is drawn:
+//! so the explorer keeps its width while the presentation hides it.
 
-use gpui_kit::component::{h_resizable, resizable_panel};
+use gpui_kit::component::{ResizableState, h_resizable, resizable_panel};
 use gpui_kit::{
     App, AppContext as _, Context, Entity, Focusable as _, IntoElement, ParentElement as _, Pixels,
     Render, SharedString, StyleRefinement, Styled as _, Subscription, TestSupportExt as _, Window,
@@ -34,13 +39,21 @@ enum Pane {
 
 /// The root view: explorer on the left, stage on the right. Owns the
 /// [`AppState`] both observe, keeps the window title on the folder's name,
-/// and handles ⌘O, ⌘F and moving between panes.
+/// handles ⌘O, ⌘F and moving between panes, and follows the presentation.
 pub struct AppView {
     state: Entity<AppState>,
     explorer: Entity<ExplorerPanel>,
     stage: Entity<Stage>,
+    /// The sizes of the explorer and the stage beside it.
+    split: Entity<ResizableState>,
     /// The title last given to the window.
     title: Option<SharedString>,
+    /// Whether the window is laid out for the presentation: follows
+    /// [`AppState::is_presenting`].
+    presenting: bool,
+    /// Whether the presentation made the window fullscreen, so leaving it
+    /// should make the window windowed again.
+    entered_fullscreen: bool,
     _subscriptions: [Subscription; 2],
 }
 
@@ -62,6 +75,7 @@ impl AppView {
         let subscriptions = [
             cx.observe_in(&app_state, window, |this, _, window, cx| {
                 this.sync_title(window, cx);
+                this.sync_presentation(window, cx);
             }),
             cx.observe_window_appearance(window, |_, window, cx| theme::follow_system(window, cx)),
         ];
@@ -71,7 +85,10 @@ impl AppView {
             state: app_state,
             explorer,
             stage,
+            split: cx.new(|_| ResizableState::default()),
             title: None,
+            presenting: false,
+            entered_fullscreen: false,
             _subscriptions: subscriptions,
         };
         view.sync_title(window, cx);
@@ -106,6 +123,36 @@ impl AppView {
             }
             self.title = name;
         }
+    }
+
+    /// Follows the presentation: the stage alone or beside the explorer,
+    /// and the window fullscreen while presenting. Leaving restores the
+    /// window's fullscreen state from before; if the window has left
+    /// fullscreen meanwhile (the green button), it stays windowed. A
+    /// presentation with no file left to show ends: a refresh removed the
+    /// file and every gallery file.
+    fn sync_presentation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (presenting, has_file) = {
+            let state = self.state.read(cx);
+            (state.is_presenting(), state.current().is_some())
+        };
+        if presenting && !has_file {
+            // This runs again once the flag is down.
+            return self.state.update(cx, AppState::stop_presenting);
+        }
+        if presenting == self.presenting {
+            return;
+        }
+        self.presenting = presenting;
+        if presenting {
+            self.entered_fullscreen = !window.is_fullscreen();
+            if self.entered_fullscreen {
+                window.toggle_fullscreen();
+            }
+        } else if std::mem::take(&mut self.entered_fullscreen) && window.is_fullscreen() {
+            window.toggle_fullscreen();
+        }
+        cx.notify();
     }
 
     fn open_folder(&mut self, _: &OpenFolder, _: &mut Window, cx: &mut Context<Self>) {
@@ -182,36 +229,40 @@ fn pane() -> StyleRefinement {
 
 impl Render for AppView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
+        let root = div()
             .size_full()
             .on_action(cx.listener(Self::open_folder))
             .on_action(cx.listener(Self::next_pane))
             .on_action(cx.listener(Self::previous_pane))
             .on_action(cx.listener(Self::focus_filter))
-            .on_action(cx.listener(Self::focus_explorer))
-            .child(
-                h_resizable("panes")
-                    .child(
-                        resizable_panel()
-                            .size(px(EXPLORER_WIDTH))
-                            .size_range(px(EXPLORER_MIN_WIDTH)..Pixels::MAX)
-                            .child(
-                                div()
-                                    .id("explorer-pane")
-                                    .test_support()
-                                    .size_full()
-                                    .child(self.explorer.clone().cached(pane())),
-                            ),
-                    )
-                    .child(
-                        resizable_panel().child(
+            .on_action(cx.listener(Self::focus_explorer));
+        if self.presenting {
+            return root.child(self.stage.clone().cached(pane()));
+        }
+        root.child(
+            h_resizable("panes")
+                .with_state(&self.split)
+                .child(
+                    resizable_panel()
+                        .size(px(EXPLORER_WIDTH))
+                        .size_range(px(EXPLORER_MIN_WIDTH)..Pixels::MAX)
+                        .child(
                             div()
-                                .id("stage-pane")
+                                .id("explorer-pane")
                                 .test_support()
                                 .size_full()
-                                .child(self.stage.clone().cached(pane())),
+                                .child(self.explorer.clone().cached(pane())),
                         ),
+                )
+                .child(
+                    resizable_panel().child(
+                        div()
+                            .id("stage-pane")
+                            .test_support()
+                            .size_full()
+                            .child(self.stage.clone().cached(pane())),
                     ),
-            )
+                ),
+        )
     }
 }

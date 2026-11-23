@@ -58,7 +58,7 @@ pub(crate) fn code_view(window: &Window) -> ElementSnapshot {
 }
 
 /// The position under the file, if it shows.
-fn position(cx: &mut TestAppContext, handle: AnyWindowHandle) -> Option<String> {
+pub(crate) fn position(cx: &mut TestAppContext, handle: AnyWindowHandle) -> Option<String> {
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         window
@@ -68,7 +68,7 @@ fn position(cx: &mut TestAppContext, handle: AnyWindowHandle) -> Option<String> 
     .expect("read the position")
 }
 
-fn probe(cx: &mut TestAppContext, view: &Entity<AppView>) -> StageProbe {
+pub(crate) fn probe(cx: &mut TestAppContext, view: &Entity<AppView>) -> StageProbe {
     cx.update(|cx| view.read(cx).stage_probe(cx))
 }
 
@@ -139,7 +139,10 @@ fn mixed(dir: &Path) {
 }
 
 /// Opens `dir`, checks every file and moves keyboard focus to the stage.
-fn open_checked(cx: &mut TestAppContext, dir: &Path) -> (AnyWindowHandle, Entity<AppView>) {
+pub(crate) fn open_checked(
+    cx: &mut TestAppContext,
+    dir: &Path,
+) -> (AnyWindowHandle, Entity<AppView>) {
     let (handle, view) = open_app(cx, Launch::Folder(dir.to_owned()));
     click(cx, handle, "select-all");
     press(cx, handle, "tab");
@@ -147,13 +150,13 @@ fn open_checked(cx: &mut TestAppContext, dir: &Path) -> (AnyWindowHandle, Entity
     (handle, view)
 }
 
-fn show(cx: &mut TestAppContext, handle: AnyWindowHandle, id: NodeId) {
+pub(crate) fn show(cx: &mut TestAppContext, handle: AnyWindowHandle, id: NodeId) {
     cx.update_window(handle, |_, window, cx| window.click(row(id), cx))
         .expect("click the row");
 }
 
 /// `count` numbered lines: `before`, the number, `after`.
-fn numbered(count: usize, before: &str, after: &str) -> String {
+pub(crate) fn numbered(count: usize, before: &str, after: &str) -> String {
     let mut text = String::new();
     for line in 0..count {
         write!(text, "{before}{line}{after}").expect("a String takes any text");
@@ -339,22 +342,6 @@ fn a_blank_stage_draws_nothing_and_the_keys_do_nothing(cx: &mut TestAppContext) 
     assert_eq!(shown(cx, handle), None);
     assert_eq!(position(cx, handle), None);
     assert_eq!(current(cx, &view), None);
-    assert!(is_focused(cx, handle, "stage"));
-}
-
-#[gpui_kit::test]
-fn space_and_enter_on_the_stage_change_nothing_yet(cx: &mut TestAppContext) {
-    let dir = tempfile::tempdir().unwrap();
-    write(dir.path(), "a.rs", "a");
-    write(dir.path(), "b.rs", "b");
-    let (handle, view) = open_checked(cx, dir.path());
-    let before = current(cx, &view);
-    for key in ["space", "enter"] {
-        press(cx, handle, key);
-    }
-    // Milestone 4 presents here; for now the stage and the checks stay.
-    assert_eq!(current(cx, &view), before);
-    assert_eq!(read(cx, &view, AppState::selected_count), 2);
     assert!(!read(cx, &view, AppState::is_presenting));
     assert!(is_focused(cx, handle, "stage"));
 }

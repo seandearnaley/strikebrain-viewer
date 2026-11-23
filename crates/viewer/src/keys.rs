@@ -12,8 +12,13 @@
 //! context, whose arrows move a caret; [`STAGE_EDITOR`] binds the stage's
 //! keys over them. Both match at the same depth, and these bindings are
 //! added after the Kit's, so they win.
+//!
+//! While presenting, the stage declares [`PRESENTATION`] instead (and
+//! [`PRESENTATION_EDITOR`] over its editor). Keys the presentation leaves
+//! out are bound there to `NoAction`, which hides every binding they have
+//! elsewhere: ⌘O, ⌘F, Tab and Enter do nothing until Esc. ⌘Q still quits.
 
-use gpui_kit::{KeyBinding, actions};
+use gpui_kit::{KeyBinding, NoAction, actions};
 
 /// The key context the explorer's tree declares.
 pub(crate) const EXPLORER: &str = "Explorer";
@@ -29,6 +34,12 @@ pub(crate) const EXPLORER_BODY: &str = "ExplorerBody";
 
 /// The Kit's editor on the stage, while it holds focus.
 pub(crate) const STAGE_EDITOR: &str = "Stage > Input";
+
+/// The key context the stage declares while presenting.
+pub(crate) const PRESENTATION: &str = "Presentation";
+
+/// The Kit's editor on the stage while presenting, while it holds focus.
+pub(crate) const PRESENTATION_EDITOR: &str = "Presentation > Input";
 
 actions!(
     explorer,
@@ -98,8 +109,10 @@ actions!(
         ScrollToTop,
         /// Scrolls the text on the stage to its end.
         ScrollToBottom,
-        /// Starts the presentation. Milestone 4 gives it behaviour.
+        /// Starts the presentation of the file on the stage.
         Present,
+        /// Ends the presentation.
+        LeavePresentation,
     ]
 );
 
@@ -151,6 +164,26 @@ pub(crate) fn bindings() -> Vec<KeyBinding> {
             KeyBinding::new("cmd-f", FocusFilter, stage),
             KeyBinding::new("tab", NextPane, stage),
             KeyBinding::new("shift-tab", PreviousPane, stage),
+        ]);
+    }
+    // The presentation's keys, likewise. Space moves on, as in a slideshow.
+    for presentation in [Some(PRESENTATION), Some(PRESENTATION_EDITOR)] {
+        bindings.extend([
+            KeyBinding::new("right", NextFile, presentation),
+            KeyBinding::new("space", NextFile, presentation),
+            KeyBinding::new("left", PreviousFile, presentation),
+            KeyBinding::new("up", ScrollUp, presentation),
+            KeyBinding::new("down", ScrollDown, presentation),
+            KeyBinding::new("pageup", ScrollPageUp, presentation),
+            KeyBinding::new("pagedown", ScrollPageDown, presentation),
+            KeyBinding::new("home", ScrollToTop, presentation),
+            KeyBinding::new("end", ScrollToBottom, presentation),
+            KeyBinding::new("escape", LeavePresentation, presentation),
+            KeyBinding::new("enter", NoAction, presentation),
+            KeyBinding::new("cmd-f", NoAction, presentation),
+            KeyBinding::new("cmd-o", NoAction, presentation),
+            KeyBinding::new("tab", NoAction, presentation),
+            KeyBinding::new("shift-tab", NoAction, presentation),
         ]);
     }
     bindings
@@ -229,6 +262,32 @@ mod tests {
             assert_bound("enter", Some(context), &Present);
             assert_bound("escape", Some(context), &FocusExplorer);
             assert_bound("cmd-f", Some(context), &FocusFilter);
+        }
+    }
+
+    #[test]
+    fn the_presentation_moves_scrolls_and_leaves_over_its_editor_too() {
+        for context in [PRESENTATION, PRESENTATION_EDITOR] {
+            assert_bound("right", Some(context), &NextFile);
+            assert_bound("space", Some(context), &NextFile);
+            assert_bound("left", Some(context), &PreviousFile);
+            assert_bound("up", Some(context), &ScrollUp);
+            assert_bound("down", Some(context), &ScrollDown);
+            assert_bound("pageup", Some(context), &ScrollPageUp);
+            assert_bound("pagedown", Some(context), &ScrollPageDown);
+            assert_bound("home", Some(context), &ScrollToTop);
+            assert_bound("end", Some(context), &ScrollToBottom);
+            assert_bound("escape", Some(context), &LeavePresentation);
+        }
+    }
+
+    #[test]
+    fn the_presentation_hides_the_keys_it_leaves_out_but_not_quit() {
+        for context in [PRESENTATION, PRESENTATION_EDITOR] {
+            for key in ["enter", "cmd-f", "cmd-o", "tab", "shift-tab"] {
+                assert_bound(key, Some(context), &NoAction);
+            }
+            assert!(binding("cmd-q", Some(context)).is_none());
         }
     }
 

@@ -253,7 +253,7 @@ impl AppState {
         self.selected
     }
 
-    /// Whether the presentation is showing. Always false until milestone 4.
+    /// Whether the presentation is showing: the stage alone, fullscreen.
     #[must_use]
     pub fn is_presenting(&self) -> bool {
         self.presenting
@@ -495,6 +495,24 @@ impl AppState {
         if let Some(to) = to {
             self.current = Some(to);
             cx.emit(StateEvent::CurrentMoved);
+            cx.notify();
+        }
+    }
+
+    /// Space or Enter on the stage: starts the presentation of the file on
+    /// the stage. Does nothing with no file there.
+    pub fn start_presenting(&mut self, cx: &mut Context<Self>) {
+        if self.current.is_some() && !self.presenting {
+            self.presenting = true;
+            cx.notify();
+        }
+    }
+
+    /// Esc in the presentation: back to the explorer and the stage, on the
+    /// same file.
+    pub fn stop_presenting(&mut self, cx: &mut Context<Self>) {
+        if self.presenting {
+            self.presenting = false;
             cx.notify();
         }
     }

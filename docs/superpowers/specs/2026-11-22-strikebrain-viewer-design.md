@@ -271,6 +271,16 @@ Limits and caches:
 - Leaving restores the split and exits fullscreen only if presenting entered it.
 - Movement stops at the first and last gallery file. It does not wrap.
 
+Milestone 4 settled the rest:
+
+- The presentation is the same stage entity, laid out alone: its file, caches, loaded text and scroll positions carry across both ways. The root view owns the split's sizes, so the explorer comes back at the width it had. `current` is unchanged by entering or leaving.
+- Background is the stage surface. An image uses the whole window, scaled down to fit and never enlarged; Markdown and code look as on the stage. Nothing else is drawn: no explorer, divider or position. The pointer stays visible.
+- A file outside the gallery is presented alone when the gallery is empty; with a gallery, → and ← go to the nearest gallery file as on the stage.
+- Keys the Presentation column leaves blank (Enter, ⌘F, ⌘O, Tab) do nothing while presenting: they are bound to `NoAction` there. ⌘O is ignored rather than leaving first, so a stray key never ends a presentation. ⌘Q quits.
+- Leaving fullscreen through the window (the green button or the system gesture) keeps presenting, windowed; Esc then leaves without touching fullscreen.
+- A refresh that removes the presented file moves to the nearest gallery file, as on the stage. If nothing is left to show, the presentation ends as if Esc were pressed.
+- The window may be resized while presenting; the stage follows it, and the split comes back at its width once the window has its old size (the split keeps its proportions as on any resize).
+
 ### Keys
 
 Bindings are GPUI actions bound per key context: `Explorer`, `Filter`, `Stage`, `Presentation`.
@@ -371,7 +381,7 @@ Each ends with something that runs and tests that hold it. Each gets its own imp
 | M1 Engine | Tree, scan, selection, filter, sort, rows, facade, `content`. | Property tests pass and benchmarks meet the budgets. |
 | M2 Explorer panel | Rows, checkboxes, chevrons, keyboard, filter input, kind control, toolbar, sortable header, selection bar, theme, accessibility roles. | The ported behaviour tests pass and 1.65 M rows scroll at display rate. |
 | M3 Stage | Image, Markdown and code viewers, left and right, caches, preloading. | Flicking through 1,000 mixed files stays under a fixed memory ceiling recorded in the test. Done: the ceiling is 64 MB of growth over 989 steps; measured 5 to 6 MB (`tests/ui/flick.rs`). |
-| M4 Presentation | Fullscreen, keys, leave. | Entering and leaving keeps the current file and the window's prior fullscreen state. |
+| M4 Presentation | Fullscreen, keys, leave. | Entering and leaving keeps the current file and the window's prior fullscreen state. Done: `tests/ui/presentation.rs`. |
 | M5 Finish | Saved state, live refresh, a packaged `.app`. | Quitting and reopening returns the same view. |
 
 Milestone 0 detail:
