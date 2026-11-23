@@ -142,6 +142,8 @@ impl Thumbs {
                 }
                 return Vec::new();
             }
+            // Nothing was read: the tile is read again when it is wanted.
+            Read::Stopped => return Vec::new(),
             Read::Image {
                 stamp,
                 image,

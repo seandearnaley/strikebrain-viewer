@@ -7,11 +7,13 @@
 //! the engine for the files from the first row's first tile on.
 //!
 //! What a tile shows is read on the background executor
-//! (`gallery/read.rs`), at most four at once, nearest the viewport first:
-//! the rows drawn, then the row below and the row above. Work for a tile
-//! that leaves those rows is dropped, as is all of it while the gallery is
-//! hidden. Results go to a cache of their own with a byte budget
-//! (`gallery/thumbs.rs`).
+//! (`gallery/read.rs`), nearest the viewport first: the rows drawn, then
+//! the row below and the row above. At most four reads run at once: a read
+//! holds its slot until it ends. A read for a tile that leaves those rows,
+//! or for any tile while the gallery is hidden, is told to stop, which it
+//! does before reading a picture whole and before decoding it; a decode
+//! already under way runs to its end, in its slot. Results go to a cache
+//! of their own with a byte budget (`gallery/thumbs.rs`).
 //!
 //! Keyboard focus stays on the stage, which declares the `Gallery` key
 //! context while the gallery shows and hands its keys here. The tile with
@@ -27,6 +29,7 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use explorer::NodeId;
 use gpui_kit::component::scroll::ScrollableElement as _;
@@ -46,9 +49,17 @@ use read::Read;
 use thumbs::{Reading, THUMBNAIL_BYTES, Thumbs};
 use tile::{Focus, Tile};
 
-/// Tiles read at once: enough to keep the cores busy, few enough that the
-/// pictures decoding whole at the same time stay a few hundred megabytes.
+/// Reads that run at once: enough to keep the cores busy, few enough that
+/// the pictures decoding whole at the same time stay a few hundred
+/// megabytes.
 const LOADS: usize = 4;
+
+/// A read under way: its task, and the flag that tells it to stop. It
+/// keeps its slot until the read ends, stopped or not.
+struct Load {
+    _task: Task<Result<()>>,
+    stop: Arc<AtomicBool>,
+}
 
 /// What the gallery draws from the state: it redraws when this changes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -80,6 +91,7 @@ pub struct GalleryProbe {
     thumbnails: usize,
     bytes: usize,
     loading: usize,
+    stopping: usize,
     largest: Option<(u32, u32)>,
     fit: (u32, u32),
     budget: usize,
@@ -129,10 +141,17 @@ impl GalleryProbe {
         self.budget
     }
 
-    /// How many tiles are being read.
+    /// How many reads are under way, those told to stop included: never
+    /// more than four.
     #[must_use]
     pub fn loading(&self) -> usize {
         self.loading
+    }
+
+    /// How many of the reads under way have been told to stop.
+    #[must_use]
+    pub fn stopping(&self) -> usize {
+        self.stopping
     }
 
     /// The largest thumbnail held, in device pixels.
@@ -165,8 +184,8 @@ pub(crate) struct Gallery {
     /// The rows of tiles the last frame built.
     drawn: Range<usize>,
     thumbs: Thumbs,
-    /// The tiles being read, by file. Dropping one drops its work.
-    loading: HashMap<Arc<Path>, Task<Result<()>>>,
+    /// The reads under way, by file.
+    loading: HashMap<Arc<Path>, Load>,
     /// A look at what to read is waiting for the frame to end.
     pump_queued: bool,
     svg: SvgRenderer,
@@ -193,8 +212,10 @@ impl Gallery {
                 let seen = Seen::of(state.read(cx));
                 if seen != this.seen {
                     if !seen.shows {
-                        // Hidden: its work stops.
-                        this.loading.clear();
+                        // Hidden: its reads stop.
+                        for load in this.loading.values() {
+                            load.stop.store(true, Ordering::Relaxed);
+                        }
                     }
                     this.seen = seen;
                     cx.notify();
@@ -242,6 +263,11 @@ impl Gallery {
             thumbnails: self.thumbs.len(),
             bytes: self.thumbs.bytes(),
             loading: self.loading.len(),
+            stopping: self
+                .loading
+                .values()
+                .filter(|load| load.stop.load(Ordering::Relaxed))
+                .count(),
             largest: self.thumbs.largest(),
             fit: self.grid.map_or((0, 0), |grid| grid.thumbnail_box()),
             budget: self.thumbs.budget(),
@@ -418,12 +444,17 @@ impl Gallery {
         }
     }
 
-    /// Drops the work for tiles off screen and starts reading the tiles on
-    /// screen and either side, nearest first, at most [`LOADS`] at once.
+    /// Tells the reads for tiles off screen to stop, and starts reading
+    /// the tiles on screen and either side, nearest first, while fewer than
+    /// [`LOADS`] reads are under way.
     fn pump(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let wanted = self.wanted(cx);
         let keep: HashSet<&Path> = wanted.iter().map(|want| want.path.as_ref()).collect();
-        self.loading.retain(|path, _| keep.contains(path.as_ref()));
+        for (path, load) in &self.loading {
+            // One wanted again goes on, unless it has stopped already.
+            load.stop
+                .store(!keep.contains(path.as_ref()), Ordering::Relaxed);
+        }
         for want in wanted {
             if self.loading.len() >= LOADS {
                 break;
@@ -483,18 +514,23 @@ impl Gallery {
             tree,
         } = want;
         let (key, read_path) = (Arc::clone(&path), Arc::clone(&path));
+        let stop = Arc::new(AtomicBool::new(false));
+        let read_stop = Arc::clone(&stop);
         let task = cx.spawn_in(window, async move |this, cx| {
             let read = cx
-                .background_spawn(async move { read::read(&read_path, &name, held, fit, &svg) })
+                .background_spawn(async move {
+                    read::read(&read_path, &name, held, fit, &svg, &read_stop)
+                })
                 .await;
             this.update_in(cx, |this, window, cx| {
                 this.landed(path, read, fit, tree, window, cx);
             })
         });
-        self.loading.insert(key, task);
+        self.loading.insert(key, Load { _task: task, stop });
     }
 
-    /// A tile's read is in: keep it, release what it pushed out, redraw.
+    /// A tile's read has ended: its slot frees; keep what it read, release
+    /// what that pushed out, and redraw, which starts the next reads.
     fn landed(
         &mut self,
         path: Arc<Path>,

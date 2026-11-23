@@ -11,7 +11,7 @@ use gpui_kit::{
 };
 use viewer::{AppState, AppView, GalleryProbe, Launch, StageView};
 
-use crate::stage::{Shown, numbered, png, position, shown};
+use crate::stage::{Shown, numbered, png, position, shown, turned_jpeg};
 use crate::{
     click, current, drag_divider, is_focused, node, open_app, press, read, row, state, tree, write,
 };
@@ -672,4 +672,59 @@ fn a_change_of_columns_keeps_the_focused_tile_on_screen(cx: &mut TestAppContext)
             "{focus} left the screen at {columns} columns"
         );
     }
+}
+
+#[gpui_kit::test]
+fn reads_a_scroll_leaves_behind_hold_their_slots_until_they_end(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let picture = png(64, 48);
+    for ix in 0..300 {
+        write(dir.path(), &format!("p{ix:03}.png"), &picture);
+    }
+    let (handle, view) = gallery_of(cx, dir.path());
+    tiles(cx, handle);
+    // The end starts four reads; five pages up, before any of them runs,
+    // leave them behind. They are told to stop, and no fifth read starts
+    // while they still hold their slots.
+    let keys = |cx: &mut TestAppContext, keys: &[&str]| {
+        cx.update_window(handle, |_, window, cx| {
+            for key in keys {
+                window.press(key, cx);
+            }
+            window.render_frame(cx);
+        })
+        .unwrap();
+    };
+    keys(cx, &["end"]);
+    let reading = probe(cx, &view);
+    assert_eq!((reading.loading(), reading.stopping()), (4, 0));
+    keys(cx, &["pageup"; 5]);
+    let left = probe(cx, &view);
+    assert_eq!((left.loading(), left.stopping()), (4, 4));
+    // Once they end, the tiles now on screen are read.
+    let on_screen = tiles(cx, handle);
+    assert_eq!(probe(cx, &view).loading(), 0);
+    assert!(!on_screen.contains(&"p299.png".to_owned()));
+    for name in on_screen {
+        let id = node(cx, &view, &name);
+        cx.update_window(handle, |_, window, _| {
+            assert!(
+                window.within(tile(id)).try_find("tile-image").is_some(),
+                "{name}"
+            );
+        })
+        .unwrap();
+    }
+}
+
+#[gpui_kit::test]
+fn a_turned_photos_tile_is_turned(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    // 800 x 400, its EXIF orientation a quarter turn clockwise.
+    write(dir.path(), "a-turned.jpg", turned_jpeg(800, 400));
+    write(dir.path(), "b.rs", "fn b() {}");
+    let (handle, view) = gallery_of(cx, dir.path());
+    tiles(cx, handle);
+    let (width, height) = probe(cx, &view).largest().expect("a thumbnail");
+    assert!(height > width, "{width} x {height}");
 }

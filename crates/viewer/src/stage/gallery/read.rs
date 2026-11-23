@@ -7,19 +7,25 @@
 //! file the file view cannot show is its kind's icon.
 //!
 //! A picture is decoded as GPUI's own loader decodes it, by the `image`
-//! crate with its EXIF orientation applied, then scaled down to fit the
-//! box with its proportions kept, never up. An animation keeps its first
+//! crate, then scaled down to fit the box with its proportions kept, never
+//! up, and turned as its EXIF orientation says (after scaling, so a turned
+//! photo is never copied at full size). An animation keeps its first
 //! frame. Anything the `image` crate does not know is tried as an SVG, as
 //! GPUI does, drawn by GPUI's renderer at its own size, or at the box's
 //! when that is smaller.
+//!
+//! A read the gallery no longer wants is told to stop: it looks before
+//! reading a picture whole and before decoding it.
 
 use std::fs::{self, File};
 use std::io::{self, Cursor, Read as _};
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use explorer::{HEAD_LEN, Viewer, viewer_for};
 use gpui_kit::{DevicePixels, RenderImage, SharedString, SvgRenderer, SvgSize, size};
+use image::metadata::Orientation;
 use image::{DynamicImage, Frame, ImageDecoder as _, ImageFormat, ImageReader};
 
 use super::super::load::{IMAGE_LIMIT, Stamp, TEXT_LIMIT, image_limit, open_regular};
@@ -48,6 +54,8 @@ pub(crate) enum Read {
     Text { stamp: Stamp, head: SharedString },
     /// Anything the file view cannot show: its kind's icon.
     Unsupported { stamp: Option<Stamp> },
+    /// Told to stop before it read the picture whole or decoded it.
+    Stopped,
 }
 
 impl std::fmt::Debug for Read {
@@ -61,20 +69,23 @@ impl std::fmt::Debug for Read {
                 .finish_non_exhaustive(),
             Self::Text { head, .. } => f.debug_struct("Text").field("head", head).finish(),
             Self::Unsupported { .. } => f.write_str("Unsupported"),
+            Self::Stopped => f.write_str("Stopped"),
         }
     }
 }
 
 /// Reads what the tile of the file at `path`, named `name`, shows, unless
-/// it is as `held`: a picture fitted inside `fit`, in device pixels.
+/// it is as `held`: a picture fitted inside `fit`, in device pixels. Ends
+/// early once `stop` is set.
 pub(crate) fn read(
     path: &Path,
     name: &str,
     held: Option<Stamp>,
     fit: (u32, u32),
     svg: &SvgRenderer,
+    stop: &AtomicBool,
 ) -> Read {
-    try_read(path, name, held, fit, svg).unwrap_or(Read::Unsupported { stamp: None })
+    try_read(path, name, held, fit, svg, stop).unwrap_or(Read::Unsupported { stamp: None })
 }
 
 fn try_read(
@@ -83,7 +94,9 @@ fn try_read(
     held: Option<Stamp>,
     fit: (u32, u32),
     svg: &SvgRenderer,
+    stop: &AtomicBool,
 ) -> io::Result<Read> {
+    let stopped = || stop.load(Ordering::Relaxed);
     // Follows a symlink, so a link to a FIFO is caught before it is opened.
     let metadata = fs::metadata(path)?;
     if !metadata.is_file() {
@@ -104,8 +117,12 @@ fn try_read(
     Ok(match viewer_for(name, &bytes) {
         Viewer::Unsupported => unsupported,
         Viewer::Image if stamp.len() > image_limit(name, &bytes) => unsupported,
+        Viewer::Image if stopped() => Read::Stopped,
         Viewer::Image => {
             read_rest(file, &mut bytes, stamp.len())?;
+            if stopped() {
+                return Ok(Read::Stopped);
+            }
             match picture(&bytes, fit, svg) {
                 Some((image, whole)) if bytes.len() as u64 <= IMAGE_LIMIT => Read::Image {
                     stamp,
@@ -176,18 +193,30 @@ fn picture(bytes: &[u8], fit: (u32, u32), svg: &SvgRenderer) -> Option<(Arc<Rend
     }
 }
 
-/// Decodes a raster picture and scales it down to fit. GPUI draws BGRA.
+/// Decodes a raster picture, scales it down to fit and turns it as its
+/// EXIF orientation says. A quarter turn swaps the box first; turning the
+/// small picture spares a turned copy of the large one. GPUI draws BGRA.
 fn raster(bytes: &[u8], format: ImageFormat, fit: (u32, u32)) -> Option<(Arc<RenderImage>, bool)> {
     let mut decoder = ImageReader::with_format(Cursor::new(bytes), format)
         .into_decoder()
         .ok()?;
     let orientation = decoder.orientation().ok()?;
-    let mut image = DynamicImage::from_decoder(decoder).ok()?;
-    image.apply_orientation(orientation);
+    let image = DynamicImage::from_decoder(decoder).ok()?;
+    let quarter = matches!(
+        orientation,
+        Orientation::Rotate90
+            | Orientation::Rotate270
+            | Orientation::Rotate90FlipH
+            | Orientation::Rotate270FlipH
+    );
+    let fit = if quarter { (fit.1, fit.0) } else { fit };
     let whole = image.width() <= fit.0 && image.height() <= fit.1;
-    if !whole {
-        image = image.thumbnail(fit.0, fit.1);
-    }
+    let mut image = if whole {
+        image
+    } else {
+        image.thumbnail(fit.0, fit.1)
+    };
+    image.apply_orientation(orientation);
     let mut pixels = image.into_rgba8();
     for pixel in pixels.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
@@ -239,8 +268,10 @@ mod tests {
 
     use explorer::HEAD_LEN;
 
-    use super::{HEAD_COLUMNS, HEAD_LINES, Read, head, read};
-    use crate::stage::load::{IMAGE_LIMIT, TEXT_LIMIT, stamp};
+    use std::sync::atomic::AtomicBool;
+
+    use super::{HEAD_COLUMNS, HEAD_LINES, Read, head};
+    use crate::stage::load::{IMAGE_LIMIT, Stamp, TEXT_LIMIT, stamp};
 
     fn write(dir: &Path, name: &str, bytes: &[u8]) -> PathBuf {
         let path = dir.join(name);
@@ -262,6 +293,44 @@ mod tests {
             &image::DynamicImage::ImageRgba8(image),
             image::ImageFormat::Png,
         )
+    }
+
+    /// Reads a tile, never told to stop.
+    fn read(
+        path: &Path,
+        name: &str,
+        held: Option<Stamp>,
+        fit: (u32, u32),
+        svg: &SvgRenderer,
+    ) -> Read {
+        super::read(path, name, held, fit, svg, &AtomicBool::new(false))
+    }
+
+    /// A JPEG of `width` x `height` whose EXIF orientation says to turn it
+    /// a quarter clockwise (6), its left half red.
+    pub(crate) fn turned_jpeg(width: u32, height: u32) -> Vec<u8> {
+        let image = image::RgbImage::from_fn(width, height, |x, _| {
+            if x < width / 2 {
+                image::Rgb([220, 20, 20])
+            } else {
+                image::Rgb([20, 20, 220])
+            }
+        });
+        let plain = encoded(
+            &image::DynamicImage::ImageRgb8(image),
+            image::ImageFormat::Jpeg,
+        );
+        // APP1: "Exif", a big-endian TIFF header, one entry: Orientation
+        // (0x0112), a SHORT, one of it, 6; then no next IFD.
+        let exif: &[u8] =
+            b"Exif\0\0MM\0\x2a\0\0\0\x08\0\x01\x01\x12\0\x03\0\0\0\x01\0\x06\0\0\0\0\0\0";
+        let len = u16::try_from(exif.len() + 2).unwrap().to_be_bytes();
+        let mut bytes = plain[..2].to_vec();
+        bytes.extend([0xFF, 0xE1]);
+        bytes.extend(len);
+        bytes.extend(exif);
+        bytes.extend(&plain[2..]);
+        bytes
     }
 
     fn svg(cx: &mut TestAppContext) -> SvgRenderer {
@@ -298,6 +367,43 @@ mod tests {
             picture(&read(&small, "small.png", None, (256, 192), &svg)),
             ((40, 30), true)
         );
+    }
+
+    #[gpui_kit::test]
+    fn a_turned_photo_is_turned_and_fitted_to_its_box(cx: &mut TestAppContext) {
+        let svg = svg(cx);
+        let dir = tempfile::tempdir().unwrap();
+        let small = write(dir.path(), "small.jpg", &turned_jpeg(80, 40));
+        assert_eq!(
+            picture(&read(&small, "small.jpg", None, (256, 192), &svg)),
+            ((40, 80), true)
+        );
+        // Larger than its box once turned: scaled to the turned box.
+        let large = write(dir.path(), "large.jpg", &turned_jpeg(800, 400));
+        let read = read(&large, "large.jpg", None, (256, 192), &svg);
+        assert_eq!(picture(&read), ((96, 192), false));
+        // Turned clockwise, the red left half is the top: BGRA, red last
+        // of the three.
+        let Read::Image { image, .. } = read else {
+            panic!("a picture");
+        };
+        let top_left = &image.as_bytes(0).unwrap()[..4];
+        assert!(top_left[2] > 150 && top_left[0] < 100, "{top_left:?}");
+    }
+
+    #[gpui_kit::test]
+    fn a_read_told_to_stop_ends_before_its_full_read(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(dir.path(), "photo.png", &png(400, 300));
+        let stopped = super::read(
+            &path,
+            "photo.png",
+            None,
+            (64, 64),
+            &svg(cx),
+            &AtomicBool::new(true),
+        );
+        assert!(matches!(stopped, Read::Stopped), "{stopped:?}");
     }
 
     #[gpui_kit::test]

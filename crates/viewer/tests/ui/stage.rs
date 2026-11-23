@@ -94,6 +94,24 @@ pub(crate) fn jpeg(width: u32, height: u32) -> Vec<u8> {
     )
 }
 
+/// A JPEG of `width` x `height` whose EXIF orientation says to turn it a
+/// quarter clockwise (6).
+pub(crate) fn turned_jpeg(width: u32, height: u32) -> Vec<u8> {
+    let plain = jpeg(width, height);
+    // APP1: "Exif", a big-endian TIFF header, one entry: Orientation
+    // (0x0112), a SHORT, one of it, 6; then no next IFD.
+    let exif: &[u8] = b"Exif\0\0MM\0\x2a\0\0\0\x08\0\x01\x01\x12\0\x03\0\0\0\x01\0\x06\0\0\0\0\0\0";
+    let len = u16::try_from(exif.len() + 2)
+        .expect("a short segment")
+        .to_be_bytes();
+    let mut bytes = plain[..2].to_vec();
+    bytes.extend([0xFF, 0xE1]);
+    bytes.extend(len);
+    bytes.extend(exif);
+    bytes.extend(&plain[2..]);
+    bytes
+}
+
 /// A channel from 0 to 255 across `of` pixels.
 fn shade(at: u32, of: u32) -> u8 {
     u8::try_from(at * 255 / of.max(1)).expect("at < of, so at most 255")
