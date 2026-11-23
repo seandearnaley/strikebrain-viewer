@@ -52,6 +52,12 @@ const SEGMENTED_TRACK: Pair = ((30., 15., 94.), (30., 8., 5.));
 const WARNING: Pair = ((30., 90., 29.), (38., 88., 60.));
 const DANGER: Pair = ((8., 55., 39.), (8., 50., 75.));
 const POPOVER: Pair = ((0., 0., 100.), (30., 6., 14.));
+/// The primary button: white text on primary blue at 4.5:1 or more. Dark
+/// mode's primary is too light for white text (3.7:1), so its buttons take
+/// light mode's blue, a step darker on hover and press.
+const BUTTON_PRIMARY: Pair = ((215., 55., 45.), (215., 55., 45.));
+const BUTTON_PRIMARY_HOVER: Pair = ((215., 55., 40.), (215., 55., 40.));
+const BUTTON_PRIMARY_ACTIVE: Pair = ((215., 55., 36.), (215., 55., 36.));
 
 // Code, in the stage's code view and in Markdown code blocks: quiet colours
 // on brainstrike's warm neutrals, the keywords in its primary blue. The Kit's
@@ -110,6 +116,13 @@ fn config(mode: ThemeMode) -> ThemeConfig {
     colors.danger = pick(DANGER);
     colors.popover = pick(POPOVER);
     colors.popover_foreground = pick(FOREGROUND);
+    if mode.is_dark() {
+        // Light mode derives the same colours from its own primary.
+        colors.button_primary = pick(BUTTON_PRIMARY);
+        colors.button_primary_hover = pick(BUTTON_PRIMARY_HOVER);
+        colors.button_primary_active = pick(BUTTON_PRIMARY_ACTIVE);
+        colors.button_primary_foreground = pick(PRIMARY_FOREGROUND);
+    }
 
     let mut config = ThemeConfig::default();
     config.highlight = Some(highlight(mode));
@@ -143,8 +156,12 @@ fn highlight(mode: ThemeMode) -> HighlightThemeStyle {
     style.editor_foreground = Some(pick(FOREGROUND));
     // A viewer has no line being edited: no band behind the caret's line.
     style.editor_active_line = None;
+    // Nor a line whose number stands out: every number is muted. GPUI Base
+    // 0.10.0 does not read the active line's number colour yet: it draws
+    // the caret's line number in the theme's foreground, so line 1 of a
+    // file just opened stands out all the same (see the spec's Risks).
     style.editor_line_number = Some(pick(MUTED_FOREGROUND));
-    style.editor_active_line_number = Some(pick(FOREGROUND));
+    style.editor_active_line_number = Some(pick(MUTED_FOREGROUND));
 
     let syntax = &mut style.syntax;
     // `ThemeStyle` cannot be made outside the Kit, so a style the defaults
@@ -208,6 +225,47 @@ mod tests {
         }
     }
 
+    /// WCAG 2 contrast between two opaque colours.
+    fn contrast(a: Hsla, b: Hsla) -> f32 {
+        let luminance = |color: Hsla| {
+            let rgb = color.to_rgb();
+            let linear = |c: f32| {
+                if c <= 0.039_28 {
+                    c / 12.92
+                } else {
+                    ((c + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * linear(rgb.r) + 0.7152 * linear(rgb.g) + 0.0722 * linear(rgb.b)
+        };
+        let (a, b) = (luminance(a), luminance(b));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    #[test]
+    fn a_primary_button_reads_at_four_and_a_half_to_one() {
+        let parse = |hex: Option<SharedString>| {
+            Hsla::parse_hex(&hex.expect("a colour")).expect("a hex colour")
+        };
+        // Light mode: the button is primary, its label primary foreground.
+        let light = config(ThemeMode::Light).colors;
+        let ratio = contrast(parse(light.primary_foreground), parse(light.primary));
+        assert!(ratio >= 4.5, "light: {ratio:.2}");
+        // Dark mode: primary is too light for white text, so the button has
+        // colours of its own, at rest, hovered and pressed.
+        let dark = config(ThemeMode::Dark).colors;
+        let label = parse(dark.button_primary_foreground);
+        assert!(contrast(label, parse(dark.primary)) < 4.5);
+        for (state, fill) in [
+            ("rest", dark.button_primary),
+            ("hover", dark.button_primary_hover),
+            ("press", dark.button_primary_active),
+        ] {
+            let ratio = contrast(label, parse(fill));
+            assert!(ratio >= 4.5, "dark {state}: {ratio:.2}");
+        }
+    }
+
     #[test]
     fn code_takes_quiet_colours_from_its_own_mode() {
         for mode in [ThemeMode::Light, ThemeMode::Dark] {
@@ -229,6 +287,10 @@ mod tests {
             assert_eq!(style.editor_background, Some(pick(BACKGROUND)));
             assert_eq!(style.editor_gutter_background, Some(pick(BACKGROUND)));
             assert_eq!(style.editor_active_line, None);
+            assert_eq!(
+                style.editor_active_line_number,
+                Some(pick(MUTED_FOREGROUND))
+            );
         }
     }
 }
