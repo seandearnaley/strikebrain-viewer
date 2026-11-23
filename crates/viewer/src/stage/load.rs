@@ -4,10 +4,12 @@
 //! [`load`] reads the first 8 KB and asks the engine's
 //! [`viewer_for`](explorer::viewer_for) which viewer the file needs; for text
 //! it then reads the rest, up to [`TEXT_LIMIT`], and decodes it lossily.
-//! Only regular files are opened: a symlink to a FIFO, a device or a folder
+//! Only regular files are read: a symlink to a FIFO, a device or a folder
 //! is unsupported, since opening a FIFO waits for a writer and reading a
 //! device may never end. (The scan leaves FIFOs and devices out; a symlink
-//! is a leaf whatever it points to.)
+//! is a leaf whatever it points to.) The metadata is read first, and the
+//! file is opened without waiting and asked again, so a file swapped for
+//! a FIFO in between cannot hold a thread.
 
 use std::fs::{self, File, Metadata};
 use std::io::{self, Read as _};
@@ -101,7 +103,12 @@ fn try_load(path: &Path, name: &str, held: Held) -> io::Result<Loaded> {
         return Ok(Loaded::Unchanged);
     }
     let cached = held.text;
-    let mut file = File::open(path)?;
+    // The file may have changed into something else since: ask the open
+    // file.
+    let Some((mut file, metadata)) = open_regular(path)? else {
+        return Ok(Loaded::Unsupported { len: None });
+    };
+    let stamp = Stamp::of(&metadata);
     let mut bytes = Vec::with_capacity(HEAD_LEN);
     file.by_ref()
         .take(HEAD_LEN as u64)
@@ -136,6 +143,32 @@ fn try_load(path: &Path, name: &str, held: Held) -> io::Result<Loaded> {
             }
         }
     })
+}
+
+/// Opens the regular file at `path` for reading, with its metadata as the
+/// open file gives it; `None` for anything else. The open never waits:
+/// a FIFO put in the file's place since its metadata was read would
+/// otherwise wait for a writer, and hold a thread, forever.
+fn open_regular(path: &Path) -> io::Result<Option<(File, Metadata)>> {
+    let file = open_without_waiting(path)?;
+    let metadata = file.metadata()?;
+    Ok(metadata.is_file().then_some((file, metadata)))
+}
+
+/// Opens `path` for reading with `O_NONBLOCK`, which reads of a regular
+/// file ignore.
+#[cfg(unix)]
+fn open_without_waiting(path: &Path) -> io::Result<File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    File::options()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)
+}
+
+#[cfg(not(unix))]
+fn open_without_waiting(path: &Path) -> io::Result<File> {
+    File::open(path)
 }
 
 /// Text from bytes: UTF-8 as it is, anything else lossily, each invalid
@@ -305,6 +338,29 @@ mod tests {
             ),
             Loaded::Unsupported { len: None }
         );
+    }
+
+    #[test]
+    fn opening_never_waits_on_a_fifo() {
+        // What `load` meets if a file is swapped for a FIFO between reading
+        // its metadata and opening it: opening returns at once, and the
+        // open file says it is not a regular file.
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("pipe.txt");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let (sender, opened) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let regular = open_regular(&fifo).map(|file| file.is_some());
+            sender.send(regular).unwrap();
+        });
+        let regular = opened
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("opening a FIFO returns at once");
+        assert!(!regular.unwrap());
     }
 
     #[test]

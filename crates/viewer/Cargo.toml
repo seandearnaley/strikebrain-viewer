@@ -24,6 +24,12 @@ notify = "9.0.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 
+# `O_NONBLOCK`, so the stage's open of a file never waits on a FIFO. The
+# standard library takes the flag but does not name it; GPUI already builds
+# this crate.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.191"
+
 [dev-dependencies]
 gpui-kit = { workspace = true, features = ["test-support"] }
 # Stage tests and shots write real PNG, JPEG and GIF files, and the large
