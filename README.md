@@ -56,3 +56,7 @@ docs/superpowers/specs/2026-11-22-strikebrain-viewer-design.md   the design
 ```
 
 The design spec is the source of truth for behaviour; read it before changing any.
+
+## License
+
+Licensed under either of the [Apache License, Version 2.0](LICENSE-APACHE) or the [MIT license](LICENSE-MIT), at your option. Unless you state otherwise, any contribution you submit for inclusion in this work, as defined in the Apache-2.0 license, is dual licensed as above, without any additional terms or conditions.

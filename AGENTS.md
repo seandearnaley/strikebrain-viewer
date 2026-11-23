@@ -36,6 +36,8 @@ Design: `docs/superpowers/specs/2026-11-22-strikebrain-viewer-design.md`.
 | Watch: Clippy on save; `n` nextest, ctrl-j other jobs | `bacon` |
 | Tools and git hook in a fresh clone | `just setup` |
 
+CI (`.github/workflows/ci.yml`) runs `just check` on macOS for every pull request and push to `main`, and builds and tests on Linux and Windows.
+
 Iterate on the narrowest check. Engine work needs only the engine tests.
 
 `just check` stops at the first failure. In order: `cargo fmt --check`, `typos`, Clippy on all targets, Clippy on the production feature set (`-p viewer --lib --bins`, without test-support), nextest with the `ci` profile, doc-tests (nextest skips them), `cargo doc` (broken doc links), engine coverage, `cargo shear` (unused dependencies and source files no module includes), `cargo deny check` (advisories, licenses, bans, sources; fetches the RustSec database). It sets `CARGO_BUILD_WARNINGS=deny`, so any warning fails it; plain `cargo` commands only warn, so you can iterate.
