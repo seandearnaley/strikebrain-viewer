@@ -10,21 +10,22 @@
 //! pointer is over the gutter, and their column is the gap that keeps the
 //! line numbers off the code.
 //!
-//! The Markdown view scrolls as a whole pane, so the wheel works anywhere
-//! on the stage and the scrollbar sits at the pane's edge, while the text
-//! keeps to a centred column of readable width.
+//! The Markdown view is the text view's own scrolling mode, which lays out
+//! only the blocks on screen: laying out every block each frame took 23 ms
+//! a frame at 86 KB and 0.6 s at 345 KB. The text keeps to a centred
+//! column of readable width, so its scrollbar sits at the column's edge;
+//! the wheel over the margins either side scrolls the column too.
 
 use std::path::Path;
 use std::sync::Arc;
 
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::input::{Editor, EditorState};
-use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::text::{TextView, TextViewState};
 use gpui_kit::{
-    App, AppContext as _, Context, Entity, IntoElement, ParentElement as _, Pixels, Rems, Role,
-    ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled as _, TestSupportExt as _,
-    Window, div, point, prelude::*, px,
+    App, AppContext as _, Context, Entity, IntoElement, ListOffset, ListState, ParentElement as _,
+    Pixels, Rems, Role, SharedString, StatefulInteractiveElement as _, Styled as _,
+    TestSupportExt as _, Window, div, point, prelude::*, px,
 };
 
 use super::load::Stamp;
@@ -76,7 +77,6 @@ struct Holds {
 pub(crate) struct TextViews {
     code: Entity<EditorState>,
     markdown: Entity<TextViewState>,
-    markdown_scroll: ScrollHandle,
     code_holds: Option<Holds>,
     markdown_holds: Option<Holds>,
 }
@@ -103,7 +103,6 @@ impl TextViews {
         Self {
             code,
             markdown,
-            markdown_scroll: ScrollHandle::new(),
             code_holds: None,
             markdown_holds: None,
         }
@@ -154,9 +153,10 @@ impl TextViews {
             return;
         }
         self.markdown_holds = Some(holds);
-        self.markdown
-            .update(cx, |markdown, cx| markdown.set_text(text, cx));
-        self.markdown_scroll.set_offset(point(px(0.), px(0.)));
+        self.markdown.update(cx, |markdown, cx| {
+            markdown.set_text(text, cx);
+            markdown.list_state().scroll_to(ListOffset::default());
+        });
     }
 
     /// Scrolls the code view.
@@ -169,12 +169,14 @@ impl TextViews {
     }
 
     /// Scrolls the Markdown view.
-    pub(crate) fn scroll_markdown(&self, scroll: Scroll) {
-        let offset = self.markdown_scroll.offset();
-        let page = self.markdown_scroll.bounds().size.height;
-        let end = -self.markdown_scroll.max_offset().y;
-        let y = scroll.from(offset.y, page).max(end);
-        self.markdown_scroll.set_offset(point(offset.x, y));
+    pub(crate) fn scroll_markdown<T: 'static>(&self, scroll: Scroll, cx: &mut Context<T>) {
+        self.markdown.update(cx, |markdown, cx| {
+            let list = markdown.list_state();
+            let page = list.viewport_bounds().size.height;
+            let y = list.scroll_px_offset_for_scrollbar().y;
+            scroll_list(list, scroll.from(y, page) - y);
+            cx.notify();
+        });
     }
 
     /// How far the code view is scrolled down.
@@ -183,8 +185,13 @@ impl TextViews {
     }
 
     /// How far the Markdown view is scrolled down.
-    pub(crate) fn markdown_scroll(&self) -> Pixels {
-        -self.markdown_scroll.offset().y
+    pub(crate) fn markdown_scroll(&self, cx: &App) -> Pixels {
+        -self
+            .markdown
+            .read(cx)
+            .list_state()
+            .scroll_px_offset_for_scrollbar()
+            .y
     }
 
     /// The code view, labelled with the file's name. The Kit keeps a code
@@ -206,35 +213,54 @@ impl TextViews {
             )
     }
 
-    /// The Markdown view, labelled with the file's name.
+    /// The Markdown view, labelled with the file's name: the text view in
+    /// a centred column, its scrolling taking the wheel over the margins.
     pub(crate) fn render_markdown(&self, name: SharedString) -> impl IntoElement {
+        let markdown = self.markdown.clone();
         div()
             .id("stage-markdown")
             .test_support()
             .role(Role::Document)
             .aria_label(name)
             .size_full()
-            .overflow_y_scroll()
-            .track_scroll(&self.markdown_scroll)
+            .flex()
+            .justify_center()
+            .on_scroll(move |event, window, cx| {
+                // Over the column, the text view scrolls itself.
+                if markdown.read(cx).bounds().contains(&event.position) {
+                    return;
+                }
+                let delta = event.delta.pixel_delta(window.line_height()).y;
+                markdown.update(cx, |markdown, cx| {
+                    let list = markdown.list_state();
+                    scroll_list(list, delta);
+                    cx.notify();
+                });
+            })
             .child(
-                div()
+                TextView::new(&self.markdown)
+                    .scrollable(true)
+                    .selectable(true)
+                    // In place of the language label the Kit puts in each
+                    // code block's corner: the stage adds no words of its
+                    // own.
+                    .code_block_actions(|_, _, _| div())
+                    .h_full()
                     .w_full()
                     .max_w(MEASURE)
-                    .mx_auto()
                     .px_8()
-                    .pt_10()
-                    .pb_16()
-                    .child(
-                        TextView::new(&self.markdown)
-                            .selectable(true)
-                            // In place of the language label the Kit puts
-                            // in each code block's corner: the stage adds
-                            // no words of its own.
-                            .code_block_actions(|_, _, _| div()),
-                    ),
+                    .pt_6(),
             )
-            .vertical_scrollbar(&self.markdown_scroll)
     }
+}
+
+/// Moves a list's scroll offset by `delta` (negative is down the text),
+/// stopping at its top and its end.
+fn scroll_list(list: &ListState, delta: Pixels) {
+    let y = list.scroll_px_offset_for_scrollbar().y;
+    let end = -list.max_offset_for_scrollbar().y;
+    let to = (y + delta).clamp(end.min(px(0.)), px(0.));
+    list.scroll_by(y - to);
 }
 
 #[cfg(test)]

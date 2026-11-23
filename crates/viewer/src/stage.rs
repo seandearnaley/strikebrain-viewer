@@ -229,7 +229,7 @@ impl Stage {
     pub(crate) fn probe(&self, cx: &App) -> StageProbe {
         let scroll = match self.content {
             Content::Code(_) => self.text_views.code_scroll(cx),
-            Content::Markdown(_) => self.text_views.markdown_scroll(),
+            Content::Markdown(_) => self.text_views.markdown_scroll(cx),
             Content::Blank | Content::Image(..) | Content::Unsupported { .. } => px(0.),
         };
         StageProbe {
@@ -435,10 +435,7 @@ impl Stage {
     fn scroll(&mut self, scroll: Scroll, cx: &mut Context<Self>) {
         match self.content {
             Content::Code(_) => self.text_views.scroll_code(scroll, cx),
-            Content::Markdown(_) => {
-                self.text_views.scroll_markdown(scroll);
-                cx.notify();
-            }
+            Content::Markdown(_) => self.text_views.scroll_markdown(scroll, cx),
             Content::Blank | Content::Image(..) | Content::Unsupported { .. } => {}
         }
     }

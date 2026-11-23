@@ -7,8 +7,11 @@ use std::path::Path;
 
 use explorer::NodeId;
 use gpui_kit::test::ElementSnapshot;
-use gpui_kit::test::{TestQueryExt as _, TestWindowExt as _};
-use gpui_kit::{AnyWindowHandle, AppContext as _, Entity, Role, TestAppContext, Window};
+use gpui_kit::test::{TestEventExt as _, TestQueryExt as _, TestWindowExt as _};
+use gpui_kit::{
+    AnyWindowHandle, AppContext as _, Entity, InputEvent as _, Role, ScrollDelta, ScrollEvent,
+    TestAppContext, Window, point, px,
+};
 use viewer::{AppState, AppView, Launch, StageProbe};
 
 use crate::{click, current, focus, is_focused, node, open_app, press, read, row, write};
@@ -96,6 +99,17 @@ fn shade(at: u32, of: u32) -> u8 {
     u8::try_from(at * 255 / of.max(1)).expect("at < of, so at most 255")
 }
 
+/// A two-frame animated GIF, 16 x 16.
+fn gif() -> Vec<u8> {
+    let frames = [[200, 60, 60, 255], [60, 60, 200, 255]]
+        .map(|pixel| image::Frame::new(image::RgbaImage::from_pixel(16, 16, image::Rgba(pixel))));
+    let mut bytes = Vec::new();
+    image::codecs::gif::GifEncoder::new(&mut bytes)
+        .encode_frames(frames)
+        .expect("encode the GIF");
+    bytes
+}
+
 fn encode(image: &image::DynamicImage, format: image::ImageFormat) -> Vec<u8> {
     let mut bytes = Vec::new();
     image
@@ -105,10 +119,12 @@ fn encode(image: &image::DynamicImage, format: image::ImageFormat) -> Vec<u8> {
 }
 
 /// A folder of one file of each kind the stage tells apart. Display order:
-/// big.txt, code.rs, data.bin, latin1.txt, notes.md, photo.jpg, photo.png.
+/// big.txt, code.rs, data.bin, latin1.txt, moving.gif, notes.md, photo.jpg,
+/// photo.png.
 fn mixed(dir: &Path) {
     write(dir, "photo.png", png(64, 48));
     write(dir, "photo.jpg", jpeg(40, 30));
+    write(dir, "moving.gif", gif());
     write(dir, "notes.md", "# Notes\n\n- one\n- two\n");
     write(dir, "code.rs", "fn main() {\n    println!(\"hi\");\n}\n");
     write(dir, "data.bin", b"\x00\x01\x02");
@@ -154,6 +170,7 @@ fn each_file_gets_its_viewer(cx: &mut TestAppContext) {
     let expect = [
         ("photo.png", Shown::Image("photo.png".into())),
         ("photo.jpg", Shown::Image("photo.jpg".into())),
+        ("moving.gif", Shown::Image("moving.gif".into())),
         ("notes.md", Shown::Markdown("notes.md".into())),
         ("code.rs", Shown::Code("code.rs".into())),
         ("latin1.txt", Shown::Code("latin1.txt".into())),
@@ -592,4 +609,44 @@ fn the_tree_follows_the_stage_into_view(cx: &mut TestAppContext) {
     .unwrap();
     // Keyboard focus in the tree stays where it was.
     assert_eq!(focus(cx, &view), focus_before);
+}
+
+#[gpui_kit::test]
+fn the_wheel_scrolls_markdown_over_its_margins_too(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "long.md",
+        numbered(200, "Paragraph ", ", long enough to read.\n\n"),
+    );
+    let (handle, view) = open_checked(cx, dir.path());
+    // A stage wider than the reading column: margins either side.
+    crate::drag_divider(cx, handle, 220.);
+    let scroll = |cx: &mut TestAppContext| probe(cx, &view).scroll();
+    let wheel = |cx: &mut TestAppContext, x: f32| {
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            let bounds = window.find("stage-markdown").bounds();
+            let at = point(bounds.left() + px(x), bounds.center().y);
+            window.pointer_move(at, None, cx);
+            window.dispatch_event(
+                ScrollEvent {
+                    position: at,
+                    delta: ScrollDelta::Pixels(point(px(0.), px(-100.))),
+                    ..Default::default()
+                }
+                .to_platform_input(),
+                cx,
+            );
+        })
+        .unwrap();
+        cx.run_until_parked();
+    };
+    assert_eq!(scroll(cx), 0.);
+    // In the left margin, outside the column (and the divider's grip).
+    wheel(cx, 16.);
+    assert_eq!(scroll(cx), 100.);
+    // Over the text.
+    wheel(cx, 300.);
+    assert!(scroll(cx) > 100., "the column scrolls itself");
 }
