@@ -119,8 +119,8 @@ fn encode(image: &image::DynamicImage, format: image::ImageFormat) -> Vec<u8> {
 }
 
 /// A folder of one file of each kind the stage tells apart. Display order:
-/// big.txt, code.rs, data.bin, latin1.txt, moving.gif, notes.md, photo.jpg,
-/// photo.png.
+/// big.txt, code.rs, data.bin, latin1.txt, long.md, moving.gif, notes.md,
+/// photo.jpg, photo.png.
 fn mixed(dir: &Path) {
     write(dir, "photo.png", png(64, 48));
     write(dir, "photo.jpg", jpeg(40, 30));
@@ -129,6 +129,8 @@ fn mixed(dir: &Path) {
     write(dir, "code.rs", "fn main() {\n    println!(\"hi\");\n}\n");
     write(dir, "data.bin", b"\x00\x01\x02");
     write(dir, "latin1.txt", b"na\xefve\n");
+    // Past the Markdown view's limit: its source, in the code view.
+    write(dir, "long.md", "# Long\n\n".repeat(40_000));
     // Sparse: past the 10 MB limit without writing it.
     write(dir, "big.txt", "text head\n");
     std::fs::File::options()
@@ -175,6 +177,7 @@ fn each_file_gets_its_viewer(cx: &mut TestAppContext) {
         ("photo.jpg", Shown::Image("photo.jpg".into())),
         ("moving.gif", Shown::Image("moving.gif".into())),
         ("notes.md", Shown::Markdown("notes.md".into())),
+        ("long.md", Shown::Code("long.md".into())),
         ("code.rs", Shown::Code("code.rs".into())),
         ("latin1.txt", Shown::Code("latin1.txt".into())),
         ("data.bin", Shown::Unsupported("data.bin".into())),

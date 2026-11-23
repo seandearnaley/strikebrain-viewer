@@ -484,6 +484,50 @@ fn timing_the_markdown_view_on_large_documents(cx: &mut TestAppContext) {
     }
 }
 
+/// From a click to the first frame for Markdown files around the size the
+/// stage renders as Markdown, and which view each gets. Sets that limit.
+#[gpui_kit::test]
+#[ignore = "probe; run in release with --ignored --nocapture"]
+#[expect(clippy::print_stderr, reason = "the probe reports its measurements")]
+fn timing_markdown_around_its_size_limit(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().expect("a temporary folder");
+    let kilobytes = [128_usize, 256, 384, 512, 768, 1024, 2048];
+    // Prose, as a long document: headings, paragraphs and short lists.
+    let prose = "## A heading\n\nSome paragraph text that wraps across a line or two in the \
+                 reading column, with *emphasis* and `code`.\n\n- one\n- two\n- three\n\n";
+    let section = generated_markdown(1).len();
+    for kb in kilobytes {
+        let sections = kb * 1024 / section;
+        crate::write(
+            dir.path(),
+            &format!("a{kb:04}.md"),
+            generated_markdown(sections),
+        );
+        crate::write(
+            dir.path(),
+            &format!("b{kb:04}.md"),
+            prose.repeat(kb * 1024 / prose.len()),
+        );
+    }
+    let (handle, view) = open_app(cx, Launch::Folder(dir.path().to_owned()));
+    for name in kilobytes
+        .iter()
+        .flat_map(|kb| [format!("a{kb:04}.md"), format!("b{kb:04}.md")])
+    {
+        let id = crate::node(cx, &view, &name);
+        let shown = timed(cx, handle, |cx| {
+            cx.update_window(handle, |_, window, cx| window.click(crate::row(id), cx))
+                .expect("click the row");
+        });
+        let frames = time_scroll_frames(cx, handle, "stage-pane", -40., 30);
+        let viewer = crate::stage::shown(cx, handle);
+        eprintln!(
+            "{name}: click to first frame {shown:.2?}; scroll frames {}; {viewer:?}",
+            summary(frames),
+        );
+    }
+}
+
 #[gpui_kit::test]
 #[ignore = "probe; run in release with --ignored --nocapture"]
 #[expect(clippy::print_stderr, reason = "the probe reports its measurements")]

@@ -4,6 +4,7 @@
 //! [`load`] reads the first 8 KB and asks the engine's
 //! [`viewer_for`](explorer::viewer_for) which viewer the file needs; for text
 //! it then reads the rest, up to [`TEXT_LIMIT`], and decodes it lossily.
+//! Markdown over [`MARKDOWN_LIMIT`] opens in the code view.
 //! Only regular files are read: a symlink to a FIFO, a device or a folder
 //! is unsupported, since opening a FIFO waits for a writer and reading a
 //! device may never end. (The scan leaves FIFOs and devices out; a symlink
@@ -24,6 +25,13 @@ use gpui_kit::SharedString;
 /// the screen in about 0.1 s and scrolls at 2.6 ms a frame; its colours
 /// follow some 13 s later from the background. See the spec's Risks.
 pub(crate) const TEXT_LIMIT: u64 = 10 * 1024 * 1024;
+
+/// Markdown files larger than this open in the code view: 256 KB.
+/// Measured (release, M4 Max): a document's first frame takes 0.18 to 0.21 s
+/// at 256 KB, 0.32 to 0.34 s at 384 KB, 0.5 s at 512 KB, 1.5 s at 1 MB and
+/// 5 s at 2 MB, the cost growing with the square of the size. See the
+/// spec's Risks.
+pub(crate) const MARKDOWN_LIMIT: u64 = 256 * 1024;
 
 /// What a file looked like when it was read: its size and when it last
 /// changed. A cached copy is still the file's while its stamp matches.
@@ -114,7 +122,11 @@ fn try_load(path: &Path, name: &str, held: Held) -> io::Result<Loaded> {
         .take(HEAD_LEN as u64)
         .read_to_end(&mut bytes)?;
 
-    let viewer = viewer_for(name, &bytes);
+    let viewer = match viewer_for(name, &bytes) {
+        // Too long to lay out as Markdown in good time: its source.
+        Viewer::Markdown if stamp.len > MARKDOWN_LIMIT => Viewer::Code,
+        viewer => viewer,
+    };
     let unsupported = Loaded::Unsupported {
         len: Some(stamp.len),
     };
@@ -262,6 +274,24 @@ mod tests {
                 len: Some(TEXT_LIMIT + 1)
             }
         );
+    }
+
+    #[test]
+    fn markdown_over_its_limit_opens_as_code() {
+        let dir = tempfile::tempdir().unwrap();
+        let at_limit = "# A\n\n".repeat(usize::try_from(MARKDOWN_LIMIT).unwrap() / 5);
+        let path = write(dir.path(), "notes.md", at_limit.as_bytes());
+        let viewer = |path: &Path| match load(path, "notes.md", Held::default()) {
+            Loaded::Text { viewer, .. } => viewer,
+            other => panic!("text, not {other:?}"),
+        };
+        assert_eq!(viewer(&path), Viewer::Markdown);
+        let over = format!(
+            "{at_limit}{}",
+            "x".repeat(usize::try_from(MARKDOWN_LIMIT).unwrap())
+        );
+        let path = write(dir.path(), "notes.md", over.as_bytes());
+        assert_eq!(viewer(&path), Viewer::Code);
     }
 
     #[test]
