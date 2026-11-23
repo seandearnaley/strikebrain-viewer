@@ -11,6 +11,7 @@ mod header;
 mod keyboard;
 mod launch;
 mod layout;
+mod menus;
 mod persist;
 mod presentation;
 mod races;

@@ -26,7 +26,11 @@ use gpui_kit::{
 };
 
 use crate::explorer_panel::{ExplorerFocus, ExplorerPanel};
-use crate::keys::{FocusExplorer, FocusFilter, NextPane, OpenFolder, PreviousPane};
+use crate::keys::{
+    FocusExplorer, FocusFilter, Minimize, NextPane, OpenFolder, PreviousPane, Refresh,
+    StartPresenting, ToggleShowIgnored, Zoom,
+};
+use crate::menus;
 use crate::persist::{FolderView, SavedWindow, Snapshot, StateStore};
 use crate::stage::{Stage, StageProbe};
 use crate::state::{AppState, Launch, StateOptions};
@@ -66,8 +70,8 @@ enum Pane {
 
 /// The root view: explorer on the left, stage on the right. Owns the
 /// [`AppState`] both observe, keeps the window title on the folder's name,
-/// handles ⌘O, ⌘F and moving between panes, follows the presentation, and
-/// saves the state.
+/// handles ⌘O, ⌘F, moving between panes and the menu bar's commands,
+/// follows the presentation, and saves the state.
 pub struct AppView {
     state: Entity<AppState>,
     explorer: Entity<ExplorerPanel>,
@@ -90,6 +94,8 @@ pub struct AppView {
     store: Option<StateStore>,
     /// The save waiting for its delay. While it waits, changes add nothing.
     save_task: Option<Task<()>>,
+    /// Whether the menu bar's Show Ignored is checked.
+    menu_shows_ignored: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -133,6 +139,7 @@ impl AppView {
             cx.observe_in(&app_state, window, |this, _, window, cx| {
                 this.sync_title(window, cx);
                 this.sync_presentation(window, cx);
+                this.sync_menus(cx);
                 this.schedule_save(cx);
             }),
             cx.observe_window_appearance(window, |_, window, cx| theme::follow_system(window, cx)),
@@ -169,10 +176,12 @@ impl AppView {
             window: None,
             store: session.store,
             save_task: None,
+            menu_shows_ignored: false,
             _subscriptions: subscriptions,
         };
         view.window = Some(view.place(window, cx));
         view.sync_title(window, cx);
+        view.sync_menus(cx);
         view
     }
 
@@ -210,6 +219,13 @@ impl AppView {
             .as_f32()
     }
 
+    /// Opens `folder` in place of the folder on screen: the system's
+    /// "Open With" and a folder dropped on the Dock icon.
+    pub fn open_folder(&mut self, folder: PathBuf, cx: &mut Context<Self>) {
+        self.state
+            .update(cx, |state, cx| state.open_folder(folder, cx));
+    }
+
     fn sync_title(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let name = self.state.read(cx).folder_name();
         if name.is_some() && name != self.title {
@@ -217,6 +233,15 @@ impl AppView {
                 window.set_window_title(name);
             }
             self.title = name;
+        }
+    }
+
+    /// Keeps the menu bar's Show Ignored check on the state.
+    fn sync_menus(&mut self, cx: &mut Context<Self>) {
+        let shows_ignored = self.state.read(cx).shows_ignored();
+        if shows_ignored != self.menu_shows_ignored {
+            self.menu_shows_ignored = shows_ignored;
+            menus::install(shows_ignored, cx);
         }
     }
 
@@ -317,6 +342,31 @@ impl AppView {
             .update(cx, |_, cx| AppState::prompt_for_folder(cx));
     }
 
+    fn start_presenting(
+        &mut self,
+        _: &StartPresenting,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.state.read(cx).current().is_some() {
+            window.focus(&self.stage.focus_handle(cx), cx);
+        }
+        self.state.update(cx, AppState::start_presenting);
+    }
+
+    fn toggle_show_ignored(
+        &mut self,
+        _: &ToggleShowIgnored,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.state.update(cx, AppState::toggle_show_ignored);
+    }
+
+    fn refresh(&mut self, _: &Refresh, _: &mut Window, cx: &mut Context<Self>) {
+        self.state.update(cx, AppState::refresh);
+    }
+
     // Panes
 
     fn next_pane(&mut self, _: &NextPane, window: &mut Window, cx: &mut Context<Self>) {
@@ -388,15 +438,21 @@ impl Render for AppView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let root = div()
             .size_full()
-            .on_action(cx.listener(Self::open_folder_picker))
             .on_action(cx.listener(Self::next_pane))
             .on_action(cx.listener(Self::previous_pane))
             .on_action(cx.listener(Self::focus_filter))
-            .on_action(cx.listener(Self::focus_explorer));
+            .on_action(cx.listener(Self::focus_explorer))
+            .on_action(cx.listener(Self::start_presenting))
+            .on_action(cx.listener(Self::toggle_show_ignored))
+            .on_action(cx.listener(Self::refresh))
+            .on_action(|_: &Minimize, window, _| window.minimize_window())
+            .on_action(|_: &Zoom, window, _| window.zoom_window());
         if self.presenting {
+            // No Open Folder while presenting, from a key or the menu bar,
+            // whose item then shows disabled.
             return root.child(self.stage.clone().cached(pane()));
         }
-        root.child(
+        root.on_action(cx.listener(Self::open_folder_picker)).child(
             h_resizable("panes")
                 .with_state(&self.split)
                 .child(

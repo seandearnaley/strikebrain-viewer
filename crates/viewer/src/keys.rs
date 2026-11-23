@@ -87,6 +87,20 @@ actions!(
         FocusFilter,
         /// Moves keyboard focus to the explorer's tree.
         FocusExplorer,
+        /// Shows the application's name and version.
+        About,
+        /// Starts the presentation, from the menu bar. Unbound: `Present`
+        /// is Space, and a menu item shows its action's key as a shortcut
+        /// that the menu would then take from the filter input.
+        StartPresenting,
+        /// Shows or hides the files the ignore rules leave out.
+        ToggleShowIgnored,
+        /// Rescans the folder.
+        Refresh,
+        /// Minimizes the window.
+        Minimize,
+        /// Zooms the window to fill the screen, or back.
+        Zoom,
     ]
 );
 
@@ -146,6 +160,7 @@ pub(crate) fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("shift-tab", PreviousPane, body),
         KeyBinding::new("cmd-o", OpenFolder, None),
         KeyBinding::new("cmd-q", Quit, None),
+        KeyBinding::new("cmd-m", Minimize, None),
     ];
     // The stage's keys, on the stage and over the editor inside it.
     for stage in [stage, Some(STAGE_EDITOR)] {
@@ -300,9 +315,30 @@ mod tests {
     }
 
     #[test]
-    fn command_o_and_command_q_work_everywhere() {
+    fn command_o_command_q_and_command_m_work_everywhere() {
         assert_bound("cmd-o", None, &OpenFolder);
         assert_bound("cmd-q", None, &Quit);
+        assert_bound("cmd-m", None, &Minimize);
+    }
+
+    #[test]
+    fn the_menu_only_actions_have_no_key() {
+        let actions: [&dyn Action; 5] = [
+            &About,
+            &StartPresenting,
+            &ToggleShowIgnored,
+            &Refresh,
+            &Zoom,
+        ];
+        for action in actions {
+            assert!(
+                bindings()
+                    .iter()
+                    .all(|binding| !binding.action().partial_eq(action)),
+                "{} is bound",
+                action.name()
+            );
+        }
     }
 
     #[test]
