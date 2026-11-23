@@ -2,10 +2,15 @@
 //!
 //! Brainstrike's measurements, on the rem scale so they follow the theme's
 //! base font (16 px, where every value below is exact): 28 px tall plus a
-//! 1 px rule, the panel's 8 px inset, 20 px of indent per level, a 24 px
-//! chevron target, then 6 px gaps around a 16 px checkbox and a 16 px icon,
-//! and the name at 14/16 px. The Type and Size cells follow as the tree
-//! widens; see [`crate::columns`].
+//! 1 px rule, the panel's 8 px inset, a 24 px chevron target, then 6 px
+//! gaps around a 16 px checkbox and a 16 px icon, and the name at 14/16 px.
+//! The Type and Size cells follow as the tree widens; see
+//! [`crate::columns`].
+//!
+//! The indent is not brainstrike's: 12 px per level, half the chevron's
+//! target, where brainstrike has 20 px. At the default 300 px width a name
+//! five levels down keeps about 80 px, where 20 px left it 50 px: too few
+//! characters to tell files apart.
 //!
 //! In light mode hover is the muted background at full strength, not the
 //! spec's half, which does not show on the light background. The focus ring is the theme's ring colour (brainstrike's
@@ -30,8 +35,8 @@ use crate::columns::{self, Columns};
 use crate::state::RowAction;
 use crate::theme::TABULAR_FIGURES;
 
-/// Indent per level below the top: 20 px.
-const INDENT: Rems = Rems(1.25);
+/// Indent per level below the top: 12 px. See the module docs.
+const INDENT: Rems = Rems(0.75);
 
 /// How far the focus ring stays in from the pane's edge and the divider:
 /// 2 px.

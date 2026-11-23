@@ -14,6 +14,12 @@
 //! A link in the Markdown view opens only when it is a web or mail link
 //! (`http`, `https`, `mailto`); any other link does nothing.
 //!
+//! An image in the Markdown view loads from the file's own folder when its
+//! address is a relative path, as it would on a code host; a `data:` address
+//! carries its own image. Any other address is left to GPUI's loader, which
+//! fetches nothing: the app has no HTTP client, so a file cannot make it
+//! call out.
+//!
 //! The Markdown view is the text view's own scrolling mode, which lays out
 //! only the blocks on screen: laying out every block each frame took 23 ms
 //! a frame at 86 KB and 0.6 s at 345 KB. The text keeps to a centred
@@ -27,10 +33,10 @@ use gpui_kit::component::Sizable as _;
 use gpui_kit::component::input::{Editor, EditorState};
 use gpui_kit::component::text::{TextView, TextViewState};
 use gpui_kit::{
-    App, AppContext as _, ClickEvent, Context, Entity, IntoElement, ListOffset, ListState,
-    MouseButton, ParentElement as _, Pixels, Rems, Role, SharedString,
-    StatefulInteractiveElement as _, Styled as _, TestSupportExt as _, Window, div, point,
-    prelude::*, px,
+    App, AppContext as _, ClickEvent, Context, Entity, Image, ImageFormat, ImageSource,
+    IntoElement, ListOffset, ListState, MouseButton, ParentElement as _, Pixels, Rems, Role,
+    SharedString, SharedUri, StatefulInteractiveElement as _, Styled as _, TestSupportExt as _,
+    Window, div, point, prelude::*, px,
 };
 
 use super::load::Stamp;
@@ -250,6 +256,7 @@ impl TextViews {
     /// a centred column, its scrolling taking the wheel over the margins.
     pub(crate) fn render_markdown(&self, name: SharedString) -> impl IntoElement {
         let markdown = self.markdown.clone();
+        let file = self.markdown_holds.as_ref().map(|holds| holds.path.clone());
         div()
             .id("stage-markdown")
             .test_support()
@@ -275,6 +282,10 @@ impl TextViews {
                     .scrollable(true)
                     .selectable(true)
                     .on_link_click(open_link)
+                    .image_source(move |url| {
+                        let folder = file.as_deref().and_then(Path::parent);
+                        image_source(folder, url)
+                    })
                     // In place of the language label the Kit puts in each
                     // code block's corner: the stage adds no words of its
                     // own.
@@ -351,6 +362,39 @@ fn is_web_or_mail(url: &str) -> bool {
     })
 }
 
+/// Where the Markdown view loads the image at `url` from, for a file in
+/// `folder`. See the module docs.
+fn image_source(folder: Option<&Path>, url: &SharedUri) -> ImageSource {
+    if let Some(image) = data_url_image(url) {
+        return ImageSource::Image(image);
+    }
+    match folder.zip(relative_path(url)) {
+        Some((folder, path)) => folder.join(path).into(),
+        None => url.clone().into(),
+    }
+}
+
+/// The path in `url` when it is a relative one: no scheme, no leading `/`
+/// (a code host reads that from the repository's root, which a file does
+/// not know), and something before any `?query` or `#fragment`. The path is
+/// taken as written: `%20` is not turned into a space.
+fn relative_path(url: &str) -> Option<&str> {
+    let path = url.split(['?', '#']).next().unwrap_or(url);
+    let first = path.split('/').next().unwrap_or(path);
+    (!path.is_empty() && !path.starts_with('/') && !first.contains(':')).then_some(path)
+}
+
+/// The image a `data:` URL carries, as the Kit decodes one when no image
+/// source is set. `None` for any other URL and for one that is not an image
+/// GPUI can decode.
+fn data_url_image(url: &str) -> Option<Arc<Image>> {
+    let data = data_url::DataUrl::process(url).ok()?;
+    let mime = data.mime_type();
+    let format = ImageFormat::from_mime_type(&format!("{}/{}", mime.type_, mime.subtype))?;
+    let (bytes, _fragment) = data.decode_to_vec().ok()?;
+    Some(Arc::new(Image::from_bytes(format, bytes)))
+}
+
 /// Moves a list's scroll offset by `delta` (negative is down the text),
 /// stopping at its top and its end.
 fn scroll_list(list: &ListState, delta: Pixels) {
@@ -362,8 +406,66 @@ fn scroll_list(list: &ListState, delta: Pixels) {
 
 #[cfg(test)]
 mod tests {
-    use super::{STEP, Scroll, is_prose, is_web_or_mail};
-    use gpui_kit::{Pixels, px};
+    use std::path::Path;
+
+    use super::{STEP, Scroll, image_source, is_prose, is_web_or_mail, relative_path};
+    use gpui_kit::{ImageFormat, ImageSource, Pixels, Resource, SharedUri, px};
+
+    #[test]
+    fn only_a_relative_path_is_read_from_the_files_folder() {
+        for (url, path) in [
+            ("banner.webp", "banner.webp"),
+            ("assets/readme/banner.webp", "assets/readme/banner.webp"),
+            ("./a.png", "./a.png"),
+            ("../shared/a.png", "../shared/a.png"),
+            ("a.png?raw=true", "a.png"),
+            ("a.svg#dark", "a.svg"),
+            ("notes/12:30.png", "notes/12:30.png"),
+        ] {
+            assert_eq!(relative_path(url), Some(path), "{url}");
+        }
+        for url in [
+            "https://example.com/a.png",
+            "file:///etc/a.png",
+            "data:image/png;base64,iVBORw0KGgo=",
+            "/assets/a.png",
+            "#heading",
+            "?raw=true",
+            "",
+        ] {
+            assert_eq!(relative_path(url), None, "{url}");
+        }
+    }
+
+    #[test]
+    fn a_markdown_image_comes_from_the_folder_its_own_data_or_nowhere() {
+        let folder = Some(Path::new("/repo/docs"));
+        let source = |folder, url: &str| image_source(folder, &SharedUri::from(url.to_owned()));
+
+        let ImageSource::Resource(Resource::Path(path)) = source(folder, "img/a.png?raw=true")
+        else {
+            panic!("a relative path loads from a file");
+        };
+        assert_eq!(&*path, Path::new("/repo/docs/img/a.png"));
+
+        let ImageSource::Image(image) = source(folder, "data:image/png;base64,iVBORw0KGgo=") else {
+            panic!("a data URL carries its image");
+        };
+        assert_eq!(image.format(), ImageFormat::Png);
+        assert_eq!(image.bytes(), b"\x89PNG\r\n\x1a\n");
+
+        // Left to GPUI's loader, which has no HTTP client to fetch with.
+        for (folder, url) in [
+            (folder, "https://example.com/a.png"),
+            (folder, "/etc/a.png"),
+            (None, "a.png"),
+        ] {
+            assert!(
+                matches!(source(folder, url), ImageSource::Resource(Resource::Uri(_))),
+                "{url}"
+            );
+        }
+    }
 
     #[test]
     fn prose_is_plain_text_and_names_without_an_extension() {

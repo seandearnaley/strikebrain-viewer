@@ -231,10 +231,10 @@ Top to bottom:
 5. **Tree**, one `uniform_list` over `rows`.
 6. **Selection bar**, floating at the bottom of the tree when anything is selected: "N selected" and a clear button. It never moves rows; the list gains bottom padding while it shows.
 
-Row, left to right. These are brainstrike's measurements.
+Row, left to right. These are brainstrike's measurements, except the indent.
 
 - Height 28 px plus a 1 px bottom rule.
-- Indent 20 px per level.
+- Indent 12 px per level. Brainstrike's 20 px left a name five levels down about 50 px of a 300 px tree.
 - Chevron in a 24 px target, folders only. Files get a 24 px spacer.
 - 6 px gap, 16 px checkbox, 6 px gap, 16 px icon, 6 px gap, name at 14/16 px, truncated. A file's icon says its kind, quietly in the muted colour: a picture, Markdown, other text or code, or anything else (a known binary format), as the Images and Text kinds sort them.
 - `Size` cell: monospace 12 px, tabular figures, one decimal, units B, KB, MB, GB.

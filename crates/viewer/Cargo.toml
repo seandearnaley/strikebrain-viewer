@@ -11,6 +11,9 @@ path = "src/main.rs"
 
 [dependencies]
 # The platform's config folder for the saved state.
+# Decodes the image in a Markdown `data:` URL, as the Kit does until the
+# Markdown view sets its own image source. The Kit already builds this crate.
+data-url = "0.3.2"
 directories = "6.0.0"
 explorer = { path = "../explorer" }
 # The channel that carries the file watcher's events from its thread into a

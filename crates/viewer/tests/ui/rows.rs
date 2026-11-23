@@ -39,14 +39,14 @@ fn rows_render_in_order_with_their_indent(cx: &mut TestAppContext) {
             ]
         );
 
-        // 28 px rows plus a 1 px rule; 20 px of indent per level.
+        // 28 px rows plus a 1 px rule; 12 px of indent per level.
         let src_row = window.find(row(src)).bounds();
         let app_row = window.find(row(app)).bounds();
         assert_eq!(src_row.size.height, px(29.));
         assert_eq!(app_row.top() - src_row.top(), px(29.));
         let src_check = window.within(row(src)).find("check").bounds();
         let app_check = window.within(row(app)).find("check").bounds();
-        assert_eq!(app_check.left() - src_check.left(), px(20.));
+        assert_eq!(app_check.left() - src_check.left(), px(12.));
     })
     .unwrap();
 }
