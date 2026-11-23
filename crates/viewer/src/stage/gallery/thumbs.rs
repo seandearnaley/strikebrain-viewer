@@ -11,7 +11,8 @@
 //! Each entry remembers the file's stamp and the tree it was last read or
 //! checked in: after a rescan a tile shows what it has while its file is
 //! checked again, and is read again only if the file changed. A picture
-//! decoded for a smaller box than its tile now has is read again too.
+//! decoded for a smaller box than its tile now has is read again too; one
+//! decoded for a larger box serves a smaller tile as it is.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -286,6 +287,8 @@ mod tests {
         assert_eq!(thumbs.wants(&a, 2, (64, 48)), Some(Reading { held }));
         thumbs.insert(Arc::clone(&a), Read::Unchanged, (64, 48), 2);
         assert_eq!(thumbs.wants(&a, 2, (64, 48)), None);
+        // A smaller tile shows it as it is.
+        assert_eq!(thumbs.wants(&a, 2, (32, 24)), None);
         // A larger tile: decoded again, whatever the stamp.
         assert_eq!(thumbs.wants(&a, 2, (128, 96)), Some(Reading { held: None }));
         // A picture that fitted its box fits any larger one.

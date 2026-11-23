@@ -21,10 +21,6 @@ pub(crate) const NAME_GAP: Pixels = px(8.);
 /// The name's line: 16 px.
 pub(crate) const NAME_LINE: Pixels = px(16.);
 
-/// A thumbnail is decoded for a box this many device pixels larger than
-/// the tile, rounded up: a pane resized a little keeps its thumbnails.
-const BOX_STEP: u32 = 64;
-
 /// The grid laid out in a pane of one size. See the module docs.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Grid {
@@ -74,16 +70,11 @@ impl Grid {
         whole((self.viewport / self.row_height).floor()).max(1)
     }
 
-    /// The box a thumbnail is decoded to fit, in device pixels: the tile at
-    /// the display's scale, rounded up to a step.
+    /// The box a thumbnail is decoded to fit, in device pixels: the tile
+    /// at the display's scale.
     pub(crate) fn thumbnail_box(&self) -> (u32, u32) {
-        let device = |side: Pixels| {
-            let pixels = whole((side * self.scale).ceil());
-            u32::try_from(pixels)
-                .unwrap_or(u32::MAX)
-                .div_ceil(BOX_STEP)
-                .saturating_mul(BOX_STEP)
-        };
+        let device =
+            |side: Pixels| u32::try_from(whole((side * self.scale).ceil())).unwrap_or(u32::MAX);
         (device(self.tile.width), device(self.tile.height))
     }
 }
@@ -149,11 +140,12 @@ mod tests {
     }
 
     #[test]
-    fn a_thumbnail_box_is_the_tile_at_the_display_scale_rounded_up() {
+    fn a_thumbnail_box_is_the_tile_at_the_display_scale() {
         let grid = Grid::new(size(px(700.), px(600.)), 1, 2.);
-        // 424 x 318 device pixels, up to steps of 64.
-        assert_eq!(grid.thumbnail_box(), (448, 320));
+        assert_eq!(grid.thumbnail_box(), (424, 318));
         let grid = Grid::new(size(px(700.), px(600.)), 1, 1.);
-        assert_eq!(grid.thumbnail_box(), (256, 192));
+        assert_eq!(grid.thumbnail_box(), (212, 159));
+        let grid = Grid::new(size(px(700.), px(600.)), 1, 1.5);
+        assert_eq!(grid.thumbnail_box(), (318, 239));
     }
 }
