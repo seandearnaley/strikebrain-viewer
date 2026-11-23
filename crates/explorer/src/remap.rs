@@ -30,17 +30,22 @@ impl fmt::Debug for IdMap {
 }
 
 impl IdMap {
-    /// Pairs up `old` and `new` by path, in one walk. The roots pair, or,
-    /// when either tree is joined, each old top-level node pairs with the
-    /// new node at its place on disk ([`Tree::find_abs`]); then every pair
-    /// of folders merges its children (see [`IdMap::merge`]).
+    /// Pairs up `old` and `new` by path, in one walk. Between two trees of
+    /// one folder, the roots pair. When `new` is joined, each scanned
+    /// folder of `old` pairs with the new node at its place on disk
+    /// ([`Tree::find_abs`]): a joined tree's top-level folders, or the root
+    /// of a tree of one folder; the root of a joined tree pairs only with
+    /// the root of another. When only `old` is joined, its top-level
+    /// folders pair with their places in `new` the same way. Then every
+    /// pair of folders merges its children (see [`IdMap::merge`]).
     pub(crate) fn new(old: &Tree, new: &Tree) -> Self {
         let mut map = Self::gone(old);
-        map.new_of_old[NodeId::ROOT.index()] = 0;
-        let pairs = if old.is_joined() || new.is_joined() {
-            old.children(NodeId::ROOT)
-                .iter()
-                .filter_map(|&top| Some((top, new.find_abs(&old.abs_path(top))?)))
+        let pairs: Vec<(NodeId, NodeId)> = if old.is_joined() || new.is_joined() {
+            if old.is_joined() && new.is_joined() {
+                map.new_of_old[NodeId::ROOT.index()] = 0;
+            }
+            old.folders()
+                .filter_map(|top| Some((top, new.find_abs(&old.abs_path(top))?)))
                 .collect()
         } else {
             vec![(NodeId::ROOT, NodeId::ROOT)]

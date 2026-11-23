@@ -2,7 +2,12 @@
 //! files as paths relative to a folder, which outlive the tree's ids.
 //!
 //! Two forms. [`Explorer::open_paths`] and [`Explorer::selected_paths`] list
-//! every path from the root. [`Explorer::snapshot`] copies the open folders
+//! every path from the root, as do [`Explorer::restore_open`],
+//! [`Explorer::restore_selection`] and [`Explorer::restore_saved_selection`]
+//! and the snapshot's own `open_paths` and `selection`: in a joined tree
+//! those paths start with a top-level folder's name, so they cannot tell
+//! two folders of one name apart. The app saves and restores per folder,
+//! with [`ViewSnapshot::folders`] and [`Explorer::restore_folder`]. [`Explorer::snapshot`] copies the open folders
 //! and the checks out in constant time per word of bits, so a background
 //! thread can name them; its [`ViewSnapshot::folders`] gives each scanned
 //! folder's part, [`SavedFolder`], with its checks written compactly
@@ -17,7 +22,7 @@ use std::sync::Arc;
 use fixedbitset::FixedBitSet;
 
 use super::Explorer;
-use crate::{Check, Kind, NodeId, Selection, Tree, Visibility};
+use crate::{Check, Kind, NodeId, Selection, Tree, Visibility, bits};
 
 /// Checked files as a saved state holds them: folders whose every file is
 /// checked, then the other checked files. Each is a path relative to the
@@ -115,8 +120,12 @@ impl ViewSnapshot {
     pub fn folder(&self, top: NodeId) -> SavedFolder {
         let tree = &*self.tree;
         let range = tree.subtree(top);
-        let open = open_ids(tree, &self.open)
-            .filter(|id| range.contains(&id.index()))
+        // Only this folder's bits: one walk per folder, not per folder and
+        // open folder.
+        let next = |from: usize| bits::next_one(&self.open, from).filter(|&bit| bit < range.end);
+        let open = std::iter::successors(next(range.start), |&bit| next(bit + 1))
+            .map(NodeId::from_index)
+            .filter(|&id| id != NodeId::ROOT && tree.kind(id) == Kind::Dir)
             .map(|id| tree.path_from(top, id))
             .collect();
         let (mut folders, mut files) = (Vec::new(), Vec::new());

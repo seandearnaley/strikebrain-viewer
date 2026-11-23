@@ -213,10 +213,121 @@ fn a_folder_added_around_open_folders_takes_them_in_with_their_view() {
     // takes the file the outer scan found in it.
     assert_eq!(
         gallery(&explorer),
-        ["q", "p/full/f.txt", "p/full/g.txt", "p/inner/b.txt"][1..]
+        ["p/full/f.txt", "p/full/g.txt", "p/inner/b.txt"]
     );
     assert!(explorer.is_open(at(&explorer, "/w/p/inner/deep")));
     assert!(explorer.is_open(at(&explorer, "/w/p")));
+}
+
+#[test]
+fn a_folder_added_around_open_folders_leaves_those_its_scan_does_not_list() {
+    let mut explorer = Explorer::empty();
+    explorer
+        .add_folder(&folder("/w/p/src", &["main.rs"]), 0, None)
+        .unwrap();
+    // A folder the outer folder's ignore rules hide: its scan lists none of it.
+    explorer
+        .add_folder(&folder("/w/p/target", &["out.o"]), 1, None)
+        .unwrap();
+    explorer.toggle_check(at(&explorer, "/w/p/target/out.o"));
+    let outer = folder("/w/p", &["src/main.rs", "README.md"]);
+    explorer.add_folder(&outer, 2, None).unwrap();
+    let tree = explorer.tree();
+    assert_eq!(
+        tree.folders()
+            .map(|top| tree.abs_path(top))
+            .collect::<Vec<_>>(),
+        [PathBuf::from("/w/p/target"), PathBuf::from("/w/p")]
+    );
+    assert_eq!(gallery(&explorer), ["target/out.o"]);
+}
+
+#[test]
+fn a_rescan_that_now_lists_an_open_folder_takes_it_in() {
+    let mut explorer = Explorer::empty();
+    explorer
+        .add_folder(&folder("/w/d/sub", &["x.txt"]), 0, None)
+        .unwrap();
+    explorer.toggle_check(at(&explorer, "/w/d/sub/x.txt"));
+    // The outer folder could not be read at first: it takes nothing in.
+    explorer
+        .add_folder(&Tree::unreadable(Path::new("/w/d")), 1, None)
+        .unwrap();
+    assert_eq!(explorer.tree().folders().len(), 2);
+    // Readable now, its rescan lists the other folder: one copy of x.txt.
+    let d = at(&explorer, "/w/d");
+    let x = at(&explorer, "/w/d/sub/x.txt");
+    let readable = folder("/w/d", &["sub/x.txt", "top.txt"]);
+    let (map, current) = explorer.replace_folder(d, &readable, Some(x)).unwrap();
+    let tree = explorer.tree();
+    assert_eq!(
+        tree.folders()
+            .map(|top| tree.abs_path(top))
+            .collect::<Vec<_>>(),
+        [PathBuf::from("/w/d")]
+    );
+    assert_eq!(rows(&explorer), ["d", "d/sub", "d/sub/x.txt", "d/top.txt"]);
+    assert_eq!(gallery(&explorer), ["d/sub/x.txt"]);
+    assert_eq!(current, map.get(x));
+    assert_eq!(current, Some(at(&explorer, "/w/d/sub/x.txt")));
+}
+
+#[test]
+fn replacing_a_view_of_one_scan_with_a_joined_tree_maps_its_root_to_its_folder() {
+    let one = folder("/w/a", &["x.txt", "y.txt"]);
+    let mut explorer = Explorer::new(Arc::clone(&one));
+    explorer.select_all();
+    let joined = Tree::join(&[
+        (&*folder("/w/a", &["x.txt", "y.txt"]), NodeId::ROOT),
+        (&*folder("/w/b", &["z.txt", "w.txt", "v.txt"]), NodeId::ROOT),
+    ])
+    .unwrap();
+    let map = explorer.replace_tree(Arc::new(joined));
+    assert_eq!(map.get(NodeId::ROOT), Some(at(&explorer, "/w/a")));
+    assert_eq!(gallery(&explorer), ["a/x.txt", "a/y.txt"]);
+}
+
+#[test]
+fn a_join_reserves_name_bytes_for_its_parts_only() {
+    let mut explorer = Explorer::empty();
+    for ix in 0..10 {
+        let names: Vec<String> = (0..2000)
+            .map(|file| format!("file-{file:05}.txt"))
+            .collect();
+        let paths: Vec<&str> = names.iter().map(String::as_str).collect();
+        explorer
+            .add_folder(&folder(&format!("/w/f{ix}"), &paths), ix, None)
+            .unwrap();
+    }
+    let (held, reserved) = explorer.tree().name_bytes();
+    assert!(reserved <= held * 2, "{reserved} bytes reserved for {held}");
+}
+
+#[test]
+fn a_removed_folders_extensions_leave_the_table() {
+    let mut explorer = two_folders();
+    explorer
+        .add_folder(&folder("/w/odd", &["a.zzq"]), 2, None)
+        .unwrap();
+    assert!(
+        explorer
+            .tree()
+            .extensions()
+            .iter()
+            .any(|ext| &**ext == "zzq")
+    );
+    explorer.remove_folder(at(&explorer, "/w/odd"), None);
+    assert!(
+        !explorer
+            .tree()
+            .extensions()
+            .iter()
+            .any(|ext| &**ext == "zzq")
+    );
+    assert_eq!(
+        explorer.tree().extension(at(&explorer, "/w/a/readme.md")),
+        "md"
+    );
 }
 
 #[test]
@@ -395,7 +506,7 @@ proptest::proptest! {
     fn a_folder_change_maps_ids_as_a_lookup_by_place_does(
         sets in proptest::collection::vec(crate::tree::tests::path_sets(), 1..4),
         ops in proptest::collection::vec(
-            (0_usize..3, 0_usize..4, crate::tree::tests::path_sets()),
+            (0_usize..4, 0_usize..4, crate::tree::tests::path_sets()),
             0..6,
         ),
     ) {
@@ -412,9 +523,44 @@ proptest::proptest! {
                     .unwrap(),
                 (1, false) => explorer.remove_folder(tops[pick % tops.len()], None),
                 (2, false) => {
+                    // A rescan: the same folder, other contents.
                     let top = tops[pick % tops.len()];
-                    let name = old.name(top).to_owned();
-                    explorer.replace_folder(top, &generated(&name, set), None).unwrap()
+                    let list: Vec<(&str, u64)> =
+                        set.iter().map(|(path, &size)| (path.as_str(), size)).collect();
+                    let path = old.abs_path(top);
+                    let rescan = folder_at(path.to_str().expect("test paths are UTF-8"), &list);
+                    explorer.replace_folder(top, &rescan, None).unwrap()
+                }
+                // A folder around some of the open ones: its scan lists
+                // every other one, which it takes in.
+                (3, false) => {
+                    let mut paths: Vec<(String, u64)> = Vec::new();
+                    for (ix, &top) in tops.iter().enumerate() {
+                        if ix % 2 == pick % 2 {
+                            let name = old.name(top);
+                            paths.push((format!("{name}/"), 0));
+                            paths.extend(old.subtree(top).skip(1).map(|id| {
+                                let id = NodeId::from_index(id);
+                                let slash = if old.kind(id).is_folder() { "/" } else { "" };
+                                (format!("{name}/{}{slash}", old.path_from(top, id)), 1)
+                            }));
+                        }
+                    }
+                    let list: Vec<(&str, u64)> =
+                        paths.iter().map(|(path, size)| (path.as_str(), *size)).collect();
+                    let outer = Arc::new(folder_at("/r", &list));
+                    let at = pick % (tops.len() + 1);
+                    let (map, current) = explorer.add_folder(&outer, at, None).unwrap();
+                    // No folder below /r is left beside it if /r lists it.
+                    let tree = explorer.tree();
+                    for top in tree.folders() {
+                        let path = tree.abs_path(top);
+                        proptest::prop_assert!(
+                            path == Path::new("/r") || outer.find_abs(&path).is_none(),
+                            "{}", path.display()
+                        );
+                    }
+                    (map, current)
                 }
                 _ => continue,
             };

@@ -6,7 +6,7 @@
 //! Every column is copied in bulk with its ids shifted; nothing is sorted
 //! again, so a join costs a pass over the nodes.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use fixedbitset::FixedBitSet;
 
@@ -18,11 +18,10 @@ use crate::bits::Ranks;
 
 impl Tree {
     /// A tree whose top-level folders are `parts`, in order, under a root
-    /// of its own that is no folder on disk: each part is a node of some
-    /// tree with everything below it, usually the root of a scan. Sizes
-    /// already read come along, and a part that is a whole scanned folder
-    /// shares its sizes with the tree it comes from, so sizes read later
-    /// into either reach both.
+    /// of its own that is no folder on disk: each part is one of some
+    /// tree's [`Tree::folders`], with everything below it, usually the root
+    /// of a scan. A part shares its sizes with the tree it comes from, so
+    /// sizes read later into either reach both.
     ///
     /// # Errors
     ///
@@ -30,7 +29,7 @@ impl Tree {
     ///
     /// # Panics
     ///
-    /// If a part is the root of a joined tree, which no folder holds.
+    /// If a part is not a whole scanned folder of its tree.
     pub(crate) fn join(parts: &[(&Self, NodeId)]) -> Result<Self, TreeError> {
         let n = 1 + parts
             .iter()
@@ -41,7 +40,10 @@ impl Tree {
             .ok()
             .filter(|&n| n < u32::MAX)
             .ok_or(TreeError::TooLarge)?;
-        let bytes: usize = parts.iter().map(|&(tree, _)| tree.names.byte_len()).sum();
+        let bytes: usize = parts
+            .iter()
+            .map(|&(tree, top)| tree.names.bytes_of(tree.subtree(top)))
+            .sum();
         let mut names = NameArena::with_capacity(n, bytes);
         let mut haystack = NameArena::with_capacity(n, bytes + n);
         names.push("")?;
@@ -78,12 +80,14 @@ impl Tree {
                 depth.push((d - below).checked_add(1).ok_or(TreeError::TooDeep)?);
             }
             kind.extend_from_slice(&tree.kind[range.clone()]);
-            let table: Vec<u16> = tree
-                .extensions
-                .iter()
-                .map(|e| extensions.intern(e))
-                .collect();
-            ext.extend(tree.ext[range].iter().map(|&e| table[usize::from(e)]));
+            // Only the extensions the part uses: a folder that leaves takes
+            // its own with it.
+            let mut table: Vec<Option<u16>> = vec![None; tree.extensions.len()];
+            for &e in &tree.ext[range] {
+                let interned = table[usize::from(e)]
+                    .get_or_insert_with(|| extensions.intern(&tree.extensions[usize::from(e)]));
+                ext.push(*interned);
+            }
             folders.push(tree.folder_part(top, NodeId::new(to_u32(start))));
         }
 
@@ -111,32 +115,18 @@ impl Tree {
         })
     }
 
-    /// The folder that the subtree at `top` becomes when joined with its
-    /// top at `at`: the whole folder shares its sizes; a folder inside one
-    /// takes a copy of those it has.
+    /// The folder that the scanned folder at `top` becomes when joined
+    /// with its top at `at`: its path, and its sizes, shared.
     fn folder_part(&self, top: NodeId, at: NodeId) -> Folder {
         let folder = self
-            .folder_holding(top)
-            .expect("a part is a node of a scanned folder");
-        if folder.top == top {
-            return Folder {
-                top: at,
-                path: folder.path.clone(),
-                sizes: Arc::clone(&folder.sizes),
-            };
-        }
-        let sizes = OnceLock::new();
-        if let Some(all) = folder.sizes.get() {
-            let from = top.index() - folder.top.index();
-            let len = self.subtree(top).len();
-            sizes
-                .set(all[from..from + len].into())
-                .expect("a new cell is empty");
-        }
+            .folders
+            .iter()
+            .find(|folder| folder.top == top)
+            .expect("a part is a whole scanned folder");
         Folder {
             top: at,
-            path: folder.path.join(self.path_from(folder.top, top)),
-            sizes: Arc::new(sizes),
+            path: folder.path.clone(),
+            sizes: Arc::clone(&folder.sizes),
         }
     }
 }

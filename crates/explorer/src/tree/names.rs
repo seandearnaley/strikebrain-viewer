@@ -96,6 +96,20 @@ impl NameArena {
     pub(crate) fn byte_len(&self) -> usize {
         self.buf.len()
     }
+
+    /// The bytes entries `range` hold.
+    pub(crate) fn bytes_of(&self, range: std::ops::Range<usize>) -> usize {
+        if range.is_empty() {
+            return 0;
+        }
+        self.span(range.end - 1).end - self.span(range.start).start
+    }
+
+    /// Bytes reserved, held or not.
+    #[cfg(test)]
+    pub(crate) fn capacity(&self) -> usize {
+        self.buf.capacity()
+    }
 }
 
 /// Appends `s` to `out` in lowercase, one character at a time.

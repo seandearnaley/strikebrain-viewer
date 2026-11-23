@@ -287,6 +287,12 @@ impl Tree {
         entry.strip_suffix('\0').unwrap_or(entry)
     }
 
+    /// The bytes the names hold and the bytes reserved for them.
+    #[cfg(test)]
+    pub(crate) fn name_bytes(&self) -> (usize, usize) {
+        (self.names.byte_len(), self.names.capacity())
+    }
+
     /// Every lowercased name in id order, each followed by `'\0'`.
     pub(crate) fn haystack(&self) -> &str {
         self.haystack.as_str()
@@ -468,7 +474,9 @@ impl Tree {
     }
 
     /// The node's path relative to the root, with `/` separators. The root's
-    /// is `""`. In a joined tree it starts with the top-level folder's name.
+    /// is `""`. In a joined tree it starts with the top-level folder's name, so two
+    /// folders of one name give the same paths; [`Tree::path_from`] and
+    /// [`Tree::abs_path`] tell them apart.
     #[must_use]
     pub fn path(&self, id: NodeId) -> String {
         self.path_from(NodeId::ROOT, id)
@@ -512,7 +520,9 @@ impl Tree {
 
     /// The node at a relative path with `/` separators, as [`Tree::path`]
     /// writes it. `""` is the root. Each step scans the siblings, so it costs
-    /// the number of siblings along the path.
+    /// the number of siblings along the path. In a joined tree with two
+    /// folders of one name it finds in the first; [`Tree::find_abs`] tells
+    /// them apart.
     #[must_use]
     pub fn find(&self, path: &str) -> Option<NodeId> {
         self.find_from(NodeId::ROOT, path)

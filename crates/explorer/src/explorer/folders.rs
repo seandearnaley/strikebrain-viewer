@@ -14,6 +14,15 @@ use super::Explorer;
 use crate::remap::IdMap;
 use crate::{Kind, NodeId, Tree, TreeError};
 
+/// Where a scanned folder goes in a new join.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Place {
+    /// Before the top-level folder at this index, or last.
+    At(usize),
+    /// In place of this top-level folder.
+    For(NodeId),
+}
+
 /// Where a top-level folder of a new join comes from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Source {
@@ -33,12 +42,12 @@ impl Explorer {
 
     /// Adds `folder`, a scan, as a top-level folder, open, before the
     /// top-level folder at index `at` (or last). The tree becomes a joined
-    /// tree; one that was not counts as a single folder. Top-level folders
-    /// inside the new one leave, their checks and open folders carried into
-    /// it by path, so no file is in the tree twice; a folder that could not
-    /// be read ([`Tree::unreadable`]) holds nothing and takes nothing in.
-    /// The caller makes sure the new folder is not inside one already on
-    /// view.
+    /// tree; one that was not counts as a single folder. Each top-level
+    /// folder the new scan lists, as a folder, leaves, its checks and open
+    /// folders carried into the new one by path, so no file is in the tree
+    /// twice; one inside it that its scan does not list (its ignore rules
+    /// hide it) stays as it is. A folder that could not be read
+    /// ([`Tree::unreadable`]) lists nothing and takes nothing in.
     ///
     /// Returns the old-to-new id map, and where `current`, the file on the
     /// stage, goes: as [`Explorer::replace_tree_carrying`] says.
@@ -53,26 +62,7 @@ impl Explorer {
         at: usize,
         current: Option<NodeId>,
     ) -> Result<(IdMap, Option<NodeId>), TreeError> {
-        let path = folder.root_path();
-        let takes_in = path.is_absolute() && folder.kind(NodeId::ROOT) == Kind::Dir;
-        let mut plan = Vec::new();
-        let mut carried = Vec::new();
-        let tops = self.tops();
-        for (ix, &top) in tops.iter().enumerate() {
-            if ix == at {
-                plan.push(Source::Scanned);
-            }
-            let top_path = self.tree.abs_path(top);
-            if takes_in && top_path.starts_with(path) {
-                // Taken in: its state carries over if the scan lists it.
-                carried.extend(folder.find_abs(&top_path).map(|node| (top, node)));
-            } else {
-                plan.push(Source::Kept(top));
-            }
-        }
-        if at >= tops.len() {
-            plan.push(Source::Scanned);
-        }
+        let (plan, carried) = self.plan(folder, Place::At(at));
         let (map, current, added) = self.rejoin(&plan, Some(folder), carried, current)?;
         if let Some(added) = added {
             self.expanded.insert(added.index());
@@ -83,9 +73,12 @@ impl Explorer {
 
     /// Puts `folder`, a new scan of the top-level folder `top`, in its
     /// place, carrying checks, open folders and `current` by path as
-    /// [`Explorer::replace_tree_carrying`] does. `top` is one of the tree's
-    /// [`Tree::folders`]; for a tree that is not joined, its root, and the
-    /// tree becomes a joined tree of that one folder.
+    /// [`Explorer::replace_tree_carrying`] does. Like
+    /// [`Explorer::add_folder`] it takes in every other top-level folder it
+    /// now lists: one it could not read before, or whose ignore rules hid
+    /// one, may list more. `top` is one of the tree's [`Tree::folders`];
+    /// for a tree that is not joined, its root, and the tree becomes a
+    /// joined tree of that one folder.
     ///
     /// # Errors
     ///
@@ -97,18 +90,7 @@ impl Explorer {
         folder: &Tree,
         current: Option<NodeId>,
     ) -> Result<(IdMap, Option<NodeId>), TreeError> {
-        let plan: Vec<Source> = self
-            .tops()
-            .into_iter()
-            .map(|each| {
-                if each == top {
-                    Source::Scanned
-                } else {
-                    Source::Kept(each)
-                }
-            })
-            .collect();
-        let carried = vec![(top, NodeId::ROOT)];
+        let (plan, carried) = self.plan(folder, Place::For(top));
         let (map, current, _) = self.rejoin(&plan, Some(folder), carried, current)?;
         Ok((map, current))
     }
@@ -137,6 +119,41 @@ impl Explorer {
             .rejoin(plan, None, Vec::new(), current)
             .expect("fewer nodes than the tree on view fit");
         (map, current)
+    }
+
+    /// The top-level folders of a join that puts `folder` in its `place`:
+    /// every top-level folder on view except the one it replaces and those
+    /// it lists, which it takes in. Also gives each old node whose state
+    /// goes to `folder` with its node there.
+    fn plan(&self, folder: &Tree, place: Place) -> (Vec<Source>, Vec<(NodeId, NodeId)>) {
+        let takes_in = folder.root_path().is_absolute() && folder.kind(NodeId::ROOT) == Kind::Dir;
+        let listed = |top: NodeId| {
+            let path = self.tree.abs_path(top);
+            folder
+                .find_abs(&path)
+                .filter(|&node| takes_in && folder.kind(node).is_folder())
+        };
+        let tops = self.tops();
+        let (mut plan, mut carried) = (Vec::new(), Vec::new());
+        for (ix, &top) in tops.iter().enumerate() {
+            match place {
+                Place::At(at) if ix == at => plan.push(Source::Scanned),
+                Place::For(replaced) if replaced == top => {
+                    plan.push(Source::Scanned);
+                    carried.push((top, NodeId::ROOT));
+                    continue;
+                }
+                _ => {}
+            }
+            match listed(top) {
+                Some(node) => carried.push((top, node)),
+                None => plan.push(Source::Kept(top)),
+            }
+        }
+        if matches!(place, Place::At(at) if at >= tops.len()) {
+            plan.push(Source::Scanned);
+        }
+        (plan, carried)
     }
 
     /// The top-level folders a change keeps or replaces: those of a joined

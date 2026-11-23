@@ -464,27 +464,6 @@ fn a_joined_node_knows_its_place_on_disk() {
 }
 
 #[test]
-fn a_part_inside_a_folder_takes_its_path_and_a_copy_of_its_sizes() {
-    let scan = folder_at(
-        "/work/p",
-        &[("inner/a.txt", 3), ("inner/b.txt", 4), ("c.txt", 5)],
-    );
-    let inner = id(&scan, "inner");
-    let tree = Tree::join(&[(&scan, inner)]).unwrap();
-    let top = id(&tree, "inner");
-    assert_eq!(tree.abs_path(top), PathBuf::from("/work/p/inner"));
-    assert_eq!(tree.size(top), Some(7));
-    assert_eq!(tree.size(NodeId::ROOT), Some(7));
-    // From a tree of paths, a part's path stays relative.
-    let memory = Tree::from_paths(&["docs/a.md"]).unwrap();
-    let tree = Tree::join(&[(&memory, id(&memory, "docs"))]).unwrap();
-    assert_eq!(
-        tree.abs_path(id(&tree, "docs/a.md")),
-        PathBuf::from("docs/a.md")
-    );
-}
-
-#[test]
 fn a_joined_folder_shares_its_sizes_with_its_scan() {
     let mut raw = super::RawTree::new("late", false).unwrap();
     let file = raw.push(0, "f.txt", Kind::File).unwrap();
