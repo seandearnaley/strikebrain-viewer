@@ -6,6 +6,7 @@
 //! one backwards pass for subtree ends and folder sizes.
 
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
 use fixedbitset::FixedBitSet;
@@ -13,6 +14,9 @@ use fixedbitset::FixedBitSet;
 use super::names::{NameArena, extension_of};
 use super::{Kind, Tree, TreeError, sibling_order, to_u32};
 use crate::NodeId;
+
+/// Children to sort before a second thread is worth starting.
+const PARALLEL_SORT_MIN: usize = 1 << 14;
 
 /// The parent of the root, and of nodes the tree should drop.
 pub(crate) const NO_PARENT: u32 = u32::MAX;
@@ -66,6 +70,11 @@ impl RawTree {
         self.kind[raw as usize]
     }
 
+    /// Changes the node's kind, for a folder found unreadable after it was added.
+    pub(crate) fn set_kind(&mut self, raw: u32, kind: Kind) {
+        self.kind[raw as usize] = kind;
+    }
+
     /// Builds the tree rooted at raw index 0.
     pub(crate) fn build(self, root_path: PathBuf) -> Result<Tree, TreeError> {
         let (child_start, child_ids) = self.sorted_children();
@@ -94,8 +103,45 @@ impl RawTree {
                 *slot += 1;
             }
         }
+        self.sort_siblings(&start, &mut ids);
+        (start, ids)
+    }
+
+    /// Sorts each folder's slice of `ids` into canonical order. Folders are
+    /// independent, so large trees spread them over threads in contiguous
+    /// runs of about equal length.
+    fn sort_siblings(&self, start: &[u32], ids: &mut [u32]) {
+        let mut folders = Vec::new();
+        let mut rest = ids;
         for window in start.windows(2) {
-            let siblings = &mut ids[window[0] as usize..window[1] as usize];
+            let (siblings, tail) =
+                std::mem::take(&mut rest).split_at_mut((window[1] - window[0]) as usize);
+            rest = tail;
+            if siblings.len() > 1 {
+                folders.push(siblings);
+            }
+        }
+        let total: usize = folders.iter().map(|siblings| siblings.len()).sum();
+        let threads = std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
+        let run_len = total.div_ceil(threads).max(PARALLEL_SORT_MIN);
+        std::thread::scope(|scope| {
+            let mut run = Vec::new();
+            let mut run_size = 0;
+            for siblings in folders {
+                run_size += siblings.len();
+                run.push(siblings);
+                if run_size >= run_len {
+                    let full = std::mem::take(&mut run);
+                    run_size = 0;
+                    scope.spawn(move || self.sort_runs(full));
+                }
+            }
+            self.sort_runs(run);
+        });
+    }
+
+    fn sort_runs(&self, folders: Vec<&mut [u32]>) {
+        for siblings in folders {
             siblings.sort_unstable_by(|&a, &b| {
                 sibling_order(
                     self.kind[a as usize],
@@ -105,7 +151,6 @@ impl RawTree {
                 )
             });
         }
-        (start, ids)
     }
 
     /// Raw indices in depth-first pre-order from the root, with each depth.
@@ -279,13 +324,41 @@ mod tests {
     #[test]
     fn an_unreadable_folder_is_a_leaf() {
         let mut raw = RawTree::new("root").unwrap();
-        let dir = raw.push(0, "locked", Kind::Unreadable, 0).unwrap();
+        let dir = raw.push(0, "locked", Kind::Dir, 0).unwrap();
         raw.push(dir, "inside", Kind::File, 1).unwrap();
+        raw.set_kind(dir, Kind::Unreadable);
         assert_eq!(raw.kind(dir), Kind::Unreadable);
         let tree = raw.build(std::path::PathBuf::new()).unwrap();
         assert_eq!(tree.node_count(), 2);
         assert_eq!(tree.kind(NodeId::new(1)), Kind::Unreadable);
         assert_eq!(tree.subtree(NodeId::new(1)), 1..2);
+    }
+
+    #[test]
+    fn a_tree_big_enough_to_sort_on_threads_keeps_canonical_order() {
+        let mut raw = RawTree::new("").unwrap();
+        // Two folders, each past the threshold, filled in reverse order.
+        let size = super::PARALLEL_SORT_MIN + 10;
+        for folder in ["b", "a"] {
+            let dir = raw.push(0, folder, Kind::Dir, 0).unwrap();
+            for i in (0..size).rev() {
+                raw.push(dir, &format!("f{i}"), Kind::File, 1).unwrap();
+            }
+        }
+        let tree = raw.build(std::path::PathBuf::new()).unwrap();
+        assert_eq!(tree.path(NodeId::new(1)), "a");
+        assert_eq!(tree.path(NodeId::new(2)), "a/f0");
+        assert_eq!(tree.path(NodeId::new(3)), "a/f1");
+        let b = tree.find("b").unwrap();
+        let names: Vec<&str> = tree
+            .children(b)
+            .iter()
+            .take(3)
+            .map(|&c| tree.name(c))
+            .collect();
+        assert_eq!(names, ["f0", "f1", "f2"]);
+        let last = *tree.children(b).last().unwrap();
+        assert_eq!(tree.name(last), format!("f{}", size - 1));
     }
 
     #[test]

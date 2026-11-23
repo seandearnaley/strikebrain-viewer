@@ -8,9 +8,11 @@ publish.workspace = true
 [dependencies]
 fixedbitset = "0.5.9"
 icu_collator = "2.4.0"
+ignore = "0.4.35"
 
 [dev-dependencies]
 proptest = "1.12.0"
+tempfile = "3.27.0"
 
 [lints]
 workspace = true

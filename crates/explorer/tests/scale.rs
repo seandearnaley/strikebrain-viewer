@@ -1,13 +1,18 @@
-//! Sanity timings on a synthetic million-node tree. Ignored by default; the
-//! numbers only mean something in release mode:
+//! Sanity timings on a synthetic million-node tree and on a real folder.
+//! Ignored by default; the numbers only mean something in release mode:
 //!
 //! `cargo test --release -p explorer --test scale -- --ignored --nocapture`
 //!
+//! The real-folder probe scans `$EXPLORER_SCAN_ROOT` and does nothing when
+//! it is unset.
+//!
 //! Real measurements belong in criterion benches.
 
+use std::path::Path;
+use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
-use explorer::{Check, FixedBitSet, NodeId, Selection, Tree};
+use explorer::{Check, FixedBitSet, NodeId, ScanOptions, Selection, Tree, scan};
 
 /// 10 top folders, 100 folders in each, 1,000 files in each of those:
 /// 1,001,011 nodes.
@@ -60,4 +65,28 @@ fn a_million_node_tree_builds_and_toggles_quickly() {
     eprintln!("build {} nodes: {built:?}", tree.node_count());
     eprintln!("toggle root: {toggled:?}; check root: {checked:?}");
     eprintln!("toggle + check root under a universe: {filtered:?}");
+}
+
+#[test]
+#[ignore = "timing probe; set EXPLORER_SCAN_ROOT and run in release with --ignored --nocapture"]
+#[expect(clippy::print_stderr, reason = "the probe reports its timings")]
+fn a_real_folder_scans_with_and_without_ignored_entries() {
+    let Some(root) = std::env::var_os("EXPLORER_SCAN_ROOT") else {
+        return;
+    };
+    for show_ignored in [false, true] {
+        let start = Instant::now();
+        let tree = scan(
+            Path::new(&root),
+            ScanOptions { show_ignored },
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        let elapsed = start.elapsed();
+        let files = tree.files().count_ones(..);
+        eprintln!(
+            "scan show_ignored={show_ignored}: {} nodes, {files} files in {elapsed:?}",
+            tree.node_count()
+        );
+    }
 }

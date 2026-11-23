@@ -2,10 +2,12 @@
 //! This crate has no UI dependency.
 
 mod bits;
+mod scan;
 mod selection;
 mod tree;
 
 pub use fixedbitset::FixedBitSet;
+pub use scan::{ScanError, ScanOptions, scan};
 pub use selection::{Check, Selection};
 pub use tree::{Kind, Tree, TreeError, compare_names};
 
