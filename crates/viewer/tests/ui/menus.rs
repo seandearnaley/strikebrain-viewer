@@ -99,7 +99,14 @@ fn about_shows_the_name_and_version(cx: &mut TestAppContext) {
 fn the_title_follows_the_folder_opened(cx: &mut TestAppContext) {
     let first = folder(&[("a.txt", "a")]);
     let (handle, view) = crate::open_app(cx, Launch::Folder(first.path().to_owned()));
-    let title = |cx: &mut TestAppContext| cx.update(|cx| view.read(cx).title().cloned());
+    // The title the window shows, as the platform holds it, and the one
+    // the view says it gave: the same.
+    let title = |cx: &mut TestAppContext| {
+        let shown = gpui_kit::VisualTestContext::from_window(handle, cx).window_title();
+        let given = cx.update(|cx| view.read(cx).title().map(ToString::to_string));
+        assert_eq!(shown, given, "the window shows the title the view gave it");
+        shown
+    };
     let name = first
         .path()
         .file_name()

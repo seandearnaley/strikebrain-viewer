@@ -24,14 +24,8 @@ fn main() {
     app.run(move |cx| {
         gpui_kit::init(cx);
         viewer::init(cx);
-        // Closing the last window quits, as ⌘Q does.
-        cx.on_window_closed(|cx, _| {
-            if cx.windows().is_empty() {
-                cx.quit();
-            }
-        })
-        .detach();
-
+        // Closing the window quits, as ⌘Q does: `open_main_window` makes
+        // its close button quit, keeping the window for the quit's save.
         let (_, view) = open_main_window(folder, store, true, cx).expect("open the main window");
         let view = view.downgrade();
         cx.spawn(async move |cx| {
