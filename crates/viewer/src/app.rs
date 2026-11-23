@@ -42,6 +42,9 @@ pub const EXPLORER_WIDTH: f32 = 300.0;
 /// Narrowest width the explorer pane can be dragged to, in pixels.
 pub const EXPLORER_MIN_WIDTH: f32 = 220.0;
 
+/// Narrowest width the stage keeps beside the explorer, in pixels.
+pub const STAGE_MIN_WIDTH: f32 = 220.0;
+
 /// How long a change waits before it is saved; changes meanwhile ride
 /// along with it.
 pub const SAVE_DELAY: Duration = Duration::from_millis(500);
@@ -174,10 +177,10 @@ impl AppView {
             explorer,
             stage,
             split,
-            explorer_width: px(session
-                .explorer_width
-                .unwrap_or(EXPLORER_WIDTH)
-                .max(EXPLORER_MIN_WIDTH)),
+            explorer_width: px(fit_explorer(
+                session.explorer_width.unwrap_or(EXPLORER_WIDTH),
+                window.viewport_size().width.as_f32(),
+            )),
             title: None,
             presenting: false,
             entered_fullscreen: false,
@@ -455,6 +458,12 @@ impl AppView {
     }
 }
 
+/// The explorer's width in a window `window` pixels wide: at least its
+/// minimum, and otherwise narrow enough to leave the stage its own.
+fn fit_explorer(width: f32, window: f32) -> f32 {
+    width.min(window - STAGE_MIN_WIDTH).max(EXPLORER_MIN_WIDTH)
+}
+
 /// The layout of a cached pane: it fills its side of the split. A cached
 /// view is laid out from this style instead of being measured.
 fn pane() -> StyleRefinement {
@@ -495,13 +504,15 @@ impl Render for AppView {
                         ),
                 )
                 .child(
-                    resizable_panel().child(
-                        div()
-                            .id("stage-pane")
-                            .test_support()
-                            .size_full()
-                            .child(self.stage.clone().cached(pane())),
-                    ),
+                    resizable_panel()
+                        .size_range(px(STAGE_MIN_WIDTH)..Pixels::MAX)
+                        .child(
+                            div()
+                                .id("stage-pane")
+                                .test_support()
+                                .size_full()
+                                .child(self.stage.clone().cached(pane())),
+                        ),
                 ),
         )
     }

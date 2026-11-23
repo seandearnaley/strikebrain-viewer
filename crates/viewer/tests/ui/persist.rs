@@ -546,3 +546,41 @@ fn a_disk_change_during_the_first_scan_keeps_the_saved_top_row(cx: &mut TestAppC
         "{written}"
     );
 }
+
+#[gpui_kit::test]
+fn a_saved_explorer_wider_than_the_window_fits_it(cx: &mut TestAppContext) {
+    let dir = folder(&[("a.txt", "a")]);
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    let state_dir = tempfile::tempdir().unwrap();
+    let path = state_dir.path().join("state.json");
+    std::fs::write(
+        &path,
+        format!(
+            r#"{{"version":1,"root":{root:?},"explorer_width":3000.0,
+            "window":{{"state":"windowed","x":0,"y":0,"width":1000,"height":700,"display":null}}}}"#
+        ),
+    )
+    .unwrap();
+    let (handle, view) = launch(cx, None, &StateStore::at(&path));
+    let (window, explorer, stage) = cx
+        .update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            (
+                window.viewport_size(),
+                window.find("explorer-pane").bounds(),
+                window.try_find("stage-pane").map(|stage| stage.bounds()),
+            )
+        })
+        .unwrap();
+    assert_eq!(window.width, px(1000.));
+    let stage = stage.expect("the stage is on screen");
+    assert!(
+        stage.size.width >= px(220.),
+        "the stage keeps room: {stage:?}, explorer {explorer:?}"
+    );
+    assert!(explorer.right() <= window.width);
+    // What is saved is what is drawn.
+    let width = cx.update(|cx| view.read(cx).explorer_width(cx));
+    assert_eq!(px(width), explorer.size.width);
+    cx.quit();
+}
