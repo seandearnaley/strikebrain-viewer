@@ -32,21 +32,28 @@ impl FilterJob {
         let superseded = || self.latest.load(Ordering::Relaxed) != self.generation;
         let visibility = filter_until(&self.tree, &self.query, self.kind, &superseded)?;
         Some(FilterResult {
+            tree: Arc::clone(&self.tree),
             text: self.text.clone(),
             kind: self.kind,
             generation: self.generation,
+            owner: Arc::clone(&self.latest),
             visibility,
         })
     }
 }
 
 /// A finished [`FilterJob`], to hand back to [`Explorer::apply_filter`] on
-/// the UI thread.
+/// the UI thread. It names the explorer and the tree it was made for, so it
+/// can only apply there.
 #[derive(Clone, Debug)]
 pub struct FilterResult {
+    /// The tree the visibility was computed on.
+    tree: Arc<Tree>,
     text: String,
     kind: KindFilter,
     generation: u64,
+    /// The generation cell of the explorer that made the job: its identity.
+    owner: Arc<AtomicU64>,
     visibility: Visibility,
 }
 
@@ -69,10 +76,14 @@ impl Explorer {
     }
 
     /// Shows a finished job's result and rebuilds the rows. Returns `false`,
-    /// changing nothing, when the result is stale: a newer job was started,
-    /// or the tree was replaced, after its job was made.
+    /// changing nothing, when the result is stale or foreign: a newer job
+    /// was started, or the tree was replaced, after its job was made; or
+    /// another explorer made the job.
     pub fn apply_filter(&mut self, result: FilterResult) -> bool {
-        if result.generation != self.generation.load(Ordering::Relaxed) {
+        let current = Arc::ptr_eq(&result.owner, &self.generation)
+            && Arc::ptr_eq(&result.tree, &self.tree)
+            && result.generation == self.generation.load(Ordering::Relaxed);
+        if !current {
             return false;
         }
         self.install(result.text, result.kind, result.visibility);

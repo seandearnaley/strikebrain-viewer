@@ -315,6 +315,36 @@ fn a_filter_result_for_the_old_tree_is_rejected() {
 }
 
 #[test]
+fn a_filter_result_from_another_explorer_is_rejected() {
+    let mut a = explorer(&["x/1.txt", "x/2.txt", "y.txt"]);
+    let job = a.filter_job("1", KindFilter::All);
+    let owned: Vec<String> = (0..200).map(|i| format!("big/f{i}.txt")).collect();
+    let paths: Vec<&str> = owned.iter().map(String::as_str).collect();
+    let mut b = explorer(&paths);
+    let _pending = b.filter_job("f1", KindFilter::All);
+    // Both explorers are at their first generation.
+    assert!(!b.apply_filter(job.run().unwrap()));
+    assert!(!b.visibility().is_active());
+    assert_eq!(rows(&b), ["big"]);
+    assert_eq!(b.check(NodeId::ROOT), Check::Off);
+}
+
+#[test]
+fn a_result_for_a_previous_tree_is_rejected_whenever_it_is_run() {
+    let mut explorer = explorer(&SAMPLE);
+    let finished = explorer.filter_job("md", KindFilter::All).run().unwrap();
+    let pending = explorer.filter_job("rs", KindFilter::All);
+    explorer.replace_tree(Arc::new(Tree::from_paths(&["a.md", "b.rs"]).unwrap()));
+    assert!(!explorer.apply_filter(finished));
+    // A job made for the old tree and run after the swap gives nothing.
+    assert!(pending.run().is_none());
+    // A job made for the new tree applies.
+    let fresh = explorer.filter_job("md", KindFilter::All).run().unwrap();
+    assert!(explorer.apply_filter(fresh));
+    assert_eq!(rows(&explorer), ["a.md"]);
+}
+
+#[test]
 fn replacing_the_tree_reruns_the_filter_last_asked_for() {
     let mut explorer = explorer(&["a/x.md", "b/y.md", "c.txt"]);
     explorer.set_filter("md", KindFilter::All);
