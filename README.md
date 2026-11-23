@@ -1,6 +1,6 @@
 # Strikebrain Viewer
 
-A native macOS viewer for folders of text and images: a file tree on the left, holding as many folders as you add, where you filter and check files, and a stage on the right that shows one checked file at a time. It is written in Rust on GPUI through GPUI Kit.
+A native macOS viewer for folders of text and images: a file tree on the left, holding as many folders as you add, where you filter and check files, and a stage on the right. Check two or more files and the stage shows them as a gallery, a grid of thumbnails and the tops of text files; open one and it fills the stage, where ← and → move through the rest. It is written in Rust on GPUI through GPUI Kit.
 
 ## Run
 
@@ -11,25 +11,26 @@ cargo run -p viewer -- ~/some/folder ~/another   # open these folders
 cargo run -p viewer                              # reopen the last folders as you left them
 ```
 
-Add Folder (⌘O, the toolbar's folder button, or File > Add Folder…) adds more; each folder is a top-level row, removed with the button that shows on its row when you point at it, or ⌘⌫. The app remembers the folders, their open folders and checks, the filter, sort, scroll, the file on the stage, the explorer's width and the window, in `~/Library/Application Support/ai.brainstrike.viewer/state.json`. It follows each folder on disk and refreshes that folder when its files change.
+Add Folder (⌘O, the toolbar's folder button, or File > Add Folder…) adds more; each folder is a top-level row, removed with the button that shows on its row when you point at it, or ⌘⌫. The app remembers the folders, their open folders and checks, the filter, sort, scroll, the file on the stage and whether the gallery showed, the explorer's width and the window, in `~/Library/Application Support/ai.brainstrike.viewer/state.json`. It follows each folder on disk and refreshes that folder when its files change.
 
 ## Keys
 
-| Key | Tree | Stage | Presentation |
-| --- | --- | --- | --- |
-| ↑ ↓ | Move focus | Scroll text | Scroll text |
-| → | Open folder, then first child | Next file | Next file |
-| ← | Close folder, then parent | Previous file | Previous file |
-| Space | Check or uncheck | Present | Next file |
-| Enter | Show the file | Present | |
-| Esc | Clear the filter | Back to the tree | Leave |
-| Home, End, Page Up, Page Down | Jump | Jump within text | Jump within text |
-| ⌘F | Filter | Filter | |
-| ⌘O | Add folders | Add folders | |
-| ⌘⌫ | Remove the focused folder | | |
-| Tab | Next pane | Next pane | |
+| Key | Tree | Gallery | Stage | Presentation |
+| --- | --- | --- | --- | --- |
+| ↑ ↓ | Move focus | Move focus up or down a row | Scroll text | Scroll text |
+| → | Open folder, then first child | Next tile | Next file | Next file |
+| ← | Close folder, then parent | Previous tile | Previous file | Previous file |
+| Space | Check or uncheck | Present from the focused tile | Present | Next file |
+| Enter | Show the file | Open the focused tile | Present | |
+| Esc | Clear the filter | Back to the tree | Back to the gallery, with two or more checked; else to the tree | Leave, to the gallery or the file |
+| Home, End | Jump | First or last tile | Jump within text | Jump within text |
+| Page Up, Page Down | Jump | A screen of rows | Jump within text | Jump within text |
+| ⌘F | Filter | Filter | Filter | |
+| ⌘O | Add folders | Add folders | Add folders | |
+| ⌘⌫ | Remove the focused folder | | | |
+| Tab | Next pane | Next pane | Next pane | |
 
-In the filter, Esc clears the text, then returns to the tree.
+A click on a tile opens it too; under the file, the grid button left of its place ("2 / 3") goes back to the gallery. In the filter, Esc clears the text, then returns to the tree.
 
 ## Build the app bundle
 

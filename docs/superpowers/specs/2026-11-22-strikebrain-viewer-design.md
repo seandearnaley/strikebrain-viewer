@@ -1,6 +1,6 @@
 # Strikebrain Viewer design
 
-Status: design approved by Sean on 2026-11-22. Milestones 0 to 5 are built (2026-11-23), with the final review's fixes, and milestone 6, several folders (2026-11-23); where the build settled a question the design left open, the section below says so.
+Status: design approved by Sean on 2026-11-22. Milestones 0 to 5 are built (2026-11-23), with the final review's fixes, milestone 6, several folders, and milestone 7, the gallery (2026-11-23); where the build settled a question the design left open, the section below says so.
 Companion page: https://claude.ai/artifact/4PaAcuEDiMKYJKyEFCpkD3
 
 ## Purpose
@@ -8,7 +8,7 @@ Companion page: https://claude.ai/artifact/4PaAcuEDiMKYJKyEFCpkD3
 A native desktop viewer for text and image files.
 
 - Left pane: brainstrike's file explorer, ported to Rust, holding any number of folders. Filter the tree, check files.
-- Right pane: a stage showing one file at a time from the checked set. Arrow keys move through the set.
+- Right pane: a stage. Two or more checked files show as a gallery, a grid of tiles; one file opened from it, or from the tree, fills the pane, and arrow keys move through the checked set.
 - Space on the stage starts a fullscreen presentation.
 
 Goals, in order: speed at million-file scale, a small codebase, and code Sean can learn Rust and GPUI from.
@@ -18,7 +18,7 @@ Platform: macOS on Apple silicon. GPUI also targets Windows and Linux. Nothing h
 ## Settled decisions
 
 1. **GPUI through GPUI Kit.** `gpui-kit = "=0.10.0"`. The explorer tree is built directly on GPUI's `uniform_list`, not the Kit's `Tree`.
-2. **The gallery is a stage.** One file fills the right pane. Milestone 7 adds a tile grid in front of it; see [Milestones 6 and 7](#milestones-6-and-7-several-folders-and-the-gallery).
+2. **The stage has two views.** The gallery, a grid of the checked files, and the file view, where one file fills the right pane and ← and → move through the checked files. The checks decide which shows; see [Stage](#stage) and [Gallery](#gallery).
 3. **Space depends on focus.** It toggles a checkbox in the tree and starts the presentation on the stage.
 4. **Filter terms are ANDed.** A file must contain every include term.
 5. **The filter block is small.** One text input and three kinds: All, Images, Text. No presets, chips, glob lists or regex mode.
@@ -35,6 +35,7 @@ Platform: macOS on Apple silicon. GPUI also targets Windows and Linux. Nothing h
 | `icu_collator` | 2 | Natural, case-insensitive name order. Matches brainstrike's `Intl.Collator(undefined, { numeric: true, sensitivity: "base" })`. |
 | `notify` 9, `directories` 6, `serde` 1, `serde_json` latest | | Milestone 5. No debouncer crate: the 150 ms window runs on GPUI's timer, which tests drive. |
 | `futures` 0.3 | | Milestone 5: the channel from the file watcher's thread into a GPUI task. GPUI exposes none and already builds this crate. |
+| `image` 0.25 | | Milestone 7: the gallery's thumbnails, decoded and scaled down to the tile; a GPUI image is made of its frames. GPUI already builds it with the same formats; it was a dev-dependency before. |
 | `criterion` 0.8, `proptest` latest, `tempfile` latest | | Dev-dependencies of the engine. |
 
 Rules for every dependency:
@@ -66,8 +67,9 @@ strikebrain-viewer/
    └─ viewer/             binary `strikebrain-viewer`
       ├─ src/main.rs, lib.rs, app.rs, launch.rs, menus.rs, keys.rs, theme.rs, assets.rs
       ├─ src/explorer_panel.rs, explorer_panel/{toolbar,filter_bar,header,selection_bar}.rs, row.rs, columns.rs
-      ├─ src/stage.rs, stage/{loading,render,load,text,images,cache}.rs
-      ├─ src/state.rs, state/{folders,rows,checks,scan,filter,restore,watch}.rs
+      ├─ src/stage.rs, stage/{loading,render,load,text,images,cache,gallery}.rs
+      ├─ src/stage/gallery/{grid,read,thumbs,tile}.rs   the gallery's layout, reading, cache and tiles
+      ├─ src/state.rs, state/{folders,rows,checks,gallery,scan,filter,restore,watch}.rs
       ├─ src/persist.rs, persist/{format,tests}.rs
       ├─ bundle/          Info.plist template and icon source for `just bundle`
       └─ tests/ui/main.rs and one module per area, tests/shots.rs, tests/icon.rs, tests/fixture/
@@ -202,23 +204,28 @@ One entity, `AppState`, owns:
 - the folders asked for, in the order added: each with its canonical path, its latest scan, its watcher, why it could not be read, and its part of a saved view waiting for its scan
 - `explorer: Explorer`, over the folders on screen
 - `current: Option<NodeId>`: the file on the stage
+- `view`: which of the stage's views shows, the gallery or the file view
+- `tile: Option<NodeId>`: the tile with keyboard focus in the gallery
 - `focus_row: usize`: the keyboard row in the tree
 - `presenting: bool`
 - a generation per folder's scan, and the latest task of each scan and of the filter
 
 Two views observe it: `ExplorerPanel` and `Stage`. The root view lays them out in the Kit's horizontal resizable split. The explorer starts 300 px wide with a 220 px minimum.
 
-Rules for `current`:
+Rules for `current` and the view:
 
-- Enter or a click on a file row sets it to that file, checked or not.
+- Enter or a click on a file row sets it to that file, checked or not, and shows the file view.
 - Checking a single file sets it to that file.
 - When it is `None` and the gallery becomes non-empty, it becomes the first gallery file.
 - Unchecking the current file moves it to the next gallery file, else the previous, else `None`.
+- After any change the person makes to the checks (a checkbox, Select all, Clear): with two or more files checked the gallery shows, its focus on the tile of `current` (or the checked file nearest it); with one, the file view shows that file; with none, the stage is blank and `current` is `None`.
+- A click or Enter on a tile sets `current` to its file and shows the file view. Esc there, or the grid button, shows the gallery again while two or more files are checked, its focus on `current`'s tile (or the checked file nearest it).
+- A rescan or a folder removed that leaves fewer than two checked files gives the gallery way to the file view; tile focus on a file that went moves to the checked file nearest `current`.
 - Next and previous move within the gallery. When `current` is not in the gallery, next goes to the first gallery file after it in display order and previous to the last one before it. With an empty gallery they do nothing.
 
 ### Launch
 
-- `strikebrain-viewer <folder>...` opens exactly those folders, in that order, each taking its saved view if it was saved (compared after canonicalizing). The filter, the sort, Show ignored, the file on the stage and the top row come back with any saved folder that opens; folders never saved open fresh.
+- `strikebrain-viewer <folder>...` opens exactly those folders, in that order, each taking its saved view if it was saved (compared after canonicalizing). The filter, the sort, Show ignored, the file on the stage, the stage's view and the top row come back with any saved folder that opens; folders never saved open fresh.
 - With no argument it reopens the saved folders with their views; a saved folder that no longer exists is dropped. With none left, or no usable saved state, it shows the empty state.
 - The window's bounds and the explorer's width are restored either way.
 - Add Folder, one action, adds folders beside those open and never replaces them: ⌘O, the toolbar's button, File → Add Folder…, the empty state's button, a folder given by the system ("Open With", or dropped on the Dock icon; the bundle declares `public.folder`, and it arrives as a `file://` URL), and every folder on the command line. The system picker allows several folders at once.
@@ -269,11 +276,14 @@ Not in version one: column resizing, a column menu, context menus, type-ahead, r
 
 ### Stage
 
+The stage has two views: the gallery (next section), and the file view, which shows `current` filling the pane and is described here. Which shows follows the rules for `current` above. While the gallery shows the file view rests: nothing is read for it, and a read in flight is dropped. Back in the file view, a file other than the one it last showed starts blank until its read lands, so the old file never shows meanwhile.
+
 - `Image`: GPUI's `img()` from the file path, scaled down to fit and never enlarged.
 - `Markdown`: the Kit's `TextView`, scrollable, in a centred column 720 px wide at most.
 - `Code`: the Kit's editor, read-only, with line numbers and `syntect` highlighting chosen by extension. Plain prose (`.txt`, `.text`, `.log`, and names with no extension such as `LICENSE`, but not `Makefile`, `Dockerfile` and the other build files highlighted by name, nor `CMakeLists.txt`) is soft-wrapped with no line numbers.
 - `Unsupported`: the file's name and size, centred and muted.
-- When `current` is in the gallery, a position such as "2 / 3" sits at the bottom centre.
+- When `current` is in the gallery, a position such as "2 / 3" sits at the bottom centre, in a 32 px bar.
+- While two or more files are checked, a grid button sits in that bar just left of the position (the position stays centred; it sits there alone when `current` is not checked): a 24 px ghost icon button, muted, tooltip and accessible label "Gallery". It shows the gallery, keyboard focus on the stage.
 - A blank stage draws nothing.
 
 The stage reads the first 8 KB on the background executor and asks `viewer_for`. Only regular files are opened: a symlink to a FIFO or a device is `Unsupported`. A picture GPUI cannot decode shows as `Unsupported`. Until a read lands the stage keeps what it showed.
@@ -290,16 +300,28 @@ Limits and caches:
 - Every load carries the id it was started for. A result for a file that is no longer `current` or a neighbour is dropped.
 - Both caches remember each file's size and modification time: after a refresh a changed file is read again and an unchanged one keeps its decoded pixels, its text and its scroll position.
 
+### Gallery
+
+The checked files, in gallery order, as a grid of tiles. Built in milestone 7.
+
+- **Layout.** Columns fill the width: tiles at least 180 px wide, 4:3, 16 px apart and 16 px in from the pane's edges, in whole pixels (what is left stays at the right edge). Under each tile its name, 8 px below, on a 16 px line, truncated. A pane narrower than a tile still has one column.
+- **Virtualized.** One GPUI `uniform_list` of rows of tiles, inside a `container_query` that hands it the pane's size before the rows are built: the columns, the tile size and the row height follow from the width, so the list builds only the rows on screen, whatever the number of files. Each frame asks the engine for the files from its first row's first tile on (`Explorer::gallery_from`).
+- **A tile.** A picture is fitted inside the tile, 8 px in, scaled down and never up. A text, code or Markdown file shows its first lines as plain text, the monospace font at 9 px on 12 px lines, in the foreground colour, clipped to the tile at its last whole line, with no highlighting; tabs are four spaces. A file the file view cannot show (a binary file, one over the size limits, a picture that cannot be decoded) is its kind's icon, as in the tree, 32 px, muted. A tile shows nothing until its content is read: no spinner. The tile of `current` has the accent background and its name in the foreground colour; others are muted, a little darker on hover.
+- **Loading.** Tiles are read on the background executor, at most four at once, nearest the viewport first: the rows drawn, then the row below, then the row above. Work for a tile that leaves those rows is dropped, and all of it while the gallery is hidden. A read follows the file view's checks (only regular files, opened without waiting, the engine's `viewer_for`, the size limits). A picture is decoded whole by the `image` crate, as GPUI's loader decodes it (EXIF orientation applied), into one buffer the file's size, then scaled down to fit the tile at the display's scale; an animation keeps its first frame; an SVG is drawn by GPUI's renderer at its own size, or at the tile's when smaller. A text keeps its first 48 lines of at most 160 columns.
+- **Cache.** Tiles' content lives in its own least-recently-used cache of 128 MB, apart from the file view's: a picture costs its pixels, a text its bytes, each entry 256 bytes more. An evicted picture's GPU texture is released. Each entry keeps its file's stamp: after a rescan a tile shows what it has while its file is checked again, and is read again only if it changed. A thumbnail made for a smaller tile is read again; one made for a larger tile serves a smaller one.
+- **Focus.** The stage holds keyboard focus and declares the `Gallery` key context while the gallery shows. The focused tile is kept by node, as the tree's focus row is, and is always a checked file; it shows the focus ring, 3 px outside the tile, after a key press, until a pointer press, as the tree's does. The gallery keeps the focused tile on screen when a key moves it, when it comes back from the file view or a presentation, and when the columns change.
+- **Opening.** A click on a tile, or Enter on the focused tile, opens its file in the file view, with keyboard focus on the stage.
+
 ### Presentation
 
-- Starts from the stage with Space or Enter when the stage shows a file.
+- Starts from the file view with Space or Enter when the stage shows a file, and from the gallery with Space, at its focused tile (which becomes `current`).
 - Sets `presenting`, hides the explorer and the position indicator, and makes the window fullscreen if it is not already.
-- Leaving restores the split and exits fullscreen only if presenting entered it.
+- Leaving restores the split, and the view the presentation started from, and exits fullscreen only if presenting entered it. Back in the gallery, its focus is on the file presented last, scrolled into view.
 - Movement stops at the first and last gallery file. It does not wrap.
 
 Milestone 4 settled the rest:
 
-- The presentation is the same stage entity, laid out alone: its file, caches, loaded text and scroll positions carry across both ways. The root view owns the split's sizes, so the explorer comes back at the width it had. `current` is unchanged by entering or leaving.
+- The presentation is the same stage entity, laid out alone: its file, caches, loaded text and scroll positions carry across both ways. The root view owns the split's sizes, so the explorer comes back at the width it had. `current` is unchanged by leaving, and by entering from the file view; entering from the gallery makes it the focused tile's file.
 - An image is presented on black in both appearances, as a photo viewer does, using the whole window, scaled down to fit and never enlarged; Markdown and code keep the stage surface and look as on the stage. In the split the stage keeps its surface for images too. Nothing else is drawn: no explorer, divider or position. The pointer stays visible.
 - A file outside the gallery is presented alone when the gallery is empty; with a gallery, → and ← go to the nearest gallery file as on the stage.
 - Keys the Presentation column leaves blank (Enter, ⌘F, ⌘O, Tab) do nothing while presenting: they are bound to `NoAction` there. ⌘O is ignored rather than leaving first, so a stray key never ends a presentation. ⌘Q quits.
@@ -309,21 +331,22 @@ Milestone 4 settled the rest:
 
 ### Keys
 
-Bindings are GPUI actions bound per key context: `Explorer`, `Filter`, `Stage`, `Presentation`.
+Bindings are GPUI actions bound per key context: `Explorer`, `Filter`, `Gallery`, `Stage` (the file view), `Presentation`.
 
-| Key | Explorer | Stage | Presentation |
-| --- | --- | --- | --- |
-| ↑ ↓ | Move focus | Scroll text | Scroll text |
-| → | Open folder, then first child | Next file | Next file |
-| ← | Close folder, then parent | Previous file | Previous file |
-| Space | Toggle checkbox | Present | Next file |
-| Enter | Show file on stage; nothing on a folder | Present | |
-| Esc | Clear the filter | Focus the explorer | Leave |
-| Home, End, Page Up, Page Down | Jump | Jump within text | Jump within text |
-| ⌘F | Focus the filter | Focus the filter | |
-| ⌘O | Add folders | Add folders | |
-| ⌘⌫ | Remove the focused top-level folder | | |
-| Tab | Next pane | Next pane | |
+| Key | Explorer | Gallery | Stage | Presentation |
+| --- | --- | --- | --- | --- |
+| ↑ ↓ | Move focus | Focus the tile a row up or down; ↓ onto a shorter last row, its last tile | Scroll text | Scroll text |
+| → | Open folder, then first child | Next tile, onto the next row from a row's end | Next file | Next file |
+| ← | Close folder, then parent | Previous tile, onto the row above from a row's start | Previous file | Previous file |
+| Space | Toggle checkbox | Present from the focused tile | Present | Next file |
+| Enter | Show file on stage; nothing on a folder | Open the focused tile | Present | |
+| Esc | Clear the filter | Focus the explorer | Back to the gallery with two or more files checked; otherwise focus the explorer | Leave |
+| Home, End | Jump | First tile, last tile | Jump within text | Jump within text |
+| Page Up, Page Down | Jump | Move focus by a screen of rows | Jump within text | Jump within text |
+| ⌘F | Focus the filter | Focus the filter | Focus the filter | |
+| ⌘O | Add folders | Add folders | Add folders | |
+| ⌘⌫ | Remove the focused top-level folder | | | |
+| Tab | Next pane | Next pane | Next pane | |
 
 In the filter input, Esc clears a non-empty query and otherwise moves focus to the tree. Tab order is filter, tree, stage.
 
@@ -344,13 +367,15 @@ Checked and mixed checkboxes use primary with a white check or dash. Unchecked b
 
 ### Accessibility
 
-The tree and its rows carry AccessKit roles, labels and checked state. Tests and agents find rows by the same labels a screen reader uses. Every icon button has a label.
+The tree and its rows carry AccessKit roles, labels and checked state. The gallery is a grid (accessible name "Gallery") of rows of grid cells, each labelled with its file's name, selected when it is `current`, with its row and column; a picture tile holds an image of the same name, a text tile's text is its value. Tests and agents find rows and tiles by the same labels a screen reader uses. Every icon button has a label.
 
 ### Copy
 
 Only these strings appear in the interface: "Filter" as the input placeholder, "All", "Images", "Text", "Name", "Size", "Type", "N selected", "Add Folder", tooltips on icon buttons ("Remove Folder" on a folder row's), a folder row's path as its tooltip, the application's name as the window title with other than one folder open, and operating system error messages. No taglines, no helper text.
 
 Milestone 5 adds the menu bar's items (named in Launch), the About alert ("Strikebrain Viewer", "Version N", "OK"), and the Refresh tooltip while a folder's changes are not followed: "Refresh. Changes on disk are not followed: " and the error.
+
+Milestone 7 adds file names under the gallery's tiles and "Gallery": the grid button's tooltip and label, and the grid's accessible name.
 
 ## Milestones 6 and 7: several folders and the gallery
 
@@ -411,6 +436,17 @@ Keys in the gallery, a new `Gallery` key context:
 
 Budgets: with 100,000 files checked the gallery draws its first frame within 16 ms of the stage being asked, and a scroll frame stays within the display's frame time; thumbnails never hold more than their byte budget.
 
+Milestone 7 is built (2026-11-23); the sections above describe it (State, Stage, Gallery, Presentation, Keys, Accessibility, Copy, saved state, Budgets). As built, where the build settled what this section left open or had to differ:
+
+- **The grid** is GPUI's `uniform_list` of rows of tiles inside GPUI's `container_query`, which hands it the pane's size during layout, so the columns are known before any row is built. The Kit's `GridLayout` is a dashboard grid that lays out every item, and its `VirtualList` needs the item sizes up front; neither fits. A frame asks the engine for one screen of files from the first row on: 2.5 µs from the middle of a million checked files under the name sort, 65 ns under another (bench `other`). Measured (release, M4 Max, a 1000 x 700 window, 100,000 checked files in memory): Select all to the gallery's first frame 5.6 ms, the tree's redraw included; back from the file view 3.6 ms; a scroll frame 0.29 to 0.33 ms median and 0.42 ms at most, at the top and the end, and 0.32 ms flinging 400 px a frame (`timing_the_gallery_over_a_hundred_thousand_checked_files`). Only the rows on screen are built (`a_hundred_thousand_checked_files_build_only_the_rows_on_screen`).
+- **Where the view lives.** The view and the focused tile are the state's (`state/gallery.rs`), so the rules, rescans (the focused tile is carried by path like the focus row), the presentation and the saved state see them; the gallery's view (`stage/gallery.rs`) keeps only its layout, scroll, focus ring and cache, and redraws only when the gallery's content, `current`, the focused tile or its own state changes, not on every key in the tree.
+- **Thumbnails** need the `image` crate as a runtime dependency (GPUI's loader decodes at full size and keeps the result; a GPUI image is built from `image::Frame`s). They are decoded for the tile at the display's scale exactly; one made for a larger tile serves a smaller one, so shrinking the pane reads nothing and growing it reads the tiles on screen again. Their cache holds 128 MB: a 6K display's stage covered in tiles holds some 80 MB at its scale.
+- **The file view rests** while the gallery shows, so a gallery's first frame never waits on the file view's read of `current` and its neighbours.
+- **Arrow keys** move in reading order: → from a row's last tile goes to the next row's first, ← back; ↓ from a tile with nothing under it in a shorter last row goes to the last tile. Page Up and Page Down move by the whole rows that fit.
+- **After a check changes**, the gallery's focus follows `current`, so checking a file in the tree shows its tile, scrolled into view.
+- **No files checked** clears `current`, as the rule says, even when it was a file opened from the tree: unchecking the last checked file always leaves a blank stage.
+- **Tests that changed with the rules:** where a test checked several files and went on in the file view, it now opens the first tile first (`stage::open_checked`, a presentation test, the flick probe); Esc from the code view with two files checked now returns to the gallery before a second Esc reaches the explorer; the test of unchecking the current file reads `current` while three files show as a gallery.
+
 ## Left out on purpose
 
 From brainstrike: the tokens column and token indexing; the "This thread" column, thread presets and checkout header; attach to thread, export and split into parts; workspace tabs and the editor; the selection settings popover and selection cap; context actions; view filter presets, chips, glob lists and regex mode; lazy folder loading and its spinners; the 10,000-entry listing cap; the expand-all confirmation.
@@ -422,7 +458,7 @@ From a typical image viewer: zoom and pan, HEIC, AVIF and RAW formats, editing o
 Three tiers.
 
 1. **Engine.** Plain `#[test]` and `proptest` in `explorer`. Property tests compare each fast path with a brute-force version: check state against a recursive count, rows against a naive recursive walk, filter visibility against a per-node check, sort against a full comparison sort. Scan tests use `tempfile`.
-2. **UI integration.** `#[gpui_kit::test]` in `crates/viewer/tests/ui/`: `main.rs` holds the shared helpers and one module per area (rows, checks, filter, header, keyboard, toolbar, folders, launch, stage, presentation, refresh, watch, persist, menus, races, timing probes and others). Each opens a headless window on the real root view over a `Tree::from_paths` fixture or a temporary folder, drives it with clicks and key presses, and asserts on labels, values, focus and model state. `crates/viewer/tests/shots.rs` (`just shot`) renders key states to PNG.
+2. **UI integration.** `#[gpui_kit::test]` in `crates/viewer/tests/ui/`: `main.rs` holds the shared helpers and one module per area (rows, checks, filter, header, keyboard, toolbar, folders, launch, stage, gallery, presentation, refresh, watch, persist, menus, races, timing probes and others). Each opens a headless window on the real root view over a `Tree::from_paths` fixture or a temporary folder, drives it with clicks and key presses, and asserts on labels, values, focus and model state. `crates/viewer/tests/shots.rs` (`just shot`) renders key states to PNG.
 3. **Benchmarks.** `criterion` in `explorer/benches`, over a synthetic million-node tree and a real scan.
 
 Behaviour tests ported from brainstrike's suite, by name:
@@ -459,6 +495,9 @@ Targets, not measurements. Milestone 1 ends when the benchmarks meet them or exp
 | Check or clear a folder | 1 M files | 1 ms |
 | Expand or collapse, rows rebuilt | 1 M visible rows | 16 ms |
 | Scroll | any | every frame at display rate |
+| Show the gallery, first frame | 100,000 checked files | 16 ms (measured 5.6 ms from Select all, tree included; 3.6 ms back from the file view; milestone 7) |
+| Scroll the gallery | 100,000 checked files | the display's frame time (measured 0.29 to 0.33 ms median, 0.42 ms at most, at the top and the end; milestone 7) |
+| Thumbnails held | any | 128 MB, never more (milestone 7) |
 
 ## Milestones
 
@@ -473,7 +512,7 @@ Each ends with something that runs and tests that hold it. Each gets its own imp
 | M4 Presentation | Fullscreen, keys, leave. | Entering and leaving keeps the current file and the window's prior fullscreen state. Done: `tests/ui/presentation.rs`. |
 | M5 Finish | Saved state, live refresh, a packaged `.app`. | Quitting and reopening returns the same view. Done: `tests/ui/persist.rs` saves a real folder's view as the app runs and quits, launches a second app over the same state file, and compares every piece. |
 | M6 Several folders | Folders as top-level rows of one joined tree; Add Folder and Remove Folder; per-folder scans, sizes, live refresh and saved views; the old state file still loads. | Several folders come back in order, each with its own view, and adding 6,000 files to a 1 M-entry tree meets its budget. Done: `tests/ui/persist.rs` (`several_folders_come_back_in_order_each_with_its_own_view`), `tests/ui/folders.rs`, `tests/ui/launch.rs`; bench group `folders`, 7.9 ms. |
-| M7 Gallery | A grid of the checked files in front of the stage. | See [Milestone 7](#milestone-7-the-gallery). |
+| M7 Gallery | A grid of the checked files in front of the stage. | Which view shows follows the checks; tiles open, Esc and the grid button go back; the grid builds only the rows on screen at 100,000 files within budget. Done: `tests/ui/gallery.rs`, `tests/ui/persist.rs` (`the_stage_comes_back_in_the_view_it_showed`), the probe `timing_the_gallery_over_a_hundred_thousand_checked_files`. |
 
 Milestone 0 detail:
 
@@ -486,12 +525,12 @@ Milestone 5 detail:
 
 As built:
 
-- **File.** `~/Library/Application Support/ai.brainstrike.viewer/state.json` on macOS (`directories`' config folder for the bundle identifier). `STRIKEBRAIN_VIEWER_STATE=<file>` points a run elsewhere. Fields (version 2, milestone 6): `version` (2), `folders` (in the order added, each `root`, absolute and canonical, `expanded` and `selected` (`folders` and `files`), paths relative to the folder, `""` the folder itself), `show_ignored`, `current` and `first_visible_row` (paths on disk), `query`, `kind`, `sort` (`key`, `direction`), `explorer_width`, `window` (`state` windowed, maximized or fullscreen; `x`, `y` the frame's top-left corner relative to its display and `width`, `height` the content's size, title bar excluded, which is what a window opens with; the display's UUID). A version 1 file (one `root`, its `expanded`, `selected`, `current` and `first_visible_row` relative to it) loads as one folder, open. A missing, unreadable, malformed or other-version file is ignored and the app starts fresh; it is replaced at the next save. Unusable values (a relative root or path, a non-positive size) are dropped.
+- **File.** `~/Library/Application Support/ai.brainstrike.viewer/state.json` on macOS (`directories`' config folder for the bundle identifier). `STRIKEBRAIN_VIEWER_STATE=<file>` points a run elsewhere. Fields (version 2, milestone 6): `version` (2), `folders` (in the order added, each `root`, absolute and canonical, `expanded` and `selected` (`folders` and `files`), paths relative to the folder, `""` the folder itself), `show_ignored`, `current` and `first_visible_row` (paths on disk), `view` (`file` or `gallery`, milestone 7; a file without it shows the file view), `query`, `kind`, `sort` (`key`, `direction`), `explorer_width`, `window` (`state` windowed, maximized or fullscreen; `x`, `y` the frame's top-left corner relative to its display and `width`, `height` the content's size, title bar excluded, which is what a window opens with; the display's UUID). A version 1 file (one `root`, its `expanded`, `selected`, `current` and `first_visible_row` relative to it) loads as one folder, open. A missing, unreadable, malformed or other-version file is ignored and the app starts fresh; it is replaced at the next save. Unusable values (a relative root or path, a non-positive size) are dropped.
 - **Checks, compactly.** A folder whose every file is checked is one entry under its top-level folder's `folders` (the top-level folder itself is `""`); other checked files are listed under `files`. Select all saves as one entry per top-level folder. Restoring a folder entry checks every file in it at that time, including files added since. A rescan does the same, so a session and a relaunch agree: a folder whose every file is checked (each top-level folder, after Select all) keeps every file checked when files appear in it, by Refresh or live refresh; a file added to a partly checked folder comes in unchecked. Measured (release, M4 Max): 100,000 checked files with no folder fully checked save as 3.96 MB in 22 ms on the background executor (names 12 ms, encoding 5 ms, writing 5 ms) and read back in 4 ms; all 100,000 checked save as 402 bytes. The UI thread copies two bit sets, under a microsecond at this size.
 - **First visible row** is stored by its path on disk, not index, so it survives files added above it. Restoring puts that row at the top of the tree and gives it keyboard focus. Under a Size sort it waits for sizes, which reorder the rows.
 - **When it saves.** Half a second after a change, at most once per half second (a change while a save waits rides along), and when the app quits. Closing the window quits, so that save runs with the window still there. A save copies the state on the UI thread and names, encodes and writes it on the background executor; saves land in the order they were taken, an unchanged state is not written again, and the file is written to a temporary name, synced to disk and renamed over the old one; a write that fails removes the temporary file. Scrolling alone does not schedule a save; the next save or the quit records it.
 - **Nothing on screen to save.** Refresh or Show ignored before a folder's first scan lands scan it again with its saved view still waiting, and that view is what is saved meanwhile; a folder added and still scanning saves as open, as it will show. Since milestone 6, a saved folder that no longer exists at launch is dropped, and folders named on the command line are exactly the folders saved next. A folder that vanishes while open (moved, deleted, unmounted) shows as an unreadable row and keeps its open folders and checks as the ones saved; Refresh once it is back restores them.
-- **Restoring** happens in steps: the filter and Show ignored apply before any scan, so the first trees are already right; the sort applies to the first tree; each folder's open folders and checks apply when that folder's first scan lands; `current` and the top row once every folder is on screen. Window bounds go to the window when it opens, moved and shrunk onto the saved display's visible area, or the primary display's when that display is gone. A fullscreen the presentation made is saved as the window it came from. The explorer's width is fitted to the window: at least 220 px, leaving the stage at least 220 px. A disk change during a first scan does not lose the saved top row: the rescan that follows puts it at the top.
+- **Restoring** happens in steps: the filter and Show ignored apply before any scan, so the first trees are already right; the sort applies to the first tree; each folder's open folders and checks apply when that folder's first scan lands; `current`, the stage's view and the top row once every folder is on screen. The gallery comes back only while two or more files are checked, focused on `current`'s tile. Window bounds go to the window when it opens, moved and shrunk onto the saved display's visible area, or the primary display's when that display is gone. A fullscreen the presentation made is saved as the window it came from. The explorer's width is fitted to the window: at least 220 px, leaving the stage at least 220 px. A disk change during a first scan does not lose the saved top row: the rescan that follows puts it at the top.
 - **Live refresh.** Each folder has its own watcher (`notify`'s FSEvents backend; creations, removals and modifications, no reads), on its own thread, feeding a channel; a change rescans only its folder (milestone 6). A GPUI task waits for a change, gathers more for 150 ms on GPUI's timer, then asks `explorer::changes_matter`, off the UI thread, whether a new scan would show any of them: a path the tree lists matters; otherwise the first part of the path the tree lacks matters only if it still exists and the scan's own walker, with the same ignore rules, would list it. Changes inside `.git`, to `.DS_Store`, under ignored folders such as `target/` and `node_modules/`, and to the app's own state file and its temporary name never rescan. Measured: 400 files written under an ignored `target/` and a log ignored at the top, over a second, caused no rescan; one new file in `src/` caused exactly one. Changes that arrive during a folder's first scan wait for its tree and are judged against it. A change while a folder's scan runs asks for one more scan of it when it lands, never more. A watcher error, or a watcher that lost track with no path to name, rescans its folder once. A watcher is dropped with its folder or the state. One that cannot start (the folder is missing, a watch limit) leaves the folder unfollowed and turns Refresh the warning colour, its tooltip giving the reason; Refresh starts it again. A rescan that finds the file on the stage unchanged (size and modification time) neither reads nor rebuilds its view, so its scroll, selection and keyboard focus stay; a changed file is read again, and focus leaves the view only when the file or its viewer changes. A Markdown link opens only when it is `http`, `https` or `mailto`.
 - **Bundle.** `just bundle` builds the release profile (thin LTO, one codegen unit, debug info stripped, symbol names kept, panics unwind) and assembles `target/release/bundle/osx/Strikebrain Viewer.app` by hand, as the Kit's packaging guide does: the Info.plist template in `crates/viewer/bundle` with the version from Cargo, an `.icns` made with `sips` and `iconutil` from the 1024 px `icon.png` that `just icon` draws, and an ad-hoc signature. Measured on 2026-11-23: binary 26.1 MB (21.4 MB with symbol names stripped as well), bundle 25 MB; launching the bundled binary to its first on-screen window, 0.67 s the first time after a build and 0.20 s after.
 
@@ -515,6 +554,7 @@ Each is set up with its signature, doc comment and failing tests. Sean writes th
 - **Large photos.** GPUI decodes at full resolution. Measured in milestone 3 (release, M4 Max), an 8000 x 6000 picture decodes in 50 ms as a smooth PNG and 0.59 s as a grainy 44 MB JPEG, on the background executor, and holds 183 MB of pixels, plus as much again as a GPU texture while it is drawn; from the cache it draws in 3 to 5 ms. A cache bounded by count alone held some 1.5 GB of such photos, or about 740 MB of 24-megapixel ones. The cache now also has a byte budget, 512 MB, and pictures have size limits (64 MB on disk, 16 MB for an animation, 8 MB to be decoded ahead). Measured after (release, M4 Max): flicking through eight 6000 x 4000 JPEGs of 22 MB (92 MB of pixels each) at 0.2 s a step, the cache holds five, 458 MB, and the process's memory stops growing at the sixth (801 MB, from 343 MB with one). A single picture under the limit can still be larger than the budget; it stays alone. The real fix is still a loader that decodes at display size, which needs the `image` crate as a runtime dependency and the GIF, WebP and SVG paths GPUI's loader already has. Probes: `timing_a_large_photo`, `timing_flicking_through_large_photos`.
 - **Editor on large files.** The Kit's 0.10.0 source documents the editor as handling about 50,000 lines. Measured in milestone 3 (release, M4 Max, 27-byte lines, test build): 0.5 MB reaches the screen 13 ms after the click and scrolls at 0.45 ms a frame; 5.5 MB (200,000 lines) 50 ms and 1.1 ms; 10 MB (360,000 lines) 0.1 s and 2.6 ms; one 4.8 MB line 85 ms and 0.5 ms. Highlighting arrives later from the background executor: 0.85 s, 7 s and 13 s. So the text limit stays at 10 MB. Two costs remain. The Kit's syntect backend parses a document of up to 64 KB at once on the UI thread: the limit is a private constant (`SYNC_PARSE_MAX_BYTES`), the highlighter is not `Send`, and nothing public runs it elsewhere. Until milestone 4 every such file was parsed twice, because setting the editor's text with a language set parses it and the next frame parses it again; the stage now sets the text as plain text and then the language, so it is parsed once, in the first frame, at about 1.2 ms a KB. Measured in milestone 4 (release, M4 Max, syntax set loaded), click to first frame before and after: 8 KB 24 → 15 ms, 27 KB 71 → 37 ms, 62 KB 155 → 80 ms; a 68 KB file still shows in 5 ms and is highlighted 82 ms later in the background. The first file highlighted also loads syntect's syntax set, about 20 ms. So → through files of 30 to 64 KB still hitches by 40 to 80 ms a file. Removing that means a highlighter of our own, given to the editor through its public `set_highlighter_factory` and parsing on the background executor, with `syntect` (already built, through the Kit) as a direct dependency. And the editor copies its whole text into an accessibility value on every frame while an assistive technology is connected (always, in test builds): at 10 MB a test build grows by about 10 MB a frame until the allocator settles near 870 MB, which a release build without a screen reader does not do. Probe: `timing_the_code_view_on_large_files`.
 - **Markdown on large files.** The text view lays out only the blocks on screen: 0.25 ms a frame at 4 KB to 345 KB. It measures every block once when a document opens: 28 ms at 4 KB, 41 ms at 86 KB, 0.21 s at 345 KB. Opening a document whose text shares no prefix with the one before costs more, growing with the square of the size (release, M4 Max, click to first frame, two kinds of generated document): 0.07 to 0.12 s at 128 KB, 0.18 to 0.21 s at 256 KB, 0.32 to 0.34 s at 384 KB, 0.47 to 0.53 s at 512 KB, 0.93 to 0.97 s at 768 KB, 1.5 to 1.6 s at 1 MB, 5.1 to 5.3 s at 2 MB. So Markdown over 256 KB, the largest size measured under 0.3 s, opens in the code view: 10 ms at 256 to 512 KB, 17 ms at 1 MB, 29 ms at 2 MB. Probes: `timing_the_markdown_view_on_large_documents`, `timing_markdown_around_its_size_limit`.
+- **Thumbnails decode whole pictures.** The `image` crate has no reduced-size JPEG decode, so a tile's picture is decoded at full size, then scaled down; the full-size pixels live only while the tile is read, on the background executor, four at once. Measured (release, M4 Max, the test executor reading one tile after another): a grainy 22 MB, 6000 x 4000 JPEG takes about 200 ms a tile; forty of them took the process from 116 MB to 170 MB, then 177 MB after scrolling to the end, holding 14 MB of thumbnails. Before the picture was read into one buffer of its size, a buffer grown by doubling left macOS's allocator holding some 30 MB a photo (116 MB to 488 MB, then 782 MB). The file view reads text the old way, growing its buffer up to 10 MB; the flick probe sees no growth from it, but it has not been measured on large texts. Four whole 100-megapixel pictures at once would take about 1.2 GB for a moment; the `image` crate's 512 MB allocation limit refuses larger ones, which show their kind's icon. Probe: `timing_the_gallery_over_large_photos`.
 - **Small scroll steps far down a very long list.** GPUI keeps a list's scroll offset in an `f32`: `uniform_list`, the Kit's `VirtualList`, and `list()`, whose `ListState` anchors on a row but adds each wheel delta to an absolute `f32` top. At 29 px a row, a delta under half the `f32` step is lost: from row 289,262 (2^23 px, step 1 px) sub-pixel deltas go; from row 578,525 (2^24 px, step 2 px) a 1 px delta goes and 3 px moves 4; from row 1,157,049 (2^25 px, step 4 px) everything under 2 px goes. Measured on the 1,650,231-row reference corpus as one flat list (M2, release, M4 Max): at the middle, 0.5 and 1 px moved nothing and 3 px moved 4; at the end, 0.5 and 1 px moved nothing, 3 px moved 4 and 10 px moved 8. Frame cost is not the problem: a scrolling frame took 0.66 to 0.69 ms median and at most 1.1 ms at the top, the middle and the end (frame build without GPU raster). So past about row 578,000 a slow trackpad scroll sticks while flicks, the wheel, the scrollbar and the keys still move. The fix is scroll state of our own (a row plus an offset inside it, or `f64`) with our own wheel handling and a scrollbar adapter, not a framework list; it is left out of M2. Probe: `cargo test --release -p viewer --test ui -- --ignored --nocapture timing_scrolling`.
 - **Cold build time** is unknown until milestone 0.
 - **The caret's line number.** GPUI Base 0.10.0 draws the line number of the line holding the caret in the theme's foreground and ignores the theme's `editor.active_line_number`, which the app sets to the muted colour. A read-only view still has a caret, at the top when a file opens, so line 1's number stands out until the person clicks elsewhere. Not fixable through the theme in this version.

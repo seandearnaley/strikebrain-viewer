@@ -105,3 +105,4 @@ Neither was added. Rebuild and restart instead.
 - GPUI Base 0.10.0 draws the code view's caret line number in the foreground colour whatever the theme says; line 1 stands out when a file opens.
 - Space then Esc within the fullscreen animation can leave the window fullscreen: GPUI exposes no transition state.
 - The live-refresh tests wait on real file-system events, about 2 to 5 s each; they are the slowest in the suite.
+- The gallery decodes each tile's picture whole, then scales it down: about 200 ms for a 24-megapixel JPEG, four at once. The `image` crate has no reduced-size decode. See the spec's Risks.
