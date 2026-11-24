@@ -10,7 +10,9 @@ The [releases page](https://github.com/seandearnaley/strikebrain-viewer/releases
 - **Debian and Ubuntu:** `strikebrain-viewer_<version>_amd64.deb`. Install it with `sudo apt install ./strikebrain-viewer_<version>_amd64.deb`.
 - **Other Linux, x86-64:** `strikebrain-viewer-<version>-linux-x86_64.tar.gz`, laid out as `bin/` and `share/`. Unpack it into `~/.local` with `tar -xzf <file> -C ~/.local --strip-components=1`. It needs the xcb, xkbcommon and Wayland client libraries and a Vulkan driver, which a desktop already has.
 
-Windows has no package yet; build it from source. `SHA256SUMS` lists each file's checksum, and `gh attestation verify <file> -R seandearnaley/strikebrain-viewer` checks that GitHub built it from this repository.
+- **Windows, x64:** `Strikebrain-Viewer-<version>-windows-x64-setup.exe` installs it for you alone, with a Start menu entry and no administrator prompt. `strikebrain-viewer-<version>-windows-x64.zip` holds the same program to unpack and run anywhere.
+
+`SHA256SUMS` lists each file's checksum, and `gh attestation verify <file> -R seandearnaley/strikebrain-viewer` checks that GitHub built it from this repository.
 
 ## Run from source
 
@@ -55,6 +57,7 @@ A click on a tile opens it too; under the file, the grid button left of its plac
 just bundle           # macOS: target/release/bundle/osx/Strikebrain Viewer.app
 just dmg              # macOS: the app in a disk image
 just linux-packages   # Linux: a .tar.gz and a .deb
+just windows-packages # Windows: a .zip and an installer (needs Inno Setup 6)
 ```
 
 On macOS this builds the release binary and wraps it in an `.app`, signed ad hoc for this Mac. You can then drop a folder or a file on its Dock icon, or choose it in Finder's Open With: a folder is added, and a file opens its folder and shows.

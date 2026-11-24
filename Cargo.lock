@@ -7649,6 +7649,7 @@ version = "0.1.0"
 dependencies = [
  "data-url",
  "directories",
+ "embed-resource",
  "explorer",
  "futures",
  "gpui-kit",

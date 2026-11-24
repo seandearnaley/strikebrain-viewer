@@ -1,21 +1,34 @@
 //! `just icon`: draws the app icon, 1024 px square, into
 //! `crates/viewer/bundle/icon.png`, which `just bundle` turns into the
-//! bundle's `.icns`. Not a test suite: `cargo test` and nextest skip it.
+//! bundle's `.icns`, and its body alone, at the sizes Windows asks for, into
+//! `crates/viewer/bundle/icon.ico`, which the build script puts in the
+//! Windows executable. Not a test suite: `cargo test` and nextest skip it.
 //!
 //! The picture is the app itself, reduced: an explorer column of checked
 //! rows beside a stage showing a picture, on macOS's rounded-square icon
 //! body (824 px on the 1024 px grid), in brainstrike's dark tokens. Every
 //! shape is drawn with 4 x 4 samples per pixel for smooth edges.
 
+use std::fs::File;
 use std::path::Path;
 
-use image::{Rgba, RgbaImage};
+use image::codecs::ico::{IcoEncoder, IcoFrame};
+use image::imageops::{FilterType, crop_imm, resize};
+use image::{ExtendedColorType, Rgba, RgbaImage};
 
 /// The icon's side, in pixels.
 const SIDE: u32 = 1024;
 
 /// Samples per pixel along each axis.
 const SAMPLES: u32 = 4;
+
+/// The icon body's left and top edge, and its side: macOS leaves a margin
+/// around it, and a Windows icon fills its square.
+const BODY: (u32, u32) = (100, 824);
+
+/// The sides of the pictures in the Windows icon file: the sizes Explorer,
+/// the taskbar and the title bar pick from.
+const ICO_SIDES: [u32; 6] = [16, 24, 32, 48, 64, 256];
 
 /// A colour from HSL degrees and percents, as the theme writes them.
 fn hsl(hue: f32, saturation: f32, lightness: f32) -> [f32; 3] {
@@ -159,7 +172,20 @@ fn main() {
             (alpha * 255.).round() as u8,
         ]);
     }
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("bundle/icon.png");
+    let bundle = Path::new(env!("CARGO_MANIFEST_DIR")).join("bundle");
+    let path = bundle.join("icon.png");
     icon.save(&path).expect("write the icon");
+    println!("wrote {}", path.display());
+
+    let body = crop_imm(&icon, BODY.0, BODY.0, BODY.1, BODY.1).to_image();
+    let frames = ICO_SIDES.map(|side| {
+        let scaled = resize(&body, side, side, FilterType::Lanczos3);
+        IcoFrame::as_png(&scaled, side, side, ExtendedColorType::Rgba8)
+            .expect("each side is at most 256")
+    });
+    let path = bundle.join("icon.ico");
+    IcoEncoder::new(File::create(&path).expect("create the Windows icon"))
+        .encode_images(&frames)
+        .expect("write the Windows icon");
     println!("wrote {}", path.display());
 }
