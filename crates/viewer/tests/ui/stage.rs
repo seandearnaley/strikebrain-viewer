@@ -588,13 +588,15 @@ fn the_neighbours_of_the_file_on_the_stage_are_decoded_ahead(cx: &mut TestAppCon
 #[gpui_kit::test]
 fn text_stays_in_its_cache_within_32_megabytes(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
-    // Six files of 9 MB: three fit in 32 MB.
-    let text = "x".repeat(9 * 1024 * 1024);
-    for ix in 0..6 {
+    // Four files of 9 MB, the fewest that overflow: three fit in 32 MB.
+    // The code view wraps a file character by character, so three-byte
+    // characters reach 9 MB with a third of the work.
+    let text = "文".repeat(3 * 1024 * 1024);
+    for ix in 0..4 {
         write(dir.path(), &format!("{ix}.txt"), &text);
     }
     let (handle, view) = open_checked(cx, dir.path());
-    for step in 0..6 {
+    for step in 0..4 {
         if step > 0 {
             press(cx, handle, "right");
         }
