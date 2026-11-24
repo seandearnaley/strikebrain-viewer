@@ -232,15 +232,18 @@ mod tests {
     }
 
     #[test]
-    fn nothing_inside_a_file_or_a_link_matters() {
-        let (dir, tree) = project();
-        #[cfg(unix)]
-        {
-            std::os::unix::fs::symlink(dir.path().join("src"), dir.path().join("link")).unwrap();
-            let tree = scan(dir.path(), RULES, &AtomicBool::new(false)).unwrap();
-            assert!(!changes_matter(&tree, RULES, &at(&tree, "link/main.rs")));
-        }
+    fn nothing_inside_a_file_matters() {
+        let (_dir, tree) = project();
         assert!(!changes_matter(&tree, RULES, &at(&tree, "README.md/inner")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nothing_inside_a_link_matters() {
+        let (dir, _) = project();
+        std::os::unix::fs::symlink(dir.path().join("src"), dir.path().join("link")).unwrap();
+        let tree = scan(dir.path(), RULES, &AtomicBool::new(false)).unwrap();
+        assert!(!changes_matter(&tree, RULES, &at(&tree, "link/main.rs")));
     }
 
     #[test]
