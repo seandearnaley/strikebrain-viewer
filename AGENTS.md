@@ -36,7 +36,7 @@ Design: `docs/superpowers/specs/2026-11-22-strikebrain-viewer-design.md`.
 | Watch: Clippy on save; `n` nextest, ctrl-j other jobs | `bacon` |
 | Tools and git hook in a fresh clone | `just setup` |
 
-CI (`.github/workflows/ci.yml`) runs `just check` on macOS for every pull request and push to `main`, and builds and tests on Linux and Windows.
+CI (`.github/workflows/ci.yml`) runs `just check` on macOS for every pull request and push to `main`, builds and tests on Linux, and builds the app and its tests on Windows without running them.
 
 Iterate on the narrowest check. Engine work needs only the engine tests.
 
@@ -97,6 +97,7 @@ Neither was added. Rebuild and restart instead.
 
 ## Known gaps
 
+- Windows is not ported. The app and its tests build there with warnings denied, but CI does not run the tests: on 2026-11-23, 475 of 490 passed. The 15 that failed: tests that use Unix paths such as `/w/p`, which Windows does not take as absolute; tests that expect the Unix text of an OS error; folder rows that show a canonical path with its `\\?\` prefix; one file sorted ahead of a folder; a folder scanned twice; and one live-refresh test that saw four rescans for three. Tests that make symlinks or FIFOs are `#[cfg(unix)]`.
 - The bundle is signed ad hoc (`codesign -s -`), for local use and for tools that find the app by bundle identifier. Distribution needs a Developer ID signature and notarization, which `just bundle` does not do.
 - Live refresh rescans the whole folder a change is in, on any change a scan would show, as the design says; the other folders are left alone. With Show ignored on, a busy folder the tree then shows (a build's `target/`) is rescanned back to back while it changes.
 - Folders are told apart by their canonical paths, and `realpath` does not join macOS firmlinks: `/System/Volumes/Data/Users/x` and `/Users/x` stay different, so the same folder added under both is listed twice. The picker and Finder give `/Users/...`.
