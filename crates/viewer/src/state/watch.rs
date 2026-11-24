@@ -239,7 +239,7 @@ fn watch(
     quiet: &[PathBuf],
     sender: UnboundedSender<Change>,
 ) -> notify::Result<RecommendedWatcher> {
-    let root = std::fs::canonicalize(root).map_err(notify::Error::io)?;
+    let root = explorer::canonical(root).map_err(notify::Error::io)?;
     let quiet: Vec<PathBuf> = quiet.iter().map(|path| canonical_file(path)).collect();
     let handler = move |event: notify::Result<Event>| {
         let change = match event {
@@ -274,7 +274,7 @@ fn watch(
 fn canonical_file(path: &Path) -> PathBuf {
     let canonical = path
         .parent()
-        .and_then(|folder| std::fs::canonicalize(folder).ok())
+        .and_then(|folder| explorer::canonical(folder).ok())
         .zip(path.file_name())
         .map(|(folder, name)| folder.join(name));
     canonical.unwrap_or_else(|| path.to_path_buf())
@@ -318,7 +318,7 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("target")).unwrap();
         std::fs::write(dir.path().join("target/out"), "o").unwrap();
         std::fs::write(dir.path().join("a.txt"), "a").unwrap();
-        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let root = explorer::canonical(dir.path()).unwrap();
         let (state, sender) = first_scan_running(cx, &root);
 
         // A build writes under the ignored `target/` while the scan runs.
@@ -393,7 +393,7 @@ mod tests {
     #[test]
     fn the_state_file_is_quiet_but_not_its_neighbours() {
         let dir = tempfile::tempdir().unwrap();
-        let folder = std::fs::canonicalize(dir.path()).unwrap();
+        let folder = explorer::canonical(dir.path()).unwrap();
         // Through another spelling of the folder, and for a file that does
         // not exist yet: the watcher reports canonical paths.
         let spelled = dir.path().join(".").join("state.json");

@@ -9,5 +9,7 @@ allow-panic-in-tests = true
 avoid-breaking-exported-api = false
 
 disallowed-methods = [
+    { path = "std::fs::canonicalize", reason = "on Windows it adds a `\\\\?\\` prefix the app would show; call `explorer::canonical`" },
+    { path = "std::path::Path::canonicalize", reason = "on Windows it adds a `\\\\?\\` prefix the app would show; call `explorer::canonical`" },
     { path = "std::thread::sleep", reason = "a real sleep slows tests and hides races; wait on an executor timer or advance the test clock" },
 ]

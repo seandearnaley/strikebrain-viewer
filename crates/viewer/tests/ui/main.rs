@@ -68,6 +68,19 @@ fn fixture_folder() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixture")
 }
 
+/// What the app says of a path that does not exist: the operating system's
+/// message, without Rust's error code. Each system words it its own way, so
+/// it is asked rather than written here.
+fn not_found() -> String {
+    let error = std::fs::metadata(fixture_folder().join("no-such-folder"))
+        .expect_err("the folder does not exist");
+    let code = error.raw_os_error().expect("the system's own error");
+    let text = error.to_string();
+    text.strip_suffix(&format!(" (os error {code})"))
+        .expect("Rust ends the message with its code")
+        .to_owned()
+}
+
 /// A temporary folder holding `files`, each with its text.
 fn folder(files: &[(&str, &str)]) -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("a temporary folder");
@@ -180,7 +193,7 @@ fn node(cx: &mut TestAppContext, view: &Entity<AppView>, path: &str) -> NodeId {
 fn node_at(cx: &mut TestAppContext, view: &Entity<AppView>, path: &Path) -> NodeId {
     read(cx, view, |state| {
         let tree = state.explorer().expect("a tree is on screen").tree();
-        tree.find_abs(&std::fs::canonicalize(path).expect("the path exists"))
+        tree.find_abs(&explorer::canonical(path).expect("the path exists"))
             .expect("the path is on screen")
     })
 }

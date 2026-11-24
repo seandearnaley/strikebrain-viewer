@@ -15,7 +15,7 @@ use viewer::{AppState, AppView, Launch, ScanStatus, Session};
 
 use crate::races::click_when_the_tree_swaps;
 use crate::stage::code_view;
-use crate::{folder, node, read, row, write};
+use crate::{folder, node, not_found, read, row, write};
 
 /// Opens the app over `dir`, following it on disk, in a 1000 x 700 window.
 fn open_watching(cx: &mut TestAppContext, dir: &Path) -> (AnyWindowHandle, Entity<AppView>) {
@@ -317,15 +317,13 @@ fn a_watcher_that_cannot_start_shows_on_the_refresh_button(cx: &mut TestAppConte
     let error = read(cx, &view, |state| {
         state.watch_error().map(ToString::to_string)
     });
-    assert_eq!(error.as_deref(), Some("No such file or directory"));
+    assert_eq!(error, Some(not_found()));
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         let refresh = window.find("refresh");
         assert_eq!(refresh.label(), Some("Refresh"));
-        assert_eq!(
-            refresh.description(),
-            Some("Refresh. Changes on disk are not followed: No such file or directory")
-        );
+        let description = format!("Refresh. Changes on disk are not followed: {}", not_found());
+        assert_eq!(refresh.description(), Some(description.as_str()));
     })
     .unwrap();
 

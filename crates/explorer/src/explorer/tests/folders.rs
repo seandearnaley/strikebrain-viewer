@@ -9,9 +9,22 @@ use crate::{
     Tree,
 };
 
+/// `path`, which starts at `/`, made absolute here: on drive `C:` on
+/// Windows, where a path needs a drive to be absolute. A folder takes in
+/// the folders its scan lists only when its own path is absolute, as a real
+/// scan's always is.
+fn abs(path: &str) -> String {
+    if cfg!(windows) {
+        format!("C:{path}")
+    } else {
+        path.to_owned()
+    }
+}
+
+/// A scan of the folder at `root`, which starts at `/`, listing `paths`.
 fn folder(root: &str, paths: &[&str]) -> Arc<Tree> {
     let sized: Vec<(&str, u64)> = paths.iter().map(|&path| (path, 1)).collect();
-    Arc::new(folder_at(root, &sized))
+    Arc::new(folder_at(&abs(root), &sized))
 }
 
 fn rows(explorer: &Explorer) -> Vec<String> {
@@ -27,7 +40,7 @@ fn gallery(explorer: &Explorer) -> Vec<String> {
 fn at(explorer: &Explorer, path: &str) -> NodeId {
     explorer
         .tree()
-        .find_abs(Path::new(path))
+        .find_abs(Path::new(&abs(path)))
         .unwrap_or_else(|| panic!("no node at {path:?}"))
 }
 
@@ -58,10 +71,10 @@ fn folders_keep_the_order_they_were_added_in_and_open_when_added() {
     assert!(explorer.is_open(b));
     assert!(explorer.can_open(b));
     assert_eq!(
-        explorer.folder_at(Path::new("/w/a")),
+        explorer.folder_at(Path::new(&abs("/w/a"))),
         Some(at(&explorer, "/w/a"))
     );
-    assert_eq!(explorer.folder_at(Path::new("/w/a/docs")), None);
+    assert_eq!(explorer.folder_at(Path::new(&abs("/w/a/docs"))), None);
 
     // A sort reorders inside each folder; the folders stay as added.
     explorer.set_sort(Sort {
@@ -164,7 +177,7 @@ fn a_rescan_of_one_folder_carries_its_view_and_leaves_the_others_alone() {
 
     // A folder that cannot be read keeps its place, as one node.
     let a = at(&explorer, "/w/a");
-    let locked = Arc::new(Tree::unreadable(Path::new("/w/a")));
+    let locked = Arc::new(Tree::unreadable(Path::new(&abs("/w/a"))));
     let (_, current) = explorer.replace_folder(a, &locked, current).unwrap();
     assert_eq!(rows(&explorer)[4..], ["a"]);
     // The file on the stage went with it: the checked file before it.
@@ -205,7 +218,7 @@ fn a_folder_added_around_open_folders_takes_them_in_with_their_view() {
         tree.folders()
             .map(|top| tree.abs_path(top))
             .collect::<Vec<_>>(),
-        [PathBuf::from("/w/q"), PathBuf::from("/w/p")]
+        [PathBuf::from(abs("/w/q")), PathBuf::from(abs("/w/p"))]
     );
     assert_eq!(current, Some(at(&explorer, "/w/p/inner/b.txt")));
     assert_eq!(map.get(b), current);
@@ -237,7 +250,10 @@ fn a_folder_added_around_open_folders_leaves_those_its_scan_does_not_list() {
         tree.folders()
             .map(|top| tree.abs_path(top))
             .collect::<Vec<_>>(),
-        [PathBuf::from("/w/p/target"), PathBuf::from("/w/p")]
+        [
+            PathBuf::from(abs("/w/p/target")),
+            PathBuf::from(abs("/w/p"))
+        ]
     );
     assert_eq!(gallery(&explorer), ["target/out.o"]);
 }
@@ -251,7 +267,7 @@ fn a_rescan_that_now_lists_an_open_folder_takes_it_in() {
     explorer.toggle_check(at(&explorer, "/w/d/sub/x.txt"));
     // The outer folder could not be read at first: it takes nothing in.
     explorer
-        .add_folder(&Tree::unreadable(Path::new("/w/d")), 1, None)
+        .add_folder(&Tree::unreadable(Path::new(&abs("/w/d"))), 1, None)
         .unwrap();
     assert_eq!(explorer.tree().folders().len(), 2);
     // Readable now, its rescan lists the other folder: one copy of x.txt.
@@ -264,7 +280,7 @@ fn a_rescan_that_now_lists_an_open_folder_takes_it_in() {
         tree.folders()
             .map(|top| tree.abs_path(top))
             .collect::<Vec<_>>(),
-        [PathBuf::from("/w/d")]
+        [PathBuf::from(abs("/w/d"))]
     );
     assert_eq!(rows(&explorer), ["d", "d/sub", "d/sub/x.txt", "d/top.txt"]);
     assert_eq!(gallery(&explorer), ["d/sub/x.txt"]);
@@ -337,7 +353,7 @@ fn a_folder_that_cannot_be_read_takes_nothing_in() {
         .add_folder(&folder("/w/p/inner", &["a.txt"]), 0, None)
         .unwrap();
     explorer
-        .add_folder(&Tree::unreadable(Path::new("/w/p")), 1, None)
+        .add_folder(&Tree::unreadable(Path::new(&abs("/w/p"))), 1, None)
         .unwrap();
     assert_eq!(rows(&explorer), ["inner", "inner/a.txt", "p"]);
     // A snapshot names one folder at a time too.
@@ -345,7 +361,7 @@ fn a_folder_that_cannot_be_read_takes_nothing_in() {
     assert_eq!(
         explorer.snapshot().folder(p),
         SavedFolder {
-            path: "/w/p".into(),
+            path: abs("/w/p").into(),
             ..SavedFolder::default()
         }
     );
@@ -398,7 +414,7 @@ fn each_folder_saves_and_restores_its_own_view() {
         saved,
         [
             SavedFolder {
-                path: "/w/b".into(),
+                path: abs("/w/b").into(),
                 open: vec![],
                 selection: SavedSelection {
                     folders: vec!["src".into()],
@@ -406,7 +422,7 @@ fn each_folder_saves_and_restores_its_own_view() {
                 },
             },
             SavedFolder {
-                path: "/w/a".into(),
+                path: abs("/w/a").into(),
                 open: vec![String::new(), "docs".into()],
                 selection: SavedSelection {
                     folders: vec![],
@@ -425,7 +441,7 @@ fn each_folder_saves_and_restores_its_own_view() {
     assert_eq!(gallery(&restored), ["b/src/x.rs", "a/readme.md"]);
     assert_eq!(rows(&restored), rows(&explorer));
     assert!(!restored.restore_folder(&SavedFolder {
-        path: "/w/gone".into(),
+        path: abs("/w/gone").into(),
         ..SavedFolder::default()
     }));
 
@@ -473,7 +489,7 @@ fn a_size_sort_is_redone_as_each_folder_gets_its_sizes() {
     let mut raw = crate::tree::RawTree::new("late", false).unwrap();
     raw.push(0, "big.txt", crate::Kind::File).unwrap();
     raw.push(0, "small.txt", crate::Kind::File).unwrap();
-    let late = Arc::new(raw.build(PathBuf::from("/w/late")).unwrap());
+    let late = Arc::new(raw.build(PathBuf::from(abs("/w/late"))).unwrap());
     let mut explorer = two_folders();
     explorer.add_folder(&late, 2, None).unwrap();
     explorer.set_sort(Sort {
@@ -492,13 +508,14 @@ fn a_size_sort_is_redone_as_each_folder_gets_its_sizes() {
     );
 }
 
-/// A scan of the folder `/r/{name}` holding a generated path set.
+/// A scan of the folder `/r/{name}`, made absolute here, holding a
+/// generated path set.
 fn generated(name: &str, set: &std::collections::BTreeMap<String, u64>) -> Arc<Tree> {
     let list: Vec<(&str, u64)> = set
         .iter()
         .map(|(path, &size)| (path.as_str(), size))
         .collect();
-    Arc::new(folder_at(&format!("/r/{name}"), &list))
+    Arc::new(folder_at(&abs(&format!("/r/{name}")), &list))
 }
 
 proptest::proptest! {
@@ -548,7 +565,7 @@ proptest::proptest! {
                     }
                     let list: Vec<(&str, u64)> =
                         paths.iter().map(|(path, size)| (path.as_str(), *size)).collect();
-                    let outer = Arc::new(folder_at("/r", &list));
+                    let outer = Arc::new(folder_at(&abs("/r"), &list));
                     let at = pick % (tops.len() + 1);
                     let (map, current) = explorer.add_folder(&outer, at, None).unwrap();
                     // No folder below /r is left beside it if /r lists it.
@@ -556,7 +573,7 @@ proptest::proptest! {
                     for top in tree.folders() {
                         let path = tree.abs_path(top);
                         proptest::prop_assert!(
-                            path == Path::new("/r") || outer.find_abs(&path).is_none(),
+                            path == Path::new(&abs("/r")) || outer.find_abs(&path).is_none(),
                             "{}", path.display()
                         );
                     }

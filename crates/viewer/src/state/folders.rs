@@ -15,7 +15,7 @@
 //! stage once a tree lists it. Files asked for together are checked, so
 //! they show as the gallery.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -236,8 +236,17 @@ impl AppState {
     fn node_in(&self, folder: &Path, path: &Path) -> Option<NodeId> {
         let explorer = self.explorer.as_ref()?;
         let top = explorer.folder_at(folder)?;
-        let below = path.strip_prefix(folder).ok()?.to_str()?;
-        explorer.tree().find_from(top, below)
+        // The tree's own separator is `/`, whatever the platform's is.
+        let names = path
+            .strip_prefix(folder)
+            .ok()?
+            .components()
+            .map(|part| match part {
+                Component::Normal(name) => name.to_str(),
+                _ => None,
+            })
+            .collect::<Option<Vec<&str>>>()?;
+        explorer.tree().find_from(top, &names.join("/"))
     }
 
     /// Opens the folders above `id` and makes it the focus row.

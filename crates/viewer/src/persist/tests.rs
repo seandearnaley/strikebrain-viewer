@@ -11,6 +11,27 @@ use super::{
 };
 use crate::state::{Launch, StageView};
 
+/// `text` with each path that starts at `/` made absolute here: as it is on
+/// Unix, on drive `C:` on Windows, where a path needs a drive to be absolute
+/// and the saved state keeps only absolute paths.
+fn absolute(text: &str) -> String {
+    if cfg!(windows) {
+        text.replace("\"/", "\"C:/")
+    } else {
+        text.to_owned()
+    }
+}
+
+/// The path `path`, which starts at `/`, made absolute here, as
+/// [`absolute`] does.
+fn at(path: &str) -> PathBuf {
+    if cfg!(windows) {
+        PathBuf::from(format!("C:{path}"))
+    } else {
+        PathBuf::from(path)
+    }
+}
+
 /// One folder's part, with open folders and checks.
 fn saved_folder(path: PathBuf) -> SavedFolder {
     SavedFolder {
@@ -59,18 +80,20 @@ fn full(root: &Path) -> Saved {
 
 #[test]
 fn a_state_survives_the_trip_through_json() {
-    let saved = full(Path::new("/projects/demo"));
+    let root = at("/projects/demo");
+    let saved = full(&root);
     let bytes = encode(&saved).unwrap();
     assert_eq!(decode(&bytes), Some(saved));
     let text = String::from_utf8(bytes).unwrap();
     assert!(text.contains("\"version\": 2"), "{text}");
     assert!(text.contains("\"kind\": \"text\""), "{text}");
+    // Paths are saved whole, as JSON strings.
+    let json = |path: PathBuf| serde_json::to_string(&path).unwrap();
+    let second = json(root.join("second"));
+    assert!(text.contains(&format!("\"root\": {second}")), "{text}");
+    let app = json(root.join("src/app"));
     assert!(
-        text.contains("\"root\": \"/projects/demo/second\""),
-        "{text}"
-    );
-    assert!(
-        text.contains("\"first_visible_row\": \"/projects/demo/src/app\""),
+        text.contains(&format!("\"first_visible_row\": {app}")),
         "{text}"
     );
     assert!(text.contains("\"view\": \"gallery\""), "{text}");
@@ -78,10 +101,10 @@ fn a_state_survives_the_trip_through_json() {
 
 #[test]
 fn a_state_saved_before_the_gallery_shows_the_file() {
-    let before = br#"{"version": 2, "folders": [{"root": "/p"}], "current": "/p/a.txt"}"#;
-    let saved = decode(before).unwrap();
+    let before = absolute(r#"{"version": 2, "folders": [{"root": "/p"}], "current": "/p/a.txt"}"#);
+    let saved = decode(before.as_bytes()).unwrap();
     assert_eq!(saved.view.view, StageView::File);
-    assert_eq!(saved.view.current, Some(PathBuf::from("/p/a.txt")));
+    assert_eq!(saved.view.current, Some(at("/p/a.txt")));
 }
 
 #[test]
@@ -92,16 +115,18 @@ fn an_empty_state_survives_too() {
 
 #[test]
 fn a_file_of_the_old_one_folder_format_loads_as_one_folder() {
-    let old = br#"{"version": 1, "root": "/p", "show_ignored": true,
+    let old = absolute(
+        r#"{"version": 1, "root": "/p", "show_ignored": true,
         "expanded": ["src"], "selected": {"folders": ["docs"], "files": ["README.md"]},
         "current": "src/main.rs", "query": "q", "kind": "images",
         "sort": {"key": "type", "direction": "descending"},
-        "first_visible_row": "src", "explorer_width": 280.0}"#;
-    let saved = decode(old).unwrap();
+        "first_visible_row": "src", "explorer_width": 280.0}"#,
+    );
+    let saved = decode(old.as_bytes()).unwrap();
     assert_eq!(
         saved.view.folders,
         [SavedFolder {
-            path: "/p".into(),
+            path: at("/p"),
             // The folder itself shows open, as a folder added does.
             open: vec![String::new(), "src".into()],
             selection: SavedSelection {
@@ -110,8 +135,8 @@ fn a_file_of_the_old_one_folder_format_loads_as_one_folder() {
             },
         }]
     );
-    assert_eq!(saved.view.current, Some(PathBuf::from("/p/src/main.rs")));
-    assert_eq!(saved.view.top_row, Some(PathBuf::from("/p/src")));
+    assert_eq!(saved.view.current, Some(at("/p/src/main.rs")));
+    assert_eq!(saved.view.top_row, Some(at("/p/src")));
     assert!(saved.view.show_ignored);
     assert_eq!(saved.view.kind, KindFilter::Images);
     assert_eq!(saved.view.sort.key, SortKey::Type);
@@ -253,7 +278,7 @@ fn restored(view: Option<&SavedView>) -> Vec<PathBuf> {
 #[test]
 fn folder_arguments_open_exactly_those_each_with_its_own_saved_view() {
     let dir = tempfile::tempdir().unwrap();
-    let root = fs::canonicalize(dir.path()).unwrap();
+    let root = explorer::canonical(dir.path()).unwrap();
     for folder in ["a", "b", "c"] {
         fs::create_dir_all(root.join(folder)).unwrap();
     }
@@ -285,7 +310,7 @@ fn folder_arguments_open_exactly_those_each_with_its_own_saved_view() {
 #[test]
 fn a_path_resolves_as_far_as_it_exists() {
     let dir = tempfile::tempdir().unwrap();
-    let real = fs::canonicalize(dir.path()).unwrap();
+    let real = explorer::canonical(dir.path()).unwrap();
     // The temporary folder's own path may go through a link (/var on macOS).
     assert_eq!(resolve(dir.path()), real);
     assert_eq!(
@@ -298,7 +323,7 @@ fn a_path_resolves_as_far_as_it_exists() {
 #[test]
 fn a_folder_argument_that_is_missing_keeps_its_saved_view() {
     let dir = tempfile::tempdir().unwrap();
-    let away = fs::canonicalize(dir.path()).unwrap().join("away");
+    let away = explorer::canonical(dir.path()).unwrap().join("away");
     let saved = full(&away);
     let plan = plan_launch(vec![dir.path().join("away")], Some(saved));
     assert_eq!(restored(plan.view.as_ref()), std::slice::from_ref(&away));
@@ -307,7 +332,7 @@ fn a_folder_argument_that_is_missing_keeps_its_saved_view() {
 #[test]
 fn no_argument_reopens_the_saved_folders_that_still_exist() {
     let dir = tempfile::tempdir().unwrap();
-    let root = fs::canonicalize(dir.path()).unwrap();
+    let root = explorer::canonical(dir.path()).unwrap();
     fs::create_dir_all(root.join("second")).unwrap();
     let saved = full(&root);
 
