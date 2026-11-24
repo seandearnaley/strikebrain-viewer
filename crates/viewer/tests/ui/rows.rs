@@ -3,11 +3,10 @@
 use gpui_kit::AppContext as _;
 use gpui_kit::test::{TestQueryExt as _, TestWindowExt as _};
 use gpui_kit::{Role, TestAppContext, px};
-use viewer::{AppState, Launch};
+use viewer::Launch;
 
 use crate::{
-    Locked, PROJECT, current, focus, folder, labels, node, open_app, press, read, row, rows_now,
-    stage, tree,
+    Locked, PROJECT, focus, folder, labels, node, open_app, press, row, rows_now, stage, tree,
 };
 
 #[gpui_kit::test]
@@ -178,10 +177,10 @@ fn a_symlink_is_a_file_row_that_never_opens(cx: &mut TestAppContext) {
     // A press where a chevron would be is a press on the row: it shows the
     // link on the stage, as any file.
     assert_eq!(rows_now(cx, handle), rows);
-    assert_eq!(current(cx, &view), Some(link));
+    assert_eq!(crate::current(cx, &view), Some(link));
 
     press(cx, handle, "right");
     assert_eq!(rows_now(cx, handle), rows);
     press(cx, handle, "space");
-    assert_eq!(read(cx, &view, AppState::selected_count), 1);
+    assert_eq!(crate::read(cx, &view, viewer::AppState::selected_count), 1);
 }
