@@ -5,9 +5,11 @@
 //! arrive for 150 ms on GPUI's timer, then asks the engine, off the UI
 //! thread, whether any of them is something a new scan of that folder would
 //! show ([`explorer::changes_matter`]). Changes the ignore rules hide (a
-//! build's `target/`, `node_modules/`, `.git/`) stop there. Anything else
-//! rescans that folder alone, as Refresh does, and its new tree carries
-//! checks, open folders, the stage and focus across by path.
+//! build's `target/`, `node_modules/`, `.git/`) stop there, as does a
+//! folder's own change of times, which Windows reports beside each entry
+//! added to it or taken from it. Anything else rescans that folder alone,
+//! as Refresh does, and its new tree carries checks, open folders, the
+//! stage and focus across by path.
 //!
 //! Changes that arrive while a folder's first scan runs wait for its tree
 //! and are judged against it, so a busy ignored folder never forces a
@@ -244,6 +246,8 @@ fn watch(
     let handler = move |event: notify::Result<Event>| {
         let change = match event {
             Ok(event) if event.need_rescan() && event.paths.is_empty() => Change::Rescan,
+            #[cfg(windows)]
+            Ok(event) if folder_times_only(&event) => return,
             Ok(event) => {
                 let paths: Vec<PathBuf> = event
                     .paths
@@ -267,6 +271,25 @@ fn watch(
     let mut watcher = RecommendedWatcher::new(handler, config)?;
     watcher.watch(&root, RecursiveMode::Recursive)?;
     Ok(watcher)
+}
+
+/// Whether `event` says only that folders' own times or attributes
+/// changed. Windows says so of a folder each time an entry in it is added,
+/// removed or renamed: after the entry's own event, and often after the
+/// window that gathered it, so it would cost a second rescan that finds
+/// nothing new. A scan lists a folder the same way whatever its times; one
+/// that can no longer be read is still a change.
+#[cfg(windows)]
+fn folder_times_only(event: &Event) -> bool {
+    use notify::event::{EventKind, ModifyKind};
+
+    event.kind == EventKind::Modify(ModifyKind::Any)
+        && !event.need_rescan()
+        && !event.paths.is_empty()
+        && event.paths.iter().all(|path| {
+            std::fs::metadata(path).is_ok_and(|found| found.is_dir())
+                && std::fs::read_dir(path).is_ok()
+        })
 }
 
 /// A file's path with its folder made canonical, as the watcher reports
@@ -388,6 +411,28 @@ mod tests {
             assert_eq!(state.watch_error(), None);
             assert!(state.folders[0].watch_task.is_some(), "followed again");
         });
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_folder_whose_times_changed_is_not_a_change() {
+        use notify::Event;
+        use notify::event::{CreateKind, EventKind, ModifyKind};
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), "").unwrap();
+        let event = |kind: EventKind, path: &str| Event::new(kind).add_path(dir.path().join(path));
+        let modified = EventKind::Modify(ModifyKind::Any);
+        assert!(super::folder_times_only(&event(modified, "src")));
+        // A file's contents, a folder made, and a folder gone all matter.
+        assert!(!super::folder_times_only(&event(modified, "src/lib.rs")));
+        let made = EventKind::Create(CreateKind::Folder);
+        assert!(!super::folder_times_only(&event(made, "src")));
+        assert!(!super::folder_times_only(&event(modified, "gone")));
+        // So does one the watcher asks to be rescanned.
+        let rescan = event(modified, "src").set_flag(notify::event::Flag::Rescan);
+        assert!(!super::folder_times_only(&rescan));
     }
 
     #[test]
