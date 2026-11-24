@@ -138,7 +138,8 @@ linux-packages:
     mkdir -p "$out/deb/DEBIAN"
     # dpkg-shlibdeps reads the libraries the binary links and names their
     # packages; it wants a source tree's debian/control beside it. The
-    # Vulkan loader is opened at run time, so it is named by hand.
+    # Wayland client library and the Vulkan loader are opened at run time,
+    # so they are named by hand.
     depends=$(cd "$out" && mkdir -p debian && touch debian/control \
         && dpkg-shlibdeps -O deb/usr/bin/strikebrain-viewer | sed 's/^shlibs:Depends=//')
     rm -r "$out/debian"
@@ -148,7 +149,7 @@ linux-packages:
     Section: utils
     Priority: optional
     Architecture: $arch
-    Depends: $depends, libvulkan1
+    Depends: $depends, libwayland-client0, libvulkan1
     Maintainer: Sean Dearnaley <seandearnaley@users.noreply.github.com>
     Homepage: https://github.com/seandearnaley/strikebrain-viewer
     Description: A viewer for folders of text and images
