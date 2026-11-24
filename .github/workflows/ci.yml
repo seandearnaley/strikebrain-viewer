@@ -49,13 +49,17 @@ jobs:
       CARGO_BUILD_WARNINGS: deny
     steps:
       - uses: actions/checkout@v7
-      # What GPUI Kit's installation guide lists for Ubuntu 24.04.
+      # What GPUI Kit's installation guide lists for Ubuntu 24.04, kept in
+      # the Actions cache: the Ubuntu mirror is sometimes slow enough to
+      # take half an hour over them.
       - if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc g++ clang libfontconfig-dev libwayland-dev \
-            libwebkit2gtk-4.1-dev libxkbcommon-x11-dev libx11-xcb-dev \
+        uses: awalsh128/cache-apt-pkgs-action@v1.6.3
+        with:
+          packages: >-
+            gcc g++ clang libfontconfig-dev libwayland-dev
+            libwebkit2gtk-4.1-dev libxkbcommon-x11-dev libx11-xcb-dev
             libssl-dev libzstd-dev libasound2-dev libvulkan1
+          version: 1
       # Kept when a test fails, so the next push does not rebuild GPUI.
       - uses: Swatinem/rust-cache@v2
         with:
