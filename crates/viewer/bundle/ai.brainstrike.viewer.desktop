@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Strikebrain Viewer
+GenericName=File Viewer
+Comment=A viewer for folders of text and images
+Exec=strikebrain-viewer %F
+Icon=ai.brainstrike.viewer
+Terminal=false
+Categories=Utility;Viewer;
+MimeType=inode/directory;text/plain;text/markdown;image/png;image/jpeg;image/gif;image/webp;image/bmp;image/tiff;image/svg+xml;
+StartupWMClass=ai.brainstrike.viewer

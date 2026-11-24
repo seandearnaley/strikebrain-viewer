@@ -56,9 +56,13 @@ shot:
 icon:
     cargo test -p viewer --test icon
 
-# Build the release binary and wrap it in a macOS app, signed ad hoc:
-# target/release/bundle/osx/Strikebrain Viewer.app. The Info.plist template
-# and the icon live in crates/viewer/bundle; the version comes from Cargo.
+# The Info.plist template and the icon live in crates/viewer/bundle; the
+# version comes from Cargo. Signed ad hoc, for this Mac only, unless
+# CODESIGN_IDENTITY names a Developer ID Application certificate in the
+# keychain; either way with the hardened runtime, which notarization
+# requires.
+# Build the macOS app: target/release/bundle/osx/Strikebrain Viewer.app.
+[macos]
 bundle:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -78,9 +82,86 @@ bundle:
     done
     iconutil -c icns "$iconset" -o "$app/Contents/Resources/AppIcon.icns"
     rm -r "$iconset"
-    codesign --force --deep -s - "$app"
+    identity="${CODESIGN_IDENTITY:--}"
+    # A secure timestamp needs Apple's server and a real certificate.
+    timestamp=$([ "$identity" = "-" ] && echo --timestamp=none || echo --timestamp)
+    codesign --force --options runtime "$timestamp" -s "$identity" "$app"
     codesign --verify --strict "$app"
     echo "$app ($version)"
+
+# The image holds the app beside a link to /Applications, and is signed
+# when CODESIGN_IDENTITY is set. Notarizing it is the release workflow's
+# step.
+# Build the macOS disk image: target/release/bundle/Strikebrain-Viewer-<version>-macos-<arch>.dmg.
+[macos]
+dmg: bundle
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version=$(cargo pkgid -p viewer | sed 's/.*[#@]//')
+    dmg="target/release/bundle/Strikebrain-Viewer-$version-macos-$(uname -m).dmg"
+    root="$(mktemp -d)"
+    cp -R "target/release/bundle/osx/Strikebrain Viewer.app" "$root/"
+    ln -s /Applications "$root/Applications"
+    hdiutil create -volname "Strikebrain Viewer" -srcfolder "$root" -ov -format UDZO "$dmg" > /dev/null
+    rm -r "$root"
+    if [ -n "${CODESIGN_IDENTITY:-}" ]; then
+        codesign --force --timestamp -s "$CODESIGN_IDENTITY" "$dmg"
+    fi
+    hdiutil verify -quiet "$dmg"
+    echo "$dmg"
+
+# The .tar.gz is laid out as a prefix (bin/, share/), to unpack into
+# ~/.local or /usr/local; the .deb's dependencies are read from the binary.
+# Needs dpkg-dev and ImageMagick.
+# Build the Linux packages, a .tar.gz and a .deb, in target/release/bundle.
+[linux]
+linux-packages:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build --release --locked -p viewer
+    version=$(cargo pkgid -p viewer | sed 's/.*[#@]//')
+    out=target/release/bundle
+    id=ai.brainstrike.viewer
+    stage() {
+        install -Dm755 target/release/strikebrain-viewer "$1/bin/strikebrain-viewer"
+        install -Dm644 "crates/viewer/bundle/$id.desktop" "$1/share/applications/$id.desktop"
+        mkdir -p "$1/share/icons/hicolor/512x512/apps"
+        convert crates/viewer/bundle/icon.png -resize 512x512 "$1/share/icons/hicolor/512x512/apps/$id.png"
+        install -Dm644 LICENSE-MIT LICENSE-APACHE -t "$1/share/doc/strikebrain-viewer"
+    }
+    name="strikebrain-viewer-$version-linux-$(uname -m)"
+    rm -rf "$out/$name" "$out/deb"
+    stage "$out/$name"
+    tar -czf "$out/$name.tar.gz" -C "$out" "$name"
+    arch=$(dpkg --print-architecture)
+    stage "$out/deb/usr"
+    mkdir -p "$out/deb/DEBIAN"
+    # dpkg-shlibdeps reads the libraries the binary links and names their
+    # packages; it wants a source tree's debian/control beside it. The
+    # Vulkan loader is opened at run time, so it is named by hand.
+    depends=$(cd "$out" && mkdir -p debian && touch debian/control \
+        && dpkg-shlibdeps -O deb/usr/bin/strikebrain-viewer | sed 's/^shlibs:Depends=//')
+    rm -r "$out/debian"
+    cat > "$out/deb/DEBIAN/control" <<CONTROL
+    Package: strikebrain-viewer
+    Version: $version
+    Section: utils
+    Priority: optional
+    Architecture: $arch
+    Depends: $depends, libvulkan1
+    Maintainer: Sean Dearnaley <seandearnaley@users.noreply.github.com>
+    Homepage: https://github.com/seandearnaley/strikebrain-viewer
+    Description: A viewer for folders of text and images
+     A file tree on the left, where you filter and check files, and a stage
+     on the right that shows them one at a time or as a gallery.
+    CONTROL
+    deb="$out/strikebrain-viewer_${version}_$arch.deb"
+    dpkg-deb --root-owner-group --build "$out/deb" "$deb" > /dev/null
+    rm -r "$out/deb" "$out/$name"
+    dpkg-deb --info "$deb"
+    dpkg-deb --contents "$deb"
+    echo "$out/$name.tar.gz"
+    echo "$deb"
 
 # Install the pinned tools and the pre-commit hook. Needs cargo-binstall.
 setup:

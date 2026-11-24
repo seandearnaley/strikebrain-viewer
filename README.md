@@ -1,10 +1,20 @@
 # Strikebrain Viewer
 
-A native macOS viewer for folders of text and images: a file tree on the left, holding as many folders as you add, where you filter and check files, and a stage on the right. Check two or more files and the stage shows them as a gallery, a grid of thumbnails and the tops of text files; open one and it fills the stage, where ← and → move through the rest. It is written in Rust on GPUI through GPUI Kit.
+A native viewer for folders of text and images, for macOS, Linux and Windows: a file tree on the left, holding as many folders as you add, where you filter and check files, and a stage on the right. Check two or more files and the stage shows them as a gallery, a grid of thumbnails and the tops of text files; open one and it fills the stage, where ← and → move through the rest. It is written in Rust on GPUI through GPUI Kit.
 
-## Run
+## Install
 
-Needs the toolchain in `rust-toolchain.toml` (rustup installs it) and macOS on Apple silicon.
+The [releases page](https://github.com/seandearnaley/strikebrain-viewer/releases) has:
+
+- **macOS, Apple silicon:** `Strikebrain-Viewer-<version>-macos-arm64.dmg`. Open it and drag the app to Applications.
+- **Debian and Ubuntu:** `strikebrain-viewer_<version>_amd64.deb`. Install it with `sudo apt install ./strikebrain-viewer_<version>_amd64.deb`.
+- **Other Linux, x86-64:** `strikebrain-viewer-<version>-linux-x86_64.tar.gz`, laid out as `bin/` and `share/`. Unpack it into `~/.local` with `tar -xzf <file> -C ~/.local --strip-components=1`. It needs fontconfig, freetype, xcb, xkbcommon and a Vulkan driver.
+
+Windows has no package yet; build it from source. `SHA256SUMS` lists each file's checksum, and `gh attestation verify <file> -R seandearnaley/strikebrain-viewer` checks that GitHub built it from this repository.
+
+## Run from source
+
+Needs the toolchain in `rust-toolchain.toml` (rustup installs it). It is developed on macOS on Apple silicon; CI builds and tests it on Linux and Windows. On Linux, install the libraries `.github/workflows/ci.yml` lists.
 
 ```sh
 cargo run -p viewer -- ~/some/folder ~/another   # open these folders
@@ -39,14 +49,15 @@ On Windows and Linux, Ctrl stands for ⌘ and F11 is fullscreen.
 
 A click on a tile opens it too; under the file, the grid button left of its place ("2 / 3") goes back to the gallery. In the filter, Esc clears the text, then returns to the tree.
 
-## Build the app bundle
+## Build the packages
 
 ```sh
-just bundle
-open "target/release/bundle/osx/Strikebrain Viewer.app"
+just bundle           # macOS: target/release/bundle/osx/Strikebrain Viewer.app
+just dmg              # macOS: the app in a disk image
+just linux-packages   # Linux: a .tar.gz and a .deb
 ```
 
-This builds the release binary and wraps it in a signed (ad hoc) `.app`. You can then drop a folder or a file on its Dock icon, or choose it in Finder's Open With: a folder is added, and a file opens its folder and shows.
+On macOS this builds the release binary and wraps it in an `.app`, signed ad hoc for this Mac. You can then drop a folder or a file on its Dock icon, or choose it in Finder's Open With: a folder is added, and a file opens its folder and shows.
 
 ## Develop
 
@@ -57,7 +68,7 @@ This builds the release binary and wraps it in a signed (ad hoc) `.app`. You can
 ```
 crates/explorer   the engine: scan, tree, filter, sort, checks, rows; no UI
 crates/viewer     the app: GPUI views, state, saved state, live refresh, menus
-  bundle/         Info.plist template and icon source for `just bundle`
+  bundle/         Info.plist template, icon source and Linux desktop entry for the packages
   tests/ui/       headless UI tests on the real views
 docs/superpowers/specs/2026-11-22-strikebrain-viewer-design.md   the design
 ```
