@@ -7,12 +7,16 @@ use std::path::PathBuf;
 
 use gpui_kit::{
     AnyWindowHandle, App, AppContext as _, Bounds, Entity, Result, TitlebarOptions, WindowBounds,
-    WindowOptions,
+    WindowOptions, px, size,
 };
 
-use crate::app::{AppView, Session};
+use crate::app::{AppView, EXPLORER_MIN_WIDTH, STAGE_MIN_WIDTH, Session};
 use crate::menus::APP_NAME;
-use crate::persist::{SavedWindow, StateStore, fit, plan_launch};
+use crate::persist::{APP_ID, SavedWindow, StateStore, fit, plan_launch};
+
+/// The shortest the window can be made, in pixels: the toolbar, the filter
+/// and a few rows.
+const MIN_HEIGHT: f32 = 240.0;
 
 /// Opens the main window. `folders` are the command line's paths, folders
 /// or files; the saved state
@@ -54,6 +58,13 @@ pub fn open_main_window(
             }),
             window_bounds,
             display_id,
+            // Room for both panes at their narrowest.
+            window_min_size: Some(size(
+                px(EXPLORER_MIN_WIDTH + STAGE_MIN_WIDTH),
+                px(MIN_HEIGHT),
+            )),
+            // What Linux matches a window to its desktop entry by.
+            app_id: Some(APP_ID.to_owned()),
             ..Default::default()
         },
         cx,

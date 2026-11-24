@@ -3,7 +3,10 @@
 
 use explorer::NodeId;
 use gpui_kit::test::TestWindowExt as _;
-use gpui_kit::{AppContext as _, Entity, TestAppContext};
+use gpui_kit::{
+    AppContext as _, Entity, ExternalPaths, FileDropEvent, InputEvent as _, TestAppContext, point,
+    px,
+};
 use viewer::{AppState, AppView, Launch};
 
 use crate::{
@@ -123,7 +126,7 @@ fn add_folder_and_command_o_show_the_picker_which_adds_several(cx: &mut TestAppC
     );
 
     // ⌘O adds beside what is open; cancelling the picker adds nothing.
-    cx.update_window(handle, |_, window, cx| window.press("cmd-o", cx))
+    cx.update_window(handle, |_, window, cx| window.press("secondary-o", cx))
         .unwrap();
     assert!(cx.did_prompt_for_paths());
     cx.simulate_path_prompt_response(|_| None);
@@ -335,4 +338,22 @@ fn files_opened_together_are_checked_and_show_as_the_gallery(cx: &mut TestAppCon
     let c = node_at(cx, &view, &c);
     assert_eq!(read(cx, &view, AppState::tile), Some(c));
     assert_eq!(crate::focus(cx, &view), Some(c));
+}
+
+#[gpui_kit::test]
+fn a_folder_dropped_on_the_window_is_added(cx: &mut TestAppContext) {
+    let (handle, _) = open_app(cx, Launch::Empty);
+    let dropped = folder(&[("c.txt", "c")]);
+    let paths = ExternalPaths([dropped.path().to_owned()].into_iter().collect());
+    let position = point(px(100.), px(100.));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        let entered = FileDropEvent::Entered { position, paths };
+        window.dispatch_event(entered.to_platform_input(), cx);
+        window.render_frame(cx);
+        window.dispatch_event(FileDropEvent::Submit { position }.to_platform_input(), cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(rows_now(cx, handle), under(dropped.path(), &["c.txt"]));
 }

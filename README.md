@@ -11,7 +11,7 @@ cargo run -p viewer -- ~/some/folder ~/another   # open these folders
 cargo run -p viewer                              # reopen the last folders as you left them
 ```
 
-Add Folder (⌘O, the toolbar's folder button, or File > Add Folder…) adds more; each folder is a top-level row, removed with the button that shows on its row when you point at it, or ⌘⌫. The app remembers the folders, their open folders and checks, the filter, sort, scroll, the file on the stage and whether the gallery showed, the explorer's width and the window, in `~/Library/Application Support/ai.brainstrike.viewer/state.json`. It follows each folder on disk and refreshes that folder when its files change.
+Add Folder (⌘O, the toolbar's folder button, or File > Add Folder…) adds more, as does a folder or a file dropped on the window; each folder is a top-level row, removed with the button that shows on its row when you point at it, or ⌘⌫. The app remembers the folders, their open folders and checks, the filter, sort, scroll, the file on the stage and whether the gallery showed, the explorer's width and the window, in `~/Library/Application Support/ai.brainstrike.viewer/state.json`. It follows each folder on disk and refreshes that folder when its files change.
 
 ## Keys
 
@@ -28,7 +28,14 @@ Add Folder (⌘O, the toolbar's folder button, or File > Add Folder…) adds mor
 | ⌘F | Filter | Filter | Filter | |
 | ⌘O | Add folders | Add folders | Add folders | |
 | ⌘⌫ | Remove the focused folder | | | |
+| ⌘R | Refresh | Refresh | Refresh | Refresh |
+| ⇧⌘. | Show ignored files, or hide them | The same | The same | The same |
+| ⇧⌘R | Reveal the focused row in Finder | Reveal the file | Reveal the file | Reveal the file |
+| ⌥⌘C | Copy the focused row's path | Copy the file's path | Copy the file's path | Copy the file's path |
+| ⌃⌘F | Fullscreen, or back | The same | The same | The same |
 | Tab | Next pane | Next pane | Next pane | |
+
+On Windows and Linux, Ctrl stands for ⌘ and F11 is fullscreen.
 
 A click on a tile opens it too; under the file, the grid button left of its place ("2 / 3") goes back to the gallery. In the filter, Esc clears the text, then returns to the tree.
 

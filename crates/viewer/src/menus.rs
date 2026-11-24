@@ -1,21 +1,33 @@
 //! The menu bar: the application menu, File, Edit, View and Window, each
-//! item an action the app already handles. Items whose action nothing on
+//! item an action the app handles, and the handlers of those that need no
+//! window's state: About, Hide, Hide Others and Show All. Items whose action nothing on
 //! the focused path handles show disabled, as macOS asks GPUI before it
 //! draws a menu.
+//!
+//! macOS adds Enter Full Screen to the View menu itself, so the menu has
+//! no item for `ToggleFullScreen`, only its key.
 //!
 //! An item's shortcut is the first key bound to its action. That is why
 //! the View menu's Present is its own unbound action: `Present` is Space,
 //! and a menu shortcut of Space would take the key from the filter input.
 
 use gpui_kit::component::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
-use gpui_kit::{App, Menu, MenuItem, OsAction, PromptLevel};
+use gpui_kit::{App, Menu, MenuItem, OsAction, PromptLevel, SystemMenuType};
 
 use crate::keys::{
-    About, AddFolder, Minimize, Quit, Refresh, StartPresenting, ToggleShowIgnored, Zoom,
+    About, AddFolder, CloseWindow, CopyPath, Hide, HideOthers, Minimize, Quit, Refresh, Reveal,
+    ShowAll, StartPresenting, ToggleShowIgnored, Zoom,
 };
 
 /// The name the menus show.
 pub(crate) const APP_NAME: &str = "Strikebrain Viewer";
+
+/// What showing a file in the system's file manager is called.
+const REVEAL: &str = if cfg!(target_os = "macos") {
+    "Reveal in Finder"
+} else {
+    "Show in File Manager"
+};
 
 /// Sets the menu bar, with Show Ignored checked while ignored files show.
 pub(crate) fn install(shows_ignored: bool, cx: &App) {
@@ -23,9 +35,22 @@ pub(crate) fn install(shows_ignored: bool, cx: &App) {
         Menu::new(APP_NAME).items([
             MenuItem::action(format!("About {APP_NAME}"), About),
             MenuItem::separator(),
+            MenuItem::os_submenu("Services", SystemMenuType::Services),
+            MenuItem::separator(),
+            MenuItem::action(format!("Hide {APP_NAME}"), Hide),
+            MenuItem::action("Hide Others", HideOthers),
+            MenuItem::action("Show All", ShowAll),
+            MenuItem::separator(),
             MenuItem::action(format!("Quit {APP_NAME}"), Quit),
         ]),
-        Menu::new("File").items([MenuItem::action("Add Folder…", AddFolder)]),
+        Menu::new("File").items([
+            MenuItem::action("Add Folder…", AddFolder),
+            MenuItem::separator(),
+            MenuItem::action(REVEAL, Reveal),
+            MenuItem::action("Copy Path", CopyPath),
+            MenuItem::separator(),
+            MenuItem::action("Close Window", CloseWindow),
+        ]),
         // The editing commands of the filter input and the code view, which
         // macOS also routes to its own panels, such as the folder picker.
         Menu::new("Edit").items([
@@ -110,9 +135,29 @@ mod tests {
             |ix: usize| -> Vec<&str> { bar[ix].1.iter().map(|(name, _)| name.as_str()).collect() };
         assert_eq!(
             items(0),
-            ["About Strikebrain Viewer", "-", "Quit Strikebrain Viewer"]
+            [
+                "About Strikebrain Viewer",
+                "-",
+                "Services",
+                "-",
+                "Hide Strikebrain Viewer",
+                "Hide Others",
+                "Show All",
+                "-",
+                "Quit Strikebrain Viewer"
+            ]
         );
-        assert_eq!(items(1), ["Add Folder…"]);
+        assert_eq!(
+            items(1),
+            [
+                "Add Folder…",
+                "-",
+                super::REVEAL,
+                "Copy Path",
+                "-",
+                "Close Window"
+            ]
+        );
         assert_eq!(
             items(2),
             ["Undo", "Redo", "-", "Cut", "Copy", "Paste", "Select All"]

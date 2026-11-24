@@ -357,6 +357,19 @@ impl AppState {
         self.focus
     }
 
+    /// The path a command about one file or folder acts on: the file on
+    /// the stage when `on_stage`, the focus row otherwise, and either when
+    /// the other is missing.
+    #[must_use]
+    pub fn pointed(&self, on_stage: bool) -> Option<PathBuf> {
+        let node = if on_stage {
+            self.current.or(self.focus)
+        } else {
+            self.focus.or(self.current)
+        }?;
+        Some(self.explorer.as_ref()?.tree().abs_path(node))
+    }
+
     /// The keyboard focus row's index in the rows. Linear in the rows only
     /// when the rows changed since focus last moved.
     #[must_use]

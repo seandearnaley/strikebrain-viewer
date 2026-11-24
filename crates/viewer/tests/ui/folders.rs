@@ -107,11 +107,11 @@ fn command_backspace_removes_the_focused_folder_with_its_checks(cx: &mut TestApp
 
     // ⌘⌫ on a file row does nothing.
     press(cx, handle, "down");
-    press(cx, handle, "cmd-backspace");
+    press(cx, handle, "secondary-backspace");
     assert_eq!(rows_now(cx, handle).len(), 5);
 
     press(cx, handle, "up");
-    press(cx, handle, "cmd-backspace");
+    press(cx, handle, "secondary-backspace");
     assert_eq!(rows_now(cx, handle), under(one.path(), &["docs", "a.txt"]));
     // Its checks went with it; the stage moved to the checked file left.
     assert_eq!(read(cx, &view, AppState::selected_count), 1);
@@ -126,7 +126,7 @@ fn removing_the_last_folder_shows_the_empty_state(cx: &mut TestAppContext) {
     let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
     let top = node(cx, &view, "");
     assert_eq!(read(cx, &view, AppState::focus), Some(top));
-    press(cx, handle, "cmd-backspace");
+    press(cx, handle, "secondary-backspace");
     assert!(read(cx, &view, AppState::is_empty));
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
@@ -476,7 +476,7 @@ fn the_sort_outlasts_the_last_folder(cx: &mut TestAppContext) {
     let dir = folder(&[("a.txt", "a")]);
     let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
     crate::click(cx, handle, "header-size");
-    press(cx, handle, "cmd-backspace");
+    press(cx, handle, "secondary-backspace");
     assert!(read(cx, &view, AppState::is_empty));
     let other = folder(&[("b.txt", "b")]);
     add(cx, &view, &[other.path()]);

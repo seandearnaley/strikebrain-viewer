@@ -97,7 +97,7 @@ Neither was added. Rebuild and restart instead.
 
 ## Known gaps
 
-- On Windows and Linux every shortcut still uses Cmd (`cmd-f`, `cmd-o`, `cmd-backspace`, ...; `crates/viewer/src/keys.rs`), so none of them works there; the buttons do. Ctrl in their place, and what Quit and Minimize become, is a change of its own, with the tests that press them. Tests that make symlinks or FIFOs are `#[cfg(unix)]`.
+- A command's key takes ⌘ on macOS and Ctrl elsewhere: `secondary!` in `crates/viewer/src/keys.rs` writes it for the platform the app is built for, and a test presses it as `secondary-f`. GPUI draws no menu bar on Windows and Linux, so the commands there are their keys and the buttons. Tests that make symlinks or FIFOs are `#[cfg(unix)]`.
 - Paths compared with a tree's go through `explorer::canonical`, which on Windows drops the `\\?\` prefix of the system's canonical form where the path means the same without it (`dunce`); Clippy rejects `std::fs::canonicalize`. A path that needs the prefix (a reserved name such as `con`, more than 260 characters) keeps it, and shows with it.
 - The bundle is signed ad hoc (`codesign -s -`), for local use and for tools that find the app by bundle identifier. Distribution needs a Developer ID signature and notarization, which `just bundle` does not do.
 - Live refresh rescans the whole folder a change is in, on any change a scan would show, as the design says; the other folders are left alone. With Show ignored on, a busy folder the tree then shows (a build's `target/`) is rescanned back to back while it changes.

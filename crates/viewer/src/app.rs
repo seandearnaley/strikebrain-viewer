@@ -20,15 +20,15 @@ use std::time::Duration;
 
 use gpui_kit::component::{ResizablePanelEvent, ResizableState, h_resizable, resizable_panel};
 use gpui_kit::{
-    App, AppContext as _, Bounds, Context, Entity, Focusable as _, IntoElement, ParentElement as _,
-    Pixels, Render, SharedString, StyleRefinement, Styled as _, Subscription, Task,
-    TestSupportExt as _, Window, WindowBounds, div, prelude::*, px,
+    App, AppContext as _, Bounds, ClipboardItem, Context, Entity, ExternalPaths, Focusable as _,
+    IntoElement, ParentElement as _, Pixels, Render, SharedString, StyleRefinement, Styled as _,
+    Subscription, Task, TestSupportExt as _, Window, WindowBounds, div, prelude::*, px,
 };
 
 use crate::explorer_panel::{ExplorerFocus, ExplorerPanel};
 use crate::keys::{
-    AddFolder, FocusExplorer, FocusFilter, Minimize, NextPane, PreviousPane, Refresh,
-    StartPresenting, ToggleShowIgnored, Zoom,
+    AddFolder, CloseWindow, CopyPath, FocusExplorer, FocusFilter, Minimize, NextPane, PreviousPane,
+    Refresh, Reveal, StartPresenting, ToggleFullScreen, ToggleShowIgnored, Zoom,
 };
 use crate::menus;
 use crate::persist::{SavedView, SavedWindow, Snapshot, StateStore};
@@ -425,6 +425,26 @@ impl AppView {
         self.state.update(cx, AppState::refresh);
     }
 
+    /// The file or folder a command about one acts on: the file on the
+    /// stage while the stage holds focus, the focus row otherwise.
+    fn pointed(&self, window: &Window, cx: &App) -> Option<PathBuf> {
+        let on_stage = self.focused_pane(window, cx) == Some(Pane::Stage);
+        self.state.read(cx).pointed(on_stage)
+    }
+
+    fn reveal(&mut self, _: &Reveal, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(path) = self.pointed(window, cx) {
+            cx.reveal_path(&path);
+        }
+    }
+
+    fn copy_path(&mut self, _: &CopyPath, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(path) = self.pointed(window, cx) {
+            let text = path.to_string_lossy().into_owned();
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
+    }
+
     // Panes
 
     fn next_pane(&mut self, _: &NextPane, window: &mut Window, cx: &mut Context<Self>) {
@@ -512,14 +532,25 @@ impl Render for AppView {
             .on_action(cx.listener(Self::start_presenting))
             .on_action(cx.listener(Self::toggle_show_ignored))
             .on_action(cx.listener(Self::refresh))
+            .on_action(cx.listener(Self::reveal))
+            .on_action(cx.listener(Self::copy_path))
             .on_action(|_: &Minimize, window, _| window.minimize_window())
-            .on_action(|_: &Zoom, window, _| window.zoom_window());
+            .on_action(|_: &Zoom, window, _| window.zoom_window())
+            .on_action(|_: &ToggleFullScreen, window, _| window.toggle_fullscreen())
+            // Closing the window quits, as its close button does.
+            .on_action(|_: &CloseWindow, _, cx| cx.quit());
         if self.presenting {
             // No Add Folder while presenting, from a key or the menu bar,
             // whose item then shows disabled.
             return root.child(self.stage.clone().cached(pane()));
         }
-        root.on_action(cx.listener(Self::add_folder_picker)).child(
+        // Folders and files dropped on the window open as those dropped on
+        // the Dock icon do.
+        root.on_drop(cx.listener(|this, dropped: &ExternalPaths, _, cx| {
+            this.open_paths(dropped.paths().to_vec(), cx);
+        }))
+        .on_action(cx.listener(Self::add_folder_picker))
+        .child(
             h_resizable("panes")
                 .with_state(&self.split)
                 .child(
