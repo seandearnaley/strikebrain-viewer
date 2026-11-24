@@ -1,5 +1,5 @@
 # Every gate on macOS, where the app is developed, and a build with the
-# tests that run there on Linux and Windows.
+# tests on Linux and Windows.
 name: CI
 
 on:
@@ -43,11 +43,8 @@ jobs:
         include:
           - os: ubuntu-24.04
             name: build and test (Linux)
-          # Windows builds the app and its tests but does not run them yet:
-          # 15 of 490 fail there. See AGENTS.md, Known gaps.
           - os: windows-latest
-            name: build (Windows)
-            nextest: --no-run
+            name: build and test (Windows)
     env:
       CARGO_BUILD_WARNINGS: deny
     steps:
@@ -66,7 +63,7 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest@0.9.152
-      - run: cargo nextest run --locked --workspace --profile ci ${{ matrix.nextest }}
+      - run: cargo nextest run --locked --workspace --profile ci
       # The app as it ships, without test-support. A check, since a second
       # build of GPUI would double the job.
       - run: cargo check --locked -p viewer --lib --bins
