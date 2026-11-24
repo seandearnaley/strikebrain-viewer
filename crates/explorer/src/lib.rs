@@ -24,7 +24,7 @@ pub use explorer::{
 pub use filter::{KindFilter, Query, Visibility, filter};
 pub use fixedbitset::FixedBitSet;
 pub use remap::IdMap;
-pub use scan::{ScanError, ScanOptions, changes_matter, read_sizes, scan};
+pub use scan::{ScanError, ScanOptions, canonical, changes_matter, read_sizes, scan};
 pub use selection::{Check, Selection};
 pub use sort::{Direction, Sort, SortKey};
 pub use tree::{Kind, Tree, TreeError, compare_names};

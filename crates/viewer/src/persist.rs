@@ -143,7 +143,7 @@ fn folder_of(path: PathBuf) -> PathBuf {
 /// gone, or on a volume not mounted, keeps the place its nearest existing
 /// parent resolves to, so it still matches the path it was saved under.
 pub(crate) fn resolve(path: &Path) -> PathBuf {
-    if let Ok(found) = fs::canonicalize(path) {
+    if let Ok(found) = explorer::canonical(path) {
         return found;
     }
     let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
@@ -151,7 +151,7 @@ pub(crate) fn resolve(path: &Path) -> PathBuf {
     let mut at = absolute.as_path();
     while let (Some(parent), Some(name)) = (at.parent(), at.file_name()) {
         rest.push(name);
-        if let Ok(found) = fs::canonicalize(parent) {
+        if let Ok(found) = explorer::canonical(parent) {
             return rest.iter().rev().fold(found, |path, name| path.join(name));
         }
         at = parent;

@@ -59,7 +59,7 @@ fn a_scan_reads_names_kinds_and_sizes_in_canonical_order() {
         ("empty/", ""),
     ]);
     let tree = scan_default(dir.path());
-    let real = fs::canonicalize(dir.path()).unwrap();
+    let real = crate::canonical(dir.path()).unwrap();
     assert_eq!(
         paths(&tree),
         [
@@ -121,7 +121,7 @@ fn a_scan_matches_the_same_listing_built_from_paths() {
 #[test]
 fn a_root_reached_through_dot_dot_is_named_after_the_real_folder() {
     let dir = folder(&[("a/b.txt", "x"), ("c.txt", "x")]);
-    let real = fs::canonicalize(dir.path()).unwrap();
+    let real = crate::canonical(dir.path()).unwrap();
     let tree = scan_default(&dir.path().join("a").join(".."));
     assert_eq!(tree.root_path(), real);
     assert_eq!(
@@ -133,7 +133,7 @@ fn a_root_reached_through_dot_dot_is_named_after_the_real_folder() {
 
 #[test]
 fn a_relative_root_is_made_absolute() {
-    let cwd = fs::canonicalize(std::env::current_dir().unwrap()).unwrap();
+    let cwd = crate::canonical(&std::env::current_dir().unwrap()).unwrap();
     let tree = scan(
         Path::new("."),
         ScanOptions::default(),

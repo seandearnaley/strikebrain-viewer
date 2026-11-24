@@ -7,8 +7,8 @@ use gpui_kit::{AppContext as _, Entity, TestAppContext};
 use viewer::{AppState, AppView, Launch};
 
 use crate::{
-    fixture_folder, folder, labels, name_of, node, node_at, open_app, read, row, rows_now, stage,
-    under,
+    fixture_folder, folder, labels, name_of, node, node_at, not_found, open_app, read, row,
+    rows_now, stage, under,
 };
 
 /// The first top-level folder of the tree on screen.
@@ -57,7 +57,7 @@ fn several_folders_open_in_the_order_given_and_the_title_is_the_apps(cx: &mut Te
     // Each folder row's tooltip is its full path.
     let top = node_at(cx, &view, a.path());
     let tooltip = read(cx, &view, |state| state.folder_tooltip(top));
-    let path = std::fs::canonicalize(a.path()).unwrap();
+    let path = explorer::canonical(a.path()).unwrap();
     assert_eq!(tooltip.as_deref(), path.to_str());
     // A file's row has none.
     let file = node(cx, &view, "b.txt");
@@ -67,7 +67,7 @@ fn several_folders_open_in_the_order_given_and_the_title_is_the_apps(cx: &mut Te
 #[gpui_kit::test]
 fn an_unreadable_folder_is_a_row_with_the_os_error(cx: &mut TestAppContext) {
     let missing = fixture_folder().join("no-such-folder");
-    let (handle, view) = open_app(cx, Launch::Folders(vec![missing.clone()]));
+    let (handle, view) = open_app(cx, Launch::Folders(vec![missing]));
 
     let top = first_folder(cx, &view);
     cx.update_window(handle, |_, window, cx| {
@@ -78,12 +78,15 @@ fn an_unreadable_folder_is_a_row_with_the_os_error(cx: &mut TestAppContext) {
         assert!(window.within(row(top)).try_find("warning").is_some());
     })
     .unwrap();
-    // The tooltip gives the path and the operating system's message alone,
-    // without Rust's error code.
+    // The tooltip gives the path, where its parent resolves to, and the
+    // operating system's message alone, without Rust's error code.
     let tooltip = read(cx, &view, |state| state.folder_tooltip(top)).unwrap();
+    let resolved = explorer::canonical(&fixture_folder())
+        .unwrap()
+        .join("no-such-folder");
     assert_eq!(
         tooltip.as_ref(),
-        format!("{}\nNo such file or directory", missing.display())
+        format!("{}\n{}", resolved.display(), not_found())
     );
 }
 

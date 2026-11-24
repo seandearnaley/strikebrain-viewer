@@ -14,6 +14,12 @@ icu_collator = "2.4.0"
 ignore = "0.4.35"
 memchr = "2.8.3"
 
+# Canonical paths without the `\\?\` prefix Windows' own canonicalize adds
+# (see `canonical`). GPUI's Windows backend already builds this crate, so it
+# adds none; std has no way to drop the prefix only where that is safe.
+[target.'cfg(windows)'.dependencies]
+dunce = "1.0.5"
+
 [dev-dependencies]
 # Benchmarks only; no plots, no rayon.
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }

@@ -150,7 +150,7 @@ fn folder_row(cx: &mut HeadlessAppContext, view: &Entity<AppView>, path: &Path) 
     let id = cx.update(|cx| {
         let state = view.read(cx).state().read(cx);
         let explorer = state.explorer().expect("a tree is on screen");
-        let path = path.canonicalize().expect("the folder exists");
+        let path = explorer::canonical(&path).expect("the folder exists");
         explorer.folder_at(&path).expect("the folder is open")
     });
     ("row", id.index()).into()
@@ -457,7 +457,7 @@ fn exercise(cx: &mut HeadlessAppContext, handle: AnyWindowHandle) {
 fn main() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/shots");
     std::fs::create_dir_all(&dir).expect("create target/shots");
-    let dir = dir.canonicalize().expect("target/shots exists");
+    let dir = explorer::canonical(&dir).expect("target/shots exists");
     let mut written = Vec::new();
 
     for mode in [ThemeMode::Light, ThemeMode::Dark] {

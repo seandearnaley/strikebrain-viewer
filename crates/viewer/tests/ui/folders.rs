@@ -6,8 +6,8 @@ use gpui_kit::{AnyWindowHandle, AppContext as _, Entity, TestAppContext};
 use viewer::{AppState, AppView, Launch};
 
 use crate::{
-    current, folder, labels, name_of, node, node_at, open_app, press, read, row, rows_now,
-    type_query, under,
+    current, folder, labels, name_of, node, node_at, not_found, open_app, press, read, row,
+    rows_now, type_query, under,
 };
 
 /// Two folders: `one` holding a.txt and docs/, `two` holding b.md.
@@ -447,14 +447,14 @@ fn a_folder_row_describes_its_path_and_why_it_cannot_be_read(cx: &mut TestAppCon
     let launch = Launch::Folders(vec![dir.path().to_owned(), missing.clone()]);
     let (handle, view) = open_app(cx, launch);
     let (top, gone) = (node_at(cx, &view, dir.path()), node_at_missing(cx, &view));
-    let path = std::fs::canonicalize(dir.path()).unwrap();
+    let path = explorer::canonical(dir.path()).unwrap();
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         // What a screen reader hears after the name: what the tooltip says.
         assert_eq!(window.find(row(top)).description(), path.to_str());
         // A folder that is gone is where its parent resolves to.
         let gone_at = path.join("gone");
-        let expected = format!("{}\nNo such file or directory", gone_at.display());
+        let expected = format!("{}\n{}", gone_at.display(), not_found());
         assert_eq!(
             window.find(row(gone)).description(),
             Some(expected.as_str())

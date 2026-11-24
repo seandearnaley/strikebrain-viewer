@@ -15,8 +15,8 @@ use viewer::{
 };
 
 use crate::{
-    checked, click, drag_divider, filter_value, folder, labels, name_of, node, node_at, read, row,
-    rows_now, under, write,
+    checked, click, drag_divider, filter_value, folder, labels, name_of, node, node_at, not_found,
+    read, row, rows_now, under, write,
 };
 
 /// Launches the app as the binary does, without following the disk.
@@ -264,7 +264,7 @@ fn several_folders_come_back_in_order_each_with_its_own_view(cx: &mut TestAppCon
 
     let file = saved(store.path());
     let paths: Vec<PathBuf> = file.view.folders.iter().map(|f| f.path.clone()).collect();
-    let canonical = |dir: &Path| std::fs::canonicalize(dir).unwrap();
+    let canonical = |dir: &Path| explorer::canonical(dir).unwrap();
     assert_eq!(paths, [canonical(one.path()), canonical(two.path())]);
     assert_eq!(file.view.folders[0].open, ["", "sub"]);
     assert_eq!(
@@ -361,7 +361,7 @@ fn another_folder_opens_fresh_in_the_saved_window(cx: &mut TestAppContext) {
         .into_iter()
         .map(|folder| folder.path)
         .collect();
-    assert_eq!(paths, [std::fs::canonicalize(other.path()).unwrap()]);
+    assert_eq!(paths, [explorer::canonical(other.path()).unwrap()]);
 }
 
 #[gpui_kit::test]
@@ -523,7 +523,7 @@ fn a_folder_that_vanishes_keeps_its_checks_and_open_folders(cx: &mut TestAppCont
         top
     });
     let tooltip = read(cx, &view, |state| state.folder_tooltip(top)).unwrap();
-    assert!(tooltip.ends_with("No such file or directory"), "{tooltip}");
+    assert!(tooltip.ends_with(&not_found()), "{tooltip}");
     assert_eq!(read(cx, &view, AppState::selected_count), 0);
     cx.executor().advance_clock(SAVE_DELAY);
     cx.run_until_parked();
@@ -607,7 +607,7 @@ fn a_folder_argument_that_cannot_be_read_opens_as_its_row(cx: &mut TestAppContex
         .into_iter()
         .map(|folder| folder.path)
         .collect();
-    let resolved = std::fs::canonicalize(state_dir.path())
+    let resolved = explorer::canonical(state_dir.path())
         .unwrap()
         .join("no such folder");
     assert_eq!(paths, [resolved]);
@@ -625,7 +625,7 @@ fn a_disk_change_during_the_first_scan_keeps_the_saved_top_row(cx: &mut TestAppC
         .map(|(path, text)| (path.as_str(), text.as_str()))
         .collect();
     let dir = folder(&files);
-    let root = std::fs::canonicalize(dir.path()).unwrap();
+    let root = explorer::canonical(dir.path()).unwrap();
     let state_dir = tempfile::tempdir().unwrap();
     let path = state_dir.path().join("state.json");
     // A state file from before several folders.
@@ -689,7 +689,7 @@ fn a_disk_change_during_the_first_scan_keeps_the_saved_top_row(cx: &mut TestAppC
 #[gpui_kit::test]
 fn a_saved_explorer_wider_than_the_window_fits_it(cx: &mut TestAppContext) {
     let dir = folder(&[("a.txt", "a")]);
-    let root = std::fs::canonicalize(dir.path()).unwrap();
+    let root = explorer::canonical(dir.path()).unwrap();
     let state_dir = tempfile::tempdir().unwrap();
     let path = state_dir.path().join("state.json");
     std::fs::write(

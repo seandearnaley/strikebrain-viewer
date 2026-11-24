@@ -160,7 +160,37 @@ fn resolve_root(root: &Path) -> Result<PathBuf, ScanError> {
             message,
         )));
     }
-    fs::canonicalize(root).map_err(ScanError::Root)
+    canonical(root).map_err(ScanError::Root)
+}
+
+/// `path` made absolute and canonical, as a scan names its root: links
+/// resolved, `.` and `..` gone. Folders are told apart by this path, so
+/// every path compared with a tree's goes through it.
+///
+/// On Windows the system's answer starts with `\\?\`, which people do not
+/// type and few programs take; it is dropped wherever the path means the
+/// same without it. A path that needs it keeps it: a reserved name such as
+/// `con`, a name ending in a dot, or more than 260 characters.
+///
+/// # Errors
+///
+/// The operating system's, when `path` does not exist or cannot be read.
+#[cfg_attr(
+    not(windows),
+    expect(
+        clippy::disallowed_methods,
+        reason = "the one place that canonicalizes; elsewhere call this"
+    )
+)]
+pub fn canonical(path: &Path) -> io::Result<PathBuf> {
+    #[cfg(windows)]
+    {
+        dunce::canonicalize(path)
+    }
+    #[cfg(not(windows))]
+    {
+        fs::canonicalize(path)
+    }
 }
 
 /// The walker with this app's rules, on up to [`MAX_WALK_THREADS`].
