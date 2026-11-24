@@ -8,7 +8,7 @@ The [releases page](https://github.com/seandearnaley/strikebrain-viewer/releases
 
 - **macOS, Apple silicon:** `Strikebrain-Viewer-<version>-macos-arm64.dmg`. Open it and drag the app to Applications.
 - **Debian and Ubuntu:** `strikebrain-viewer_<version>_amd64.deb`. Install it with `sudo apt install ./strikebrain-viewer_<version>_amd64.deb`.
-- **Other Linux, x86-64:** `strikebrain-viewer-<version>-linux-x86_64.tar.gz`, laid out as `bin/` and `share/`. Unpack it into `~/.local` with `tar -xzf <file> -C ~/.local --strip-components=1`. It needs fontconfig, freetype, xcb, xkbcommon and a Vulkan driver.
+- **Other Linux, x86-64:** `strikebrain-viewer-<version>-linux-x86_64.tar.gz`, laid out as `bin/` and `share/`. Unpack it into `~/.local` with `tar -xzf <file> -C ~/.local --strip-components=1`. It needs the xcb, xkbcommon and Wayland client libraries and a Vulkan driver, which a desktop already has.
 
 Windows has no package yet; build it from source. `SHA256SUMS` lists each file's checksum, and `gh attestation verify <file> -R seandearnaley/strikebrain-viewer` checks that GitHub built it from this repository.
 
