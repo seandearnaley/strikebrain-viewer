@@ -31,7 +31,8 @@ Design: `docs/superpowers/specs/2026-11-22-strikebrain-viewer-design.md`.
 | Release build wrapped as `target/release/bundle/osx/Strikebrain Viewer.app`, signed ad hoc | `just bundle` |
 | That app in a disk image, `target/release/bundle/*.dmg` | `just dmg` |
 | On Linux, a `.tar.gz` and a `.deb` in `target/release/bundle` | `just linux-packages` |
-| Redraw the icon source `crates/viewer/bundle/icon.png` from `tests/icon.rs` | `just icon` |
+| On Windows, a `.zip` and an Inno Setup installer in `target\release\bundle` (needs Inno Setup 6) | `just windows-packages` |
+| Redraw the icon source `crates/viewer/bundle/icon.png`, and the Windows `icon.ico` beside it, from `tests/icon.rs` | `just icon` |
 | Engine tests | `cargo nextest run -p explorer` |
 | All tests | `cargo nextest run --workspace` |
 | One UI test | `cargo nextest run -p viewer --test ui <name>` |
@@ -42,13 +43,15 @@ CI (`.github/workflows/ci.yml`) runs `just check` on macOS for every pull reques
 
 ## Releasing
 
-`.github/workflows/release.yml` builds the macOS disk image and the Linux packages with the recipes above. A pull request that touches the workflow, the `justfile` or `crates/viewer/bundle` runs it as a rehearsal and keeps the files as artifacts. To release:
+`.github/workflows/release.yml` builds the macOS disk image, the Linux packages and the Windows packages with the recipes above. A pull request that touches the workflow, the `justfile`, `crates/viewer/bundle` or `crates/viewer/build.rs` runs it as a rehearsal and keeps the files as artifacts. To release:
 
 1. Set `version` in the root `Cargo.toml`, run `cargo check` so `Cargo.lock` follows, and merge that.
 2. Tag the merged commit `v<version>` and push the tag. The workflow fails if the tag and the version differ.
 3. The workflow attaches the files, `SHA256SUMS` and a build attestation to a draft release. Read it, then publish it on GitHub.
 
 macOS signs with a Developer ID certificate and notarizes only when the repository has the secrets the workflow's header lists; without them the image is signed ad hoc, and Gatekeeper refuses it on another Mac. `just bundle` and `just dmg` sign with `CODESIGN_IDENTITY` when it is set. The hardened runtime is on either way.
+
+Windows signs with Azure Artifact Signing only when the repository has the secrets and variables the workflow's header lists; without them nothing is signed, and SmartScreen warns about the installer. The workflow puts a whole `signtool.exe sign ...` command in `SIGNTOOL`, and `just windows-packages` hands it to Inno Setup, which signs the executable, the uninstaller and the installer. `crates/viewer/build.rs` compiles `bundle/windows.rc` into the executable: icon 1, which GPUI loads for the window, and the version details.
 
 Iterate on the narrowest check. Engine work needs only the engine tests.
 
@@ -112,12 +115,13 @@ Neither was added. Rebuild and restart instead.
 - A command's key takes ⌘ on macOS and Ctrl elsewhere: `secondary!` in `crates/viewer/src/keys.rs` writes it for the platform the app is built for, and a test presses it as `secondary-f`. GPUI draws no menu bar on Windows and Linux, so the commands there are their keys and the buttons. Tests that make symlinks or FIFOs are `#[cfg(unix)]`.
 - Paths compared with a tree's go through `explorer::canonical`, which on Windows drops the `\\?\` prefix of the system's canonical form where the path means the same without it (`dunce`); Clippy rejects `std::fs::canonicalize`. A path that needs the prefix (a reserved name such as `con`, more than 260 characters) keeps it, and shows with it.
 - A local bundle is signed ad hoc (`codesign -s -`), for this Mac and for tools that find the app by bundle identifier. The release workflow signs with a Developer ID certificate and notarizes once its secrets exist; until then its image is ad hoc too.
-- Releases cover macOS on Apple silicon and Linux on x86-64. There is no Windows package, no Intel Mac build (none can be run here to test) and no Linux Arm build.
+- Releases cover macOS on Apple silicon, and Linux and Windows on x86-64. There is no Intel Mac build (none can be run here to test), no Linux Arm build and no Windows Arm build.
+- The Windows packages are built and checked only on GitHub's runner: the installer runs silently there, the installed binary prints its version, and the uninstaller removes it. Nobody has watched the installer's pages or the app's icon on a real Windows desktop from them. Signing with Azure has never run.
 - Live refresh rescans the whole folder a change is in, on any change a scan would show, as the design says; the other folders are left alone. With Show ignored on, a busy folder the tree then shows (a build's `target/`) is rescanned back to back while it changes.
 - Folders are told apart by their canonical paths, and `realpath` does not join macOS firmlinks: `/System/Volumes/Data/Users/x` and `/Users/x` stay different, so the same folder added under both is listed twice. The picker and Finder give `/Users/...`.
 - A saved folder that no longer exists at launch is dropped from the saved state, as the design asks, even when it is only on a volume not mounted that day.
 - A change to `.git/info/exclude` or the global git excludes does not trigger a rescan; a `.gitignore` change does.
-- "Open With" lists the app only for the types `crates/viewer/bundle/Info.plist` names: macOS ignores a catch-all claim there. A source format macOS has no text type for needs its extension in the Source Code entry. To see what macOS offers after a change, `just bundle`, then ask `NSWorkspace.shared.urlsForApplications(toOpen:)` for a sample file. Windows and Linux hand the file over as an argument, which works; nothing registers the app with them.
+- "Open With" lists the app only for the types `crates/viewer/bundle/Info.plist` names: macOS ignores a catch-all claim there. A source format macOS has no text type for needs its extension in the Source Code entry. To see what macOS offers after a change, `just bundle`, then ask `NSWorkspace.shared.urlsForApplications(toOpen:)` for a sample file. Windows and Linux hand the file over as an argument, which works; the Linux desktop entry registers the app, and the Windows installer registers nothing, so there it is Open With > Choose another app.
 - `just shot` draws offscreen. To see the real window, `just bundle`, launch the app, find its window id with `CGWindowListCopyWindowInfo` and run `screencapture -x -o -l <id> out.png`. While the screen is locked `screencapture` captures nothing.
 - Run the bundled binary with `STRIKEBRAIN_VIEWER_STATE=<temp file>` when trying it; without it the run writes your own saved state.
 - GPUI Base 0.10.0 draws the code view's caret line number in the foreground colour whatever the theme says; line 1 stands out when a file opens.

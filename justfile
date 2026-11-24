@@ -164,6 +164,40 @@ linux-packages:
     echo "$out/$name.tar.gz"
     echo "$deb"
 
+# The .zip holds the executable and the licenses; the installer, made with
+# Inno Setup 6 from crates/viewer/bundle/windows.iss, puts them in the
+# user's Programs folder with a Start menu entry. Unsigned unless SIGNTOOL
+# holds a whole signing command, to which the file is added: `signtool.exe
+# sign ...`, as the release workflow sets it. Inno Setup then signs the
+# executable, the uninstaller and the installer with it, and the .zip, made
+# afterwards, holds the signed executable.
+# Build the Windows packages, a .zip and an installer, in target\release\bundle.
+[windows]
+[extension(".ps1")]
+windows-packages:
+    #!pwsh
+    $ErrorActionPreference = 'Stop'
+    $PSNativeCommandUseErrorActionPreference = $true
+    cargo build --release --locked -p viewer
+    $version = (cargo pkgid -p viewer) -replace '.*[#@]'
+    $out = Join-Path (Get-Location) 'target\release\bundle'
+    $name = "strikebrain-viewer-$version-windows-x64"
+    $stage = Join-Path $out $name
+    Remove-Item -Recurse -Force $stage -ErrorAction Ignore
+    New-Item -ItemType Directory -Force $stage | Out-Null
+    Copy-Item target\release\strikebrain-viewer.exe, LICENSE-MIT, LICENSE-APACHE $stage
+    $sign = @()
+    if ($env:SIGNTOOL) {
+        # Inno Setup writes a quote in a sign tool's command as $q, and the
+        # file to sign as $f.
+        $sign = '/DSign', "/Ssign=$($env:SIGNTOOL.Replace('"', '$q')) `$f"
+    }
+    $iscc = (Get-Command iscc -ErrorAction Ignore)?.Source ?? "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+    & $iscc /Qp "/DVersion=$version" "/DStage=$stage" "/O$out" @sign crates\viewer\bundle\windows.iss
+    Compress-Archive -Path $stage -DestinationPath "$out\$name.zip" -Force
+    Remove-Item -Recurse -Force $stage
+    Get-ChildItem "$out\*windows-x64*" | ForEach-Object { $_.FullName }
+
 # Install the pinned tools and the pre-commit hook. Needs cargo-binstall.
 setup:
     cargo binstall --no-confirm --locked just@1.59.0 typos-cli@1.52.2 cargo-nextest@0.9.152 cargo-llvm-cov@0.9.2 cargo-deny@0.22.0 cargo-shear@1.14.1 bacon@3.26.0
