@@ -233,7 +233,10 @@ Rules for `current` and the view:
 - A file is never in the tree twice, and that is the whole rule (see Milestone 6, Overlap). A folder holds what its tree on screen lists, nothing more: adding a folder already open, or one an open folder's tree lists, scans nothing; the tree opens to its row and makes it the focus row, scrolled into view, and keyboard focus stays in the pane that has it. A folder inside an open folder that its tree does not list (its ignore rules hide it, or it could not be read) is added as a folder of its own. One added inside a folder whose first scan runs waits for that scan, then is shown or added as above. Whenever a folder's scan lands, readable, it takes in every other open folder it lists, with its checks and open folders, and leaves the rest as they are; a first scan of a folder an open folder already lists is dropped.
 - Each folder scans on its own and lands in its place among the folders, whichever scan lands first. A launch settles once every folder is on screen: at the saved top row, or at the first row, with focus there. A folder added while the app runs becomes the focus row, scrolled into view. A rescan, a folder taken in or a folder removed keeps the tree where it was: the row at the top stays there, to the pixel, and a focus row that was on screen stays on screen.
 - The window title is the folder's name with one folder open, the application's name otherwise.
-- The menu bar: the app menu (About, Quit), File (Add Folder…), Edit (Undo, Redo, Cut, Copy, Paste, Select All, for the filter input and the code view), View (Present, Show Ignored with a check, Refresh) and Window (Minimize, Zoom). Present has its own unbound action, because a menu item shows its action's first key as a shortcut and `Present` is Space, which the menu would then take from the filter input. Add Folder is disabled while presenting, as ⌘O is ignored there.
+- A folder or a file dropped on the window opens as one dropped on the Dock icon does; nothing is dropped while presenting.
+- `--version` and `--help` print and exit. A release build on Windows opens no console window.
+- The window is never narrower than the two panes at their narrowest, nor shorter than 240 px. On Linux its application id is the bundle identifier, which a desktop entry is matched by.
+- The menu bar: the app menu (About, Services, Hide, Hide Others, Show All, Quit), File (Add Folder…, Reveal in Finder, Copy Path, Close Window), Edit (Undo, Redo, Cut, Copy, Paste, Select All, for the filter input and the code view), View (Present, Show Ignored with a check, Refresh; macOS adds Enter Full Screen itself) and Window (Minimize, Zoom). Reveal in Finder and Copy Path act on the file on the stage while the stage holds focus, and on the focus row, file or folder, otherwise. Close Window quits, as the close button does. Present has its own unbound action, because a menu item shows its action's first key as a shortcut and `Present` is Space, which the menu would then take from the filter input. Add Folder is disabled while presenting, as ⌘O is ignored there.
 
 ### Explorer panel
 
@@ -348,9 +351,17 @@ Bindings are GPUI actions bound per key context: `Explorer`, `Filter`, `Gallery`
 | ⌘F | Focus the filter | Focus the filter | Focus the filter | |
 | ⌘O | Add folders | Add folders | Add folders | |
 | ⌘⌫ | Remove the focused top-level folder | | | |
+| ⌘R | Refresh | Refresh | Refresh | Refresh |
+| ⇧⌘. | Show or hide ignored files | The same | The same | The same |
+| ⇧⌘R | Reveal the focus row in Finder | Reveal the file | Reveal the file | Reveal the file |
+| ⌥⌘C | Copy the focus row's path | Copy the file's path | Copy the file's path | Copy the file's path |
+| ⌃⌘F | Fullscreen, or back | The same | The same | The same |
+| ⌘W, ⌘Q | Quit | Quit | Quit | Quit |
 | Tab | Next pane | Next pane | Next pane | |
 
 In the filter input, Esc clears a non-empty query and otherwise moves focus to the tree. Tab order is filter, tree, stage.
+
+⌘ is the Mac's; on Windows and Linux the same keys take Ctrl, and fullscreen is F11. ⌘M (Minimize), ⌘H (Hide) and ⌥⌘H (Hide Others) are bound on macOS only, where they are the convention.
 
 Differences from brainstrike: Enter and file clicks show the file on the stage instead of opening a tab; checking a file also shows it; the first arrow press moves focus immediately; Page Up, Page Down, ⌘F, ⌘O and ⌘⌫ are new.
 
@@ -376,6 +387,8 @@ The tree and its rows carry AccessKit roles, labels and checked state. The galle
 Only these strings appear in the interface: "Filter" as the input placeholder, "All", "Images", "Text", "Name", "Size", "Type", "N selected", "Add Folder", tooltips on icon buttons ("Remove Folder" on a folder row's), a folder row's path as its tooltip, the application's name as the window title with other than one folder open, and operating system error messages. No taglines, no helper text.
 
 Milestone 5 adds the menu bar's items (named in Launch), the About alert ("Strikebrain Viewer", "Version N", "OK"), and the Refresh tooltip while a folder's changes are not followed: "Refresh. Changes on disk are not followed: " and the error.
+
+The release pass adds the menu items named in Launch ("Reveal in Finder" is "Show in File Manager" off macOS) and what `--help` prints.
 
 Milestone 7 adds file names under the gallery's tiles and "Gallery": the grid button's tooltip and label, and the grid's accessible name.
 

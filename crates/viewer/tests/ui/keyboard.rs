@@ -250,7 +250,7 @@ fn escape_in_the_filter_clears_a_query_then_moves_to_the_tree(cx: &mut TestAppCo
 fn command_f_focuses_the_filter_from_the_tree_and_the_stage(cx: &mut TestAppContext) {
     let (handle, _) = open_app(cx, tree(PROJECT));
 
-    press(cx, handle, "cmd-f");
+    press(cx, handle, "secondary-f");
     assert!(is_focused(cx, handle, "filter"));
     cx.update_window(handle, |_, window, cx| window.input("main", cx))
         .unwrap();
@@ -258,7 +258,7 @@ fn command_f_focuses_the_filter_from_the_tree_and_the_stage(cx: &mut TestAppCont
 
     click(cx, handle, "stage");
     assert!(is_focused(cx, handle, "stage"));
-    press(cx, handle, "cmd-f");
+    press(cx, handle, "secondary-f");
     assert!(is_focused(cx, handle, "filter"));
     // The query is selected, so typing replaces it.
     cx.update_window(handle, |_, window, cx| window.input("lib", cx))
@@ -292,7 +292,7 @@ fn tab_moves_between_the_panes_with_no_folder_open(cx: &mut TestAppContext) {
     press(cx, handle, "shift-tab");
     assert!(is_focused(cx, handle, "explorer-body"));
     // No filter on screen: ⌘F leaves focus where it is.
-    press(cx, handle, "cmd-f");
+    press(cx, handle, "secondary-f");
     assert!(is_focused(cx, handle, "explorer-body"));
 }
 
@@ -303,7 +303,7 @@ fn tab_and_command_f_work_when_the_folder_cannot_be_read(cx: &mut TestAppContext
     let (handle, _) = open_app(cx, Launch::Folders(vec![missing]));
     assert!(is_focused(cx, handle, "tree"));
 
-    press(cx, handle, "cmd-f");
+    press(cx, handle, "secondary-f");
     assert!(is_focused(cx, handle, "filter"));
     press(cx, handle, "escape");
     assert!(is_focused(cx, handle, "tree"));
@@ -326,7 +326,7 @@ fn tab_and_command_f_work_during_the_first_scan(cx: &mut TestAppContext) {
         state.open_paths(vec![dir.path().to_owned()], Vec::new(), cx);
     });
     cx.update_window(handle, |_, window, cx| {
-        window.press("cmd-f", cx);
+        window.press("secondary-f", cx);
         assert_eq!(window.find("filter").focused(), Some(true));
         window.press("tab", cx);
         assert_eq!(window.find("explorer-body").focused(), Some(true));

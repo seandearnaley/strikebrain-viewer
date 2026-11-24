@@ -6,8 +6,11 @@
 //! Before a tree is on screen (no folder, or the first scans still
 //! running) the explorer's body holds focus in the tree's place, in
 //! [`EXPLORER_BODY`]; a folder that cannot be read is a row of the tree.
-//! Tab moves between the panes from each of them. Adding a folder and
-//! quitting bind everywhere.
+//! Tab moves between the panes from each of them. Adding a folder,
+//! quitting and the other window commands bind everywhere.
+//!
+//! A command's modifier is ⌘ on macOS and Ctrl elsewhere: [`secondary!`]
+//! writes the key for the platform the app is built for.
 //!
 //! The stage's code view is the Kit's editor, which takes focus on a click
 //! so its text can be selected and copied. It declares the Kit's `Input`
@@ -21,6 +24,22 @@
 //! elsewhere: ⌘O, ⌘F, Tab and Enter do nothing until Esc. ⌘Q still quits.
 
 use gpui_kit::{KeyBinding, NoAction, actions};
+
+/// A key with the platform's command modifier: `secondary!("o")` is
+/// `cmd-o` on macOS and `ctrl-o` elsewhere. `KeyBinding::new` takes the
+/// modifier spelled out; GPUI's own `secondary-` needs an `App` to resolve.
+#[cfg(target_os = "macos")]
+macro_rules! secondary {
+    ($key:literal) => {
+        concat!("cmd-", $key)
+    };
+}
+#[cfg(not(target_os = "macos"))]
+macro_rules! secondary {
+    ($key:literal) => {
+        concat!("ctrl-", $key)
+    };
+}
 
 /// The key context the explorer's tree declares.
 pub(crate) const EXPLORER: &str = "Explorer";
@@ -108,6 +127,21 @@ actions!(
         Minimize,
         /// Zooms the window to fill the screen, or back.
         Zoom,
+        /// Closes the window, which quits.
+        CloseWindow,
+        /// Makes the window fullscreen, or windowed again.
+        ToggleFullScreen,
+        /// Hides the application. macOS.
+        Hide,
+        /// Hides every other application. macOS.
+        HideOthers,
+        /// Shows every hidden application. macOS.
+        ShowAll,
+        /// Shows the file in the system's file manager: the file on the
+        /// stage from the stage, the focus row from the explorer.
+        Reveal,
+        /// Copies that file's or folder's path.
+        CopyPath,
     ]
 );
 
@@ -167,6 +201,13 @@ actions!(
     ]
 );
 
+/// The key that toggles fullscreen: the system's own on each platform.
+const FULL_SCREEN: &str = if cfg!(target_os = "macos") {
+    "ctrl-cmd-f"
+} else {
+    "f11"
+};
+
 /// Every key binding of the application.
 ///
 /// Learning exercise: Sean may rewrite this body; the tests below define it.
@@ -186,20 +227,34 @@ pub(crate) fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("space", ToggleCheck, explorer),
         KeyBinding::new("enter", ShowFile, explorer),
         KeyBinding::new("escape", ClearFilter, explorer),
-        KeyBinding::new("cmd-backspace", RemoveFolder, explorer),
-        KeyBinding::new("cmd-f", FocusFilter, explorer),
+        KeyBinding::new(secondary!("backspace"), RemoveFolder, explorer),
+        KeyBinding::new(secondary!("f"), FocusFilter, explorer),
         KeyBinding::new("tab", NextPane, explorer),
         KeyBinding::new("shift-tab", PreviousPane, explorer),
         KeyBinding::new("escape", CancelFilter, filter),
         KeyBinding::new("tab", NextPane, filter),
         KeyBinding::new("shift-tab", PreviousPane, filter),
-        KeyBinding::new("cmd-f", FocusFilter, body),
+        KeyBinding::new(secondary!("f"), FocusFilter, body),
         KeyBinding::new("tab", NextPane, body),
         KeyBinding::new("shift-tab", PreviousPane, body),
-        KeyBinding::new("cmd-o", AddFolder, None),
-        KeyBinding::new("cmd-q", Quit, None),
-        KeyBinding::new("cmd-m", Minimize, None),
+        KeyBinding::new(secondary!("o"), AddFolder, None),
+        KeyBinding::new(secondary!("q"), Quit, None),
+        KeyBinding::new(secondary!("w"), CloseWindow, None),
+        KeyBinding::new(secondary!("r"), Refresh, None),
+        // Finder's key for its hidden files.
+        KeyBinding::new(secondary!("shift-."), ToggleShowIgnored, None),
+        KeyBinding::new(secondary!("shift-r"), Reveal, None),
+        KeyBinding::new(secondary!("alt-c"), CopyPath, None),
+        KeyBinding::new(FULL_SCREEN, ToggleFullScreen, None),
     ];
+    // Keys only macOS has a convention for.
+    if cfg!(target_os = "macos") {
+        bindings.extend([
+            KeyBinding::new("cmd-m", Minimize, None),
+            KeyBinding::new("cmd-h", Hide, None),
+            KeyBinding::new("alt-cmd-h", HideOthers, None),
+        ]);
+    }
     // The stage's keys, on the stage and over the editor inside it.
     for stage in [stage, Some(STAGE_EDITOR)] {
         bindings.extend([
@@ -214,7 +269,7 @@ pub(crate) fn bindings() -> Vec<KeyBinding> {
             KeyBinding::new("space", Present, stage),
             KeyBinding::new("enter", Present, stage),
             KeyBinding::new("escape", ShowGallery, stage),
-            KeyBinding::new("cmd-f", FocusFilter, stage),
+            KeyBinding::new(secondary!("f"), FocusFilter, stage),
             KeyBinding::new("tab", NextPane, stage),
             KeyBinding::new("shift-tab", PreviousPane, stage),
         ]);
@@ -233,7 +288,7 @@ pub(crate) fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("enter", OpenTile, gallery),
         KeyBinding::new("space", Present, gallery),
         KeyBinding::new("escape", FocusExplorer, gallery),
-        KeyBinding::new("cmd-f", FocusFilter, gallery),
+        KeyBinding::new(secondary!("f"), FocusFilter, gallery),
         KeyBinding::new("tab", NextPane, gallery),
         KeyBinding::new("shift-tab", PreviousPane, gallery),
     ]);
@@ -251,8 +306,8 @@ pub(crate) fn bindings() -> Vec<KeyBinding> {
             KeyBinding::new("end", ScrollToBottom, presentation),
             KeyBinding::new("escape", LeavePresentation, presentation),
             KeyBinding::new("enter", NoAction, presentation),
-            KeyBinding::new("cmd-f", NoAction, presentation),
-            KeyBinding::new("cmd-o", NoAction, presentation),
+            KeyBinding::new(secondary!("f"), NoAction, presentation),
+            KeyBinding::new(secondary!("o"), NoAction, presentation),
             KeyBinding::new("tab", NoAction, presentation),
             KeyBinding::new("shift-tab", NoAction, presentation),
         ]);
@@ -314,9 +369,9 @@ mod tests {
         assert_bound("escape", Some(FILTER), &CancelFilter);
         assert_bound("escape", Some(STAGE), &ShowGallery);
         assert_bound("escape", Some(GALLERY), &FocusExplorer);
-        assert_bound("cmd-f", Some(EXPLORER), &FocusFilter);
-        assert_bound("cmd-f", Some(STAGE), &FocusFilter);
-        assert_bound("cmd-f", Some(EXPLORER_BODY), &FocusFilter);
+        assert_bound(secondary!("f"), Some(EXPLORER), &FocusFilter);
+        assert_bound(secondary!("f"), Some(STAGE), &FocusFilter);
+        assert_bound(secondary!("f"), Some(EXPLORER_BODY), &FocusFilter);
     }
 
     #[test]
@@ -333,7 +388,7 @@ mod tests {
             assert_bound("space", Some(context), &Present);
             assert_bound("enter", Some(context), &Present);
             assert_bound("escape", Some(context), &ShowGallery);
-            assert_bound("cmd-f", Some(context), &FocusFilter);
+            assert_bound(secondary!("f"), Some(context), &FocusFilter);
         }
     }
 
@@ -351,7 +406,7 @@ mod tests {
         assert_bound("enter", gallery, &OpenTile);
         assert_bound("space", gallery, &Present);
         assert_bound("escape", gallery, &FocusExplorer);
-        assert_bound("cmd-f", gallery, &FocusFilter);
+        assert_bound(secondary!("f"), gallery, &FocusFilter);
     }
 
     #[test]
@@ -373,10 +428,16 @@ mod tests {
     #[test]
     fn the_presentation_hides_the_keys_it_leaves_out_but_not_quit() {
         for context in [PRESENTATION, PRESENTATION_EDITOR] {
-            for key in ["enter", "cmd-f", "cmd-o", "tab", "shift-tab"] {
+            for key in [
+                "enter",
+                secondary!("f"),
+                secondary!("o"),
+                "tab",
+                "shift-tab",
+            ] {
                 assert_bound(key, Some(context), &NoAction);
             }
-            assert!(binding("cmd-q", Some(context)).is_none());
+            assert!(binding(secondary!("q"), Some(context)).is_none());
         }
     }
 
@@ -397,26 +458,43 @@ mod tests {
 
     #[test]
     fn command_backspace_removes_a_folder_in_the_explorer() {
-        assert_bound("cmd-backspace", Some(EXPLORER), &RemoveFolder);
-        assert!(binding("cmd-backspace", Some(STAGE)).is_none());
+        assert_bound(secondary!("backspace"), Some(EXPLORER), &RemoveFolder);
+        assert!(binding(secondary!("backspace"), Some(STAGE)).is_none());
     }
 
     #[test]
-    fn command_o_command_q_and_command_m_work_everywhere() {
-        assert_bound("cmd-o", None, &AddFolder);
-        assert_bound("cmd-q", None, &Quit);
+    fn the_window_commands_work_everywhere() {
+        assert_bound(secondary!("o"), None, &AddFolder);
+        assert_bound(secondary!("q"), None, &Quit);
+        assert_bound(secondary!("w"), None, &CloseWindow);
+        assert_bound(secondary!("r"), None, &Refresh);
+        assert_bound(secondary!("shift-."), None, &ToggleShowIgnored);
+        assert_bound(secondary!("shift-r"), None, &Reveal);
+        assert_bound(secondary!("alt-c"), None, &CopyPath);
+        assert_bound(FULL_SCREEN, None, &ToggleFullScreen);
+    }
+
+    #[test]
+    fn a_command_takes_the_platforms_modifier() {
+        let modifier = if cfg!(target_os = "macos") {
+            "cmd"
+        } else {
+            "ctrl"
+        };
+        assert_eq!(secondary!("o"), format!("{modifier}-o"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn minimize_and_hide_take_their_mac_keys() {
         assert_bound("cmd-m", None, &Minimize);
+        assert_bound("cmd-h", None, &Hide);
+        assert_bound("alt-cmd-h", None, &HideOthers);
     }
 
     #[test]
     fn the_menu_only_actions_have_no_key() {
-        let actions: [&dyn Action; 5] = [
-            &About,
-            &StartPresenting,
-            &ToggleShowIgnored,
-            &Refresh,
-            &Zoom,
-        ];
+        let actions: [&dyn Action; 4] = [&About, &StartPresenting, &Zoom, &ShowAll];
         for action in actions {
             assert!(
                 bindings()

@@ -1,10 +1,35 @@
+// A release build on Windows opens no console window beside its own.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 use std::path::PathBuf;
 
 use futures::StreamExt as _;
 use futures::channel::mpsc;
 use viewer::{AppAssets, StateStore, open_main_window, path_from_url};
 
+/// What `--help` prints.
+const USAGE: &str = "\
+Usage: strikebrain-viewer [FOLDER or FILE]...
+
+Opens the folders, and each file's folder with the file showing. With none,
+reopens the folders open last time.
+
+  -h, --help     Print this and exit
+  -V, --version  Print the version and exit";
+
+#[expect(clippy::print_stdout, reason = "--help and --version answer on stdout")]
 fn main() {
+    let flag = |short: &str, long: &str| {
+        std::env::args_os()
+            .skip(1)
+            .any(|arg| arg == short || arg == long)
+    };
+    if flag("-V", "--version") {
+        return println!("strikebrain-viewer {}", env!("CARGO_PKG_VERSION"));
+    }
+    if flag("-h", "--help") {
+        return println!("{USAGE}");
+    }
     // `strikebrain-viewer <folder or file>...` opens those folders, and a
     // file's folder with the file on the stage; with none the folders open
     // last time reopen, as they were seen.

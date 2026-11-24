@@ -350,7 +350,7 @@ fn keys_the_presentation_leaves_out_do_nothing(cx: &mut TestAppContext) {
     press(cx, handle, "space");
     let on_stage = current(cx, &view);
 
-    for key in ["enter", "cmd-f", "tab", "shift-tab", "cmd-o"] {
+    for key in ["enter", "secondary-f", "tab", "shift-tab", "secondary-o"] {
         press(cx, handle, key);
         assert!(presenting(cx, &view), "{key} keeps the presentation");
         assert_eq!(current(cx, &view), on_stage, "{key} keeps the file");

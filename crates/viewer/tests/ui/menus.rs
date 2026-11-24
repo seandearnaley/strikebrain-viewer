@@ -6,7 +6,8 @@ use gpui_kit::{Action, AnyWindowHandle, AppContext as _, OwnedMenuItem, TestAppC
 use viewer::{AppState, Launch};
 
 use crate::{
-    click, fixture_folder, folder, name_of, node, node_at, read, row, rows_now, state, under, write,
+    click, fixture_folder, folder, name_of, node, node_at, press, read, row, rows_now, state,
+    under, write,
 };
 
 /// The action a menu item named `name` sends.
@@ -142,4 +143,62 @@ fn the_title_names_the_one_folder_open_and_otherwise_the_app(cx: &mut TestAppCon
     }
     cx.run_until_parked();
     assert_eq!(title(cx), name_of(second.path()));
+}
+
+/// The text on the clipboard.
+fn clipboard(cx: &TestAppContext) -> Option<String> {
+    cx.read_from_clipboard().and_then(|item| item.text())
+}
+
+#[gpui_kit::test]
+fn copy_path_takes_the_focus_row_and_from_the_stage_its_file(cx: &mut TestAppContext) {
+    let dir = folder(&[("a.txt", "a"), ("sub/b.txt", "b")]);
+    let (handle, view) = crate::open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
+    let root = explorer::canonical(dir.path()).unwrap();
+
+    // From the tree: the focus row, here the folder itself.
+    choose(cx, handle, "viewer::CopyPath");
+    assert_eq!(clipboard(cx), Some(root.to_string_lossy().into_owned()));
+
+    // A file shown from the tree is the focus row and the stage's file.
+    let a = node(cx, &view, "a.txt");
+    click(cx, handle, row(a));
+    press(cx, handle, "secondary-alt-c");
+    let a_path = root.join("a.txt").to_string_lossy().into_owned();
+    assert_eq!(clipboard(cx), Some(a_path.clone()));
+
+    // Focus moves up the tree, to the folder above; the stage keeps its
+    // file. Each pane copies its own.
+    press(cx, handle, "up");
+    choose(cx, handle, "viewer::CopyPath");
+    let sub = root.join("sub").to_string_lossy().into_owned();
+    assert_eq!(clipboard(cx), Some(sub));
+    press(cx, handle, "tab");
+    choose(cx, handle, "viewer::CopyPath");
+    assert_eq!(clipboard(cx), Some(a_path));
+    // Reveal goes to the system; here it only has to be on offer.
+    assert!(enabled(cx, handle, "viewer::Reveal"));
+}
+
+#[gpui_kit::test]
+fn with_no_folder_there_is_no_path_to_copy(cx: &mut TestAppContext) {
+    let (handle, view) = crate::open_app(cx, Launch::Empty);
+    choose(cx, handle, "viewer::CopyPath");
+    choose(cx, handle, "viewer::Reveal");
+    assert_eq!(clipboard(cx), None);
+    assert_eq!(read(cx, &view, |state| state.pointed(true)), None);
+}
+
+#[gpui_kit::test]
+fn toggle_full_screen_fills_the_screen_and_comes_back(cx: &mut TestAppContext) {
+    let (handle, _) = crate::open_app(cx, Launch::Empty);
+    let fullscreen = |cx: &mut TestAppContext| {
+        cx.update_window(handle, |_, window, _| window.is_fullscreen())
+            .unwrap()
+    };
+    assert!(!fullscreen(cx));
+    choose(cx, handle, "viewer::ToggleFullScreen");
+    assert!(fullscreen(cx));
+    choose(cx, handle, "viewer::ToggleFullScreen");
+    assert!(!fullscreen(cx));
 }

@@ -31,6 +31,9 @@ pub fn init(cx: &mut App) {
     cx.bind_keys(keys::bindings());
     cx.on_action(|_: &keys::Quit, cx| cx.quit());
     cx.on_action(menus::about);
+    cx.on_action(|_: &keys::Hide, cx| cx.hide());
+    cx.on_action(|_: &keys::HideOthers, cx| cx.hide_other_apps());
+    cx.on_action(|_: &keys::ShowAll, cx| cx.unhide_other_apps());
     menus::install(false, cx);
     theme::install(cx);
 }
