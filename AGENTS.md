@@ -29,6 +29,8 @@ Design: `docs/superpowers/specs/2026-11-22-strikebrain-viewer-design.md`.
 | Run the app | `just run` |
 | See the app without a window: key states as PNG images in `target/shots/` | `just shot` |
 | Release build wrapped as `target/release/bundle/osx/Strikebrain Viewer.app`, signed ad hoc | `just bundle` |
+| That app in a disk image, `target/release/bundle/*.dmg` | `just dmg` |
+| On Linux, a `.tar.gz` and a `.deb` in `target/release/bundle` | `just linux-packages` |
 | Redraw the icon source `crates/viewer/bundle/icon.png` from `tests/icon.rs` | `just icon` |
 | Engine tests | `cargo nextest run -p explorer` |
 | All tests | `cargo nextest run --workspace` |
@@ -37,6 +39,16 @@ Design: `docs/superpowers/specs/2026-11-22-strikebrain-viewer-design.md`.
 | Tools and git hook in a fresh clone | `just setup` |
 
 CI (`.github/workflows/ci.yml`) runs `just check` on macOS for every pull request and push to `main`, and builds and tests on Linux and Windows.
+
+## Releasing
+
+`.github/workflows/release.yml` builds the macOS disk image and the Linux packages with the recipes above. A pull request that touches the workflow, the `justfile` or `crates/viewer/bundle` runs it as a rehearsal and keeps the files as artifacts. To release:
+
+1. Set `version` in the root `Cargo.toml`, run `cargo check` so `Cargo.lock` follows, and merge that.
+2. Tag the merged commit `v<version>` and push the tag. The workflow fails if the tag and the version differ.
+3. The workflow attaches the files, `SHA256SUMS` and a build attestation to a draft release. Read it, then publish it on GitHub.
+
+macOS signs with a Developer ID certificate and notarizes only when the repository has the secrets the workflow's header lists; without them the image is signed ad hoc, and Gatekeeper refuses it on another Mac. `just bundle` and `just dmg` sign with `CODESIGN_IDENTITY` when it is set. The hardened runtime is on either way.
 
 Iterate on the narrowest check. Engine work needs only the engine tests.
 
@@ -99,7 +111,8 @@ Neither was added. Rebuild and restart instead.
 
 - A command's key takes ⌘ on macOS and Ctrl elsewhere: `secondary!` in `crates/viewer/src/keys.rs` writes it for the platform the app is built for, and a test presses it as `secondary-f`. GPUI draws no menu bar on Windows and Linux, so the commands there are their keys and the buttons. Tests that make symlinks or FIFOs are `#[cfg(unix)]`.
 - Paths compared with a tree's go through `explorer::canonical`, which on Windows drops the `\\?\` prefix of the system's canonical form where the path means the same without it (`dunce`); Clippy rejects `std::fs::canonicalize`. A path that needs the prefix (a reserved name such as `con`, more than 260 characters) keeps it, and shows with it.
-- The bundle is signed ad hoc (`codesign -s -`), for local use and for tools that find the app by bundle identifier. Distribution needs a Developer ID signature and notarization, which `just bundle` does not do.
+- A local bundle is signed ad hoc (`codesign -s -`), for this Mac and for tools that find the app by bundle identifier. The release workflow signs with a Developer ID certificate and notarizes once its secrets exist; until then its image is ad hoc too.
+- Releases cover macOS on Apple silicon and Linux on x86-64. There is no Windows package, no Intel Mac build (none can be run here to test) and no Linux Arm build.
 - Live refresh rescans the whole folder a change is in, on any change a scan would show, as the design says; the other folders are left alone. With Show ignored on, a busy folder the tree then shows (a build's `target/`) is rescanned back to back while it changes.
 - Folders are told apart by their canonical paths, and `realpath` does not join macOS firmlinks: `/System/Volumes/Data/Users/x` and `/Users/x` stay different, so the same folder added under both is listed twice. The picker and Finder give `/Users/...`.
 - A saved folder that no longer exists at launch is dropped from the saved state, as the design asks, even when it is only on a volume not mounted that day.
