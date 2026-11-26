@@ -1,6 +1,6 @@
 # Strikebrain Viewer design
 
-Status: design approved by Sean on 2026-11-22. Milestones 0 to 5 are built (2026-11-23), with the final review's fixes, milestone 6, several folders, and milestone 7, the gallery (2026-11-23); where the build settled a question the design left open, the section below says so.
+Status: design approved by Sean on 2026-11-22. Milestones 0 to 5 are built (2026-11-23), with the final review's fixes, milestone 6, several folders, and milestone 7, the gallery (2026-11-23); where the build settled a question the design left open, the section below says so. Milestone 8, the window, was approved on 2026-11-26 and is not built yet.
 Companion page: https://claude.ai/artifact/4PaAcuEDiMKYJKyEFCpkD3
 
 ## Purpose
@@ -465,7 +465,78 @@ Milestone 7 is built (2026-11-23); the sections above describe it (State, Stage,
 - **No files checked** clears `current`, as the rule says, even when it was a file opened from the tree: unchecking the last checked file always leaves a blank stage.
 - **Tests that changed with the rules:** where a test checked several files and went on in the file view, it now opens the first tile first (`stage::open_checked`, a presentation test, the flick probe); Esc from the code view with two files checked now returns to the gallery before a second Esc reaches the explorer; the test of unchecking the current file reads `current` while three files show as a gallery.
 
+## Milestone 8: the window
+
+Asked for on 2026-11-26, after running release 0.1.1: the window had two bars on top, the system's title bar and the explorer's toolbar, where current Mac apps have one; the explorer could not be hidden; nothing went back to what the stage showed before; and opening one picture added its whole folder, which on macOS asks for access to Downloads, Desktop or Documents before the picture shows. Sean chose on 2026-11-26: the bar laid out over the two panes, files opened on their own kept for the session only, a history of what the stage showed, and the Kit's bar on every platform. Where this section and an earlier one disagree, this section wins; the build rewrites the earlier sections it changes, as milestones 6 and 7 did.
+
+### One bar
+
+- **The window** opens with the Kit's `TitleBar::window_options()`: the system's title bar transparent with its title hidden, the traffic lights at the Kit's position, and the app handling the drag. The bounds, display, minimum size and application id are set over those options, as now.
+- **The bar** is the Kit's `TitleBar`, 34 px, across the top of the window above both panes. It replaces the explorer's toolbar, which goes: the explorer starts at the filter. The bar has the panes' background, flat (its style replaces the Kit's gradient), and a 1 px rule in the border colour below.
+- **Over the explorer**, the part of the bar as wide as the explorer: the traffic lights' space (the Kit's 80 px on macOS), the sidebar button, and at its right end Add Folder and More (…). More opens a menu: Expand All, Collapse All, Show Ignored (checked while on), Refresh, Select All, and Deselect All (disabled while nothing is selected), each showing its key. While a folder's changes are not followed, a Refresh button in the warning colour stands left of Add Folder, with the tooltip it has now. The scan's indeterminate bar runs along this part's bottom edge. A 1 px rule in the border colour ends this part, in line with the split's divider.
+- **Over the stage**: Back and Forward, the stage's title, and Present at the right end. The title is the name of the file in the file view, "Gallery" while the gallery shows, and nothing while the stage is blank; it is in the foreground colour, truncated. Present starts a presentation as Space does, and is disabled while the stage is blank.
+- **Buttons** are the Kit's ghost icon buttons, 24 px, each with a tooltip and an accessible label, as the toolbar's were.
+- **Moving the window.** Dragging the bar where nothing is drawn moves the window; a double-click there does what the system setting says (zoom or minimize on macOS, maximize on Linux). The buttons never start a drag.
+- **The window's title** is the stage's title, or the application's name while the stage is blank, in place of the folder's name. The bar does not show it; the system's window lists do (the Window menu, Mission Control, the Dock).
+- **Full screen.** The traffic lights' space closes up, and the sidebar button moves to 12 px from the edge.
+- **Presenting** draws no bar, as it draws no explorer.
+- **Windows and Linux.** On Windows the Kit's bar draws minimize, maximize and close at its right end, in the theme's colours, marked as the system's caption buttons. Linux keeps the decorations the system gives the window: where the system draws a title bar, the bar sits under it with no buttons of its own; where the app decorates the window, the Kit's bar draws minimize, maximize and close, as on Windows.
+
+### Hiding the explorer
+
+- The explorer is the window's sidebar. The sidebar button (the Kit's `SidebarToggleButton`, tooltip "Hide Sidebar" or "Show Sidebar"), View → Hide Sidebar or Show Sidebar, ⌃⌘S on macOS, and Ctrl+B on Windows and Linux hide and show it.
+- Hidden, its panel of the split is not drawn (`visible(false)`) and the stage takes the width. The split keeps the explorer's width, so it comes back as wide as it was.
+- The explorer's panel is fixed (`fixed()`): resizing the window changes the stage's width and keeps the explorer's, as Finder and Notes do. This replaces the split keeping its proportions on a resize.
+- Hidden, the bar holds the traffic lights' space, the sidebar button, Back, Forward, the title and Present. Add Folder, More, the warning Refresh and the scan's bar hide with the explorer; their keys still work.
+- **Focus.** Hiding the explorer while it holds keyboard focus moves focus to the stage. While it is hidden, Tab and shift-Tab skip it, ⌘F shows it and focuses the filter, and Esc in the file view or the gallery, where it would focus the explorer, does nothing.
+- **Adding a folder** shows the explorer, since the folder's row is what adding shows. Opening a file leaves the explorer as it is: the file shows on the stage.
+- **Saved** as `explorer_hidden` in the state file, beside `explorer_width`. A file without it shows the explorer, so the format stays version 2. A launch with nothing to open shows the explorer whatever was saved, since its Add Folder button is the empty state.
+- **Presenting** hides the explorer as before; leaving brings it back as it was, hidden or shown.
+- Not animated.
+
+### Back and forward
+
+- The state keeps the stage's history in the Kit's `History` (`gpui_kit::component::history::History`, at its default limit of 1,000 steps). A step is a file, by its path on disk, or the gallery.
+- **A new step** is added whenever something the person does brings the stage to show another file or the gallery: a file row clicked or Enter on it, a tile opened, the gallery shown again (Esc or the grid button), a change to the checks that changes the view, a file opened from outside the app. A new step drops the steps ahead of it, as in a browser.
+- **The step is replaced, not added,** when the person moves with ← and → through the checked files, on the stage or presenting, as Photos does, and when a change the person did not make (a rescan, a folder removed) moves `current`.
+- **A blank stage** is not a step. Back from it shows the step last shown, when that step can be shown.
+- **Back and Forward** show the nearest step that way that can be shown, passing over a file no longer in the tree and the gallery while fewer than two files are checked. A file shows in the file view, checked or not; the gallery shows with `current`'s tile focused. Neither adds a step, and the tree's focus row stays where it is.
+- **Controls.** Back and Forward in the bar, disabled when no step that can be shown lies that way. ⌘[ and ⌘] on macOS, and Alt+← and Alt+→ on Windows and Linux, in every key context but the presentation's. The mouse's back and forward buttons anywhere over the window. A Go menu, between View and Window, with Back and Forward. The Kit's text input binds ⌘[ and ⌘] to Outdent and Indent, but passes them on when it is one line or read-only, as the filter and the code view are, so they go back and forward there too.
+- Kept for the session only; not saved.
+
+### Opening a file on its own
+
+- **A file that no open folder's tree lists**, opened from outside the app (Open With, the Dock icon, a drop on the window, the command line), becomes a top-level row of its own, after the rows already there, and shows in the file view; its row is the focus row. Its folder is neither read nor watched. On macOS the system lets the app read a file it hands over; reading the folder is what asked for access.
+- **Several such files opened together** are each a row, checked, and show as the gallery beside any files checked before, the last one focused, as files opened together do now.
+- **A file an open folder's tree lists** shows there, as now: unchecked, its row the focus row, with the folders above it open.
+- **A folder added later** that lists a file row's file takes it in, as it takes in an open folder it lists: the row goes, and the file keeps its check in the folder.
+- **The row** sits at the left edge like a folder's: a 24 px space where a chevron would be, then its checkbox, its kind's icon, its name and its size. Its tooltip, also its accessible description, is its full path. Hovered, or focused with the ring showing, it shows the remove button over its size, as a folder's row does; ⌘⌫ removes it too. Both remove buttons, the folder's and the file's, are now labelled "Remove from Sidebar", Finder's words.
+- **Followed on disk.** The app watches the file, not its folder. A change reads it again, as a change in a folder does. A file deleted or moved away leaves an unreadable row, as a folder does, until Refresh finds it again.
+- **Not saved.** File rows last until the app quits; the state file keeps folders alone. The file on the stage is saved as `current` like any other, and dropped at launch when no folder lists it.
+- **The command line.** A file named there opens as one sent by Open With: the folders open as they would without it (those named, or else the saved ones), and the file shows where a folder lists it, or as its own row. This replaces a file on the command line standing for its folder.
+- **Engine.** Scanning a file gives a tree of one node, the file, with its size; a joined tree's top-level entries may be files. A file's subtree is its own id, so selection, filter, sort and rows need no change: a top-level file is filtered like any file, and top-level entries keep their order. Rescans, removal and taking in work by top-level entry, as they do for folders. Engine coverage stays at or above 90%.
+
+### For development
+
+- **Commands are actions.** Every command in the bar, the More menu, the menu bar and the keys is one GPUI action, handled at the root view, so a button, a menu item and a key run the same code, and a test or an agent dispatches it by name. New: `ExpandAll`, `CollapseAll`, `SelectAllFiles`, `DeselectAll`, `ToggleSidebar`, `GoBack`, `GoForward`. Add Folder, Show Ignored, Refresh and Present keep the actions they have.
+- **Tests** click the bar's buttons and never press and drag on the bar: the test platform does not implement moving a window.
+- **Shots.** `just shot` draws the bar in every state it renders, and adds the explorer hidden and a file opened on its own. The system draws the traffic lights, so the shots show their space empty.
+- **Files.** The bar is its own module, `crates/viewer/src/title_bar.rs`; the history is the state's, `state/history.rs`. `explorer_panel/toolbar.rs` goes; its commands and the scan's bar move to the bar.
+
+Copy: "Back", "Forward", "Present", "Hide Sidebar", "Show Sidebar" and "More" as tooltips and labels; "Gallery" as the stage's title and the window's; the More menu's "Expand All", "Collapse All", "Show Ignored", "Refresh", "Select All" and "Deselect All"; the Go menu's "Go", "Back" and "Forward"; View's "Hide Sidebar" and "Show Sidebar". "Remove Folder" becomes "Remove from Sidebar". The toolbar's tooltips go with it.
+
+Keys, to join the Keys table when built:
+
+| Key | Explorer | Gallery | Stage | Presentation |
+| --- | --- | --- | --- | --- |
+| ⌘[ ⌘] | Back, Forward | Back, Forward | Back, Forward | |
+| ⌃⌘S | Hide or show the sidebar | The same | The same | |
+
+On Windows and Linux: Alt+←, Alt+→ and Ctrl+B.
+
 ## Left out on purpose
+
+From current Mac apps: an animated sidebar, a toolbar the person arranges, a history kept across launches, and files opened on their own kept across launches. On Linux, the app drawing its own frame where the system draws one.
 
 From brainstrike: the tokens column and token indexing; the "This thread" column, thread presets and checkout header; attach to thread, export and split into parts; workspace tabs and the editor; the selection settings popover and selection cap; context actions; view filter presets, chips, glob lists and regex mode; lazy folder loading and its spinners; the 10,000-entry listing cap; the expand-all confirmation.
 
@@ -531,6 +602,7 @@ Each ends with something that runs and tests that hold it. Each gets its own imp
 | M5 Finish | Saved state, live refresh, a packaged `.app`. | Quitting and reopening returns the same view. Done: `tests/ui/persist.rs` saves a real folder's view as the app runs and quits, launches a second app over the same state file, and compares every piece. |
 | M6 Several folders | Folders as top-level rows of one joined tree; Add Folder and Remove Folder; per-folder scans, sizes, live refresh and saved views; the old state file still loads. | Several folders come back in order, each with its own view, and adding 6,000 files to a 1 M-entry tree meets its budget. Done: `tests/ui/persist.rs` (`several_folders_come_back_in_order_each_with_its_own_view`), `tests/ui/folders.rs`, `tests/ui/launch.rs`; bench group `folders`, 7.9 ms. |
 | M7 Gallery | A grid of the checked files in front of the stage. | Which view shows follows the checks; tiles open, Esc and the grid button go back; the grid builds only the rows on screen at 100,000 files within budget. Done: `tests/ui/gallery.rs`, `tests/ui/persist.rs` (`the_stage_comes_back_in_the_view_it_showed`), the probe `timing_the_gallery_over_a_hundred_thousand_checked_files`. |
+| M8 Window | One title bar holding the panes' commands, a sidebar that hides, back and forward, a file opened on its own. | The bar, the sidebar, the history and file rows pass their tests on all three platforms' CI; a picture opened from Downloads in the bundled app shows with no request for access, tried by hand on a Mac. |
 
 Milestone 0 detail:
 
@@ -579,6 +651,8 @@ Each is set up with its signature, doc comment and failing tests. Sean writes th
 - **Window bounds on a real screen.** GPUI reports a window's frame but opens a window at a content size, so the window used to grow by its title bar at each launch (measured on the bundle: 1128, 1160, 1192, 1224 px over four launches); it now saves the content size and stayed at 1096 px over four launches. Those launches ran while the Mac's screen was locked, with no active display, so GPUI placed the window without one; a launch with a display attached, and a window on a second display, have not been seen.
 - **Esc inside the fullscreen animation.** GPUI 0.3.12 makes a window fullscreen asynchronously and keeps AppKit's will-enter and did-enter callbacks to itself; nothing public says a transition is under way. Space then Esc within the half second of the animation can leave the window fullscreen with the presentation ended (the toggle that should undo it may land mid-animation, or before the window reports fullscreen). The green button puts it right. Not handled.
 - **Live refresh on very large folders.** Each change a scan would show rescans the whole folder it is in, as decided; the other folders are left alone. With Show ignored on, a busy folder the tree then shows (a build's `target/`) is rescanned back to back while it changes. On Linux, `notify` uses inotify, which watches every folder separately; a 1.65 M-entry tree would exceed default watch limits. Neither is handled. A change to `.git/info/exclude` or the global excludes does not rescan.
+- **A file watched on its own** (milestone 8). Opening a file no folder lists reads only that file. Whether watching it (`notify`'s FSEvents backend on macOS) asks for access to the folder it is in has not been tried; the bundled app is tried by hand with a picture in Downloads. If it asks, file rows are not followed and Refresh reads them again.
+- **The bar on Windows and Linux** (milestone 8). The Kit's caption buttons on Windows are checked only on GitHub's runner. Where a Linux desktop draws its own title bar, the window has two bars, the system's and the app's, where macOS and Windows have one.
 
 ## References
 
