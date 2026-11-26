@@ -16,7 +16,9 @@ impl Stage {
     /// gallery position changes, the presentation starts or ends, or the
     /// gallery shows or hides. While the gallery shows nothing is read for
     /// the file view; back from it, another file than the one the view last
-    /// showed starts blank rather than showing the old one meanwhile.
+    /// showed starts blank rather than showing the old one meanwhile. The
+    /// gallery taking the file view's place takes keyboard focus from it,
+    /// as Esc does: Back, from the code view, reaches here alone.
     pub(super) fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let asked = Asked::of(self.state.read(cx));
         if asked == self.asked {
@@ -26,6 +28,9 @@ impl Stage {
         if asked.gallery {
             self.load = None;
             self.preload = None;
+            if !was.gallery {
+                self.focus_from_view(window, cx);
+            }
         } else if asked.staged != was.staged || was.gallery {
             if was.gallery {
                 let file = self.asked_file(cx).map(|file| file.path);
@@ -203,15 +208,20 @@ impl Stage {
             (Some(was), Some(now)) => was.same_view(now),
             _ => false,
         };
-        if !same_view
-            && self.focus_handle.contains_focused(window, cx)
-            && !self.focus_handle.is_focused(window)
-        {
-            window.focus(&self.focus_handle, cx);
+        if !same_view {
+            self.focus_from_view(window, cx);
         }
         self.content = content;
         self.showing = showing;
         cx.notify();
+    }
+
+    /// Keyboard focus inside the view on the stage, which is going away,
+    /// moves to the stage itself.
+    fn focus_from_view(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.focus_handle.contains_focused(window, cx) && !self.focus_handle.is_focused(window) {
+            window.focus(&self.focus_handle, cx);
+        }
     }
 
     /// Starts decoding the gallery images either side of the file on the

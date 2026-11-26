@@ -67,7 +67,7 @@ impl AppState {
     /// shows once they are in. Either way the views hear that the rows
     /// were rebuilt. Once every folder is on screen, what the stage shows
     /// replaces the history's step: a launch's saved file or gallery is
-    /// its first.
+    /// its first, unless files asked for show in its place next.
     pub(super) fn landed(&mut self, cx: &mut Context<Self>) {
         if self.folders.iter().any(|folder| !folder.shown) {
             return self.rows_replaced(cx);
@@ -84,7 +84,15 @@ impl AppState {
                 None => self.rows_replaced(cx),
             }
         }
-        self.record(Record::Replace);
+        // Files asked for record their own step as they show; the saved
+        // view they replace is never on screen.
+        let asked_show = self
+            .asked_files
+            .iter()
+            .any(|(path, _)| self.listed(path).is_some());
+        if !asked_show {
+            self.record(Record::Replace);
+        }
     }
 
     /// Applies the sort, the file on the stage, the stage's view and the
