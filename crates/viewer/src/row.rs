@@ -5,9 +5,9 @@
 //! 1 px rule, the panel's 8 px inset, a 24 px chevron target, then 6 px
 //! gaps around a 16 px checkbox and a 16 px icon, and the name at 14/16 px.
 //! The Type and Size cells follow as the tree widens; see
-//! [`crate::columns`]. A top-level folder's row shows a remove button over
-//! the Size cell while it is hovered or focused, and its full path as a
-//! tooltip.
+//! [`crate::columns`]. A top-level row, a folder's or a file's opened on
+//! its own, shows a remove button over the Size cell while it is hovered
+//! or focused, and its full path as a tooltip.
 //!
 //! The indent is not brainstrike's: 12 px per level, half the chevron's
 //! target, where brainstrike has 20 px. At the default 300 px width a name
@@ -84,10 +84,10 @@ pub(crate) struct TreeRow {
     size: Option<u64>,
     current: bool,
     focus: Focus,
-    /// A top-level folder's full path, and why it could not be read.
+    /// A top-level row's full path, and why it could not be read.
     tooltip: Option<SharedString>,
-    /// Whether the remove button shows: a top-level folder's row, hovered
-    /// or focused.
+    /// Whether the remove button shows: a top-level row, hovered or
+    /// focused.
     removable: bool,
     on_event: RowHandler,
     on_hover: Option<HoverHandler>,
@@ -123,14 +123,14 @@ impl TreeRow {
     }
 
     /// The row's tooltip, which is also its accessible description: a
-    /// top-level folder's full path, and why it could not be read.
+    /// top-level row's full path, and why it could not be read.
     pub(crate) fn tooltip(mut self, tooltip: Option<SharedString>) -> Self {
         self.tooltip = tooltip;
         self
     }
 
-    /// Shows the remove button over the Size cell: a top-level folder's
-    /// row while it is hovered or focused.
+    /// Shows the remove button over the Size cell: a top-level row while it
+    /// is hovered or focused.
     pub(crate) fn removable(mut self, removable: bool) -> Self {
         self.removable = removable;
         self
@@ -366,8 +366,9 @@ impl TreeRow {
             })
     }
 
-    /// The remove button of a top-level folder's row: a 24 px ghost icon
-    /// button, muted as the chevrons are. A press does not reach the row.
+    /// The remove button of a top-level row, a folder's or a file's opened
+    /// on its own: a 24 px ghost icon button, muted as the chevrons are. A
+    /// press does not reach the row.
     fn remove_button(&self, cx: &App) -> Button {
         let on_event = Rc::clone(&self.on_event);
         Button::new("remove-folder")
@@ -375,8 +376,8 @@ impl TreeRow {
             .ghost()
             .compact()
             .small()
-            .tooltip("Remove Folder")
-            .accessibility_label("Remove Folder")
+            .tooltip("Remove from Sidebar")
+            .accessibility_label("Remove from Sidebar")
             .on_click(move |_, window, cx| {
                 cx.stop_propagation();
                 on_event(&RowAction::Remove, window, cx);

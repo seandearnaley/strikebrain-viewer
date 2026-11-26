@@ -1,7 +1,8 @@
 //! Opening the main window as the app launches: the folders and files from
 //! the command line or the saved folders, the saved view and window, and
 //! what the system hands over later ("Open With", a folder or a file
-//! dropped on the Dock icon) as `file://` URLs.
+//! dropped on the Dock icon) as `file://` URLs. A file shows where a folder
+//! lists it, or as a row of its own.
 
 use std::path::PathBuf;
 

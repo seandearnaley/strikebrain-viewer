@@ -315,9 +315,9 @@ impl AppView {
     }
 
     /// Opens `paths` beside the folders on screen: the system's "Open
-    /// With", and folders or files dropped on the Dock icon. A file opens
-    /// its folder and shows on the stage; several files show as the
-    /// gallery.
+    /// With", and folders or files dropped on the Dock icon. A file shows
+    /// on the stage, in a folder that lists it or as a row of its own;
+    /// several files show as the gallery.
     pub fn open_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
         self.state.update(cx, |state, cx| {
             state.open_paths(paths, Vec::new(), cx);

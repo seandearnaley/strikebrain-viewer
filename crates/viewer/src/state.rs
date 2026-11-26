@@ -45,7 +45,7 @@ pub enum Launch {
     /// No folder: the explorer offers "Add Folder".
     Empty,
     /// Scan these folders, each a top-level folder, in this order. A file
-    /// among them opens its folder and shows on the stage.
+    /// among them shows where a folder lists it, or as a row of its own.
     Folders(Vec<PathBuf>),
     /// Show a tree that is already built, such as a `Tree::from_paths`
     /// fixture, as it is: its top-level entries are the top rows. Nothing

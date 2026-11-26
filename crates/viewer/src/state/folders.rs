@@ -11,9 +11,10 @@
 //! whose first scan runs waits for that scan to decide. A folder whose scan
 //! lists open folders takes them in when it lands (see `state/scan.rs`).
 //!
-//! A file asked for opens its folder by the same rule, then shows on the
-//! stage once a tree lists it. Files asked for together are checked, so
-//! they show as the gallery.
+//! A file asked for shows where a tree lists it. One that no tree lists,
+//! and that no folder being read may list, is a top-level entry of its own,
+//! its folder neither read nor watched. Files asked for together are
+//! checked, so they show as the gallery.
 
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -27,8 +28,8 @@ use super::{AppState, ScanStatus, StateEvent};
 use crate::menus::APP_NAME;
 use crate::persist::resolve;
 
-/// One folder asked for: where it is, its latest scan, its watcher, and the
-/// saved view waiting for it.
+/// One folder asked for, or a file opened on its own: where it is, its
+/// latest scan, its watcher, and the saved view waiting for it.
 pub(super) struct Folder {
     /// Tells this folder's tasks it apart as others come and go.
     pub(super) key: u64,
@@ -65,6 +66,9 @@ pub(super) struct Folder {
     /// their saved views: shown in its tree when it lands if it lists
     /// them, else added as folders of their own.
     pub(super) asked_inside: Vec<(PathBuf, Option<SavedFolder>)>,
+    /// A file opened on its own: its tree is the file alone, it is watched
+    /// alone, and it is never saved.
+    pub(super) file: bool,
 }
 
 impl std::fmt::Debug for Folder {
@@ -101,6 +105,7 @@ impl Folder {
             watch_error: None,
             rescan_pending: false,
             asked_inside: Vec::new(),
+            file: false,
         }
     }
 
@@ -148,11 +153,11 @@ impl AppState {
     /// One inside a folder whose first scan runs waits for that scan. Each
     /// folder asked for emits `StateEvent::FolderAdded`, and the window
     /// shows the explorer; a launch's folders emit before the window
-    /// listens. A file opens its folder so, emitting nothing, then shows on
-    /// the stage with its row the focus row. Several files in one call are
-    /// checked as well, so they show as the gallery, with the files checked
-    /// before. `waiting` holds saved views, each applied when its folder's
-    /// first scan lands.
+    /// listens. A file shows where a tree lists it, or as a top-level row
+    /// of its own, emitting nothing, on the stage with its row the focus
+    /// row. Several files in one call are checked as well, so they show as
+    /// the gallery, with the files checked before. `waiting` holds saved
+    /// views, each applied when its folder's first scan lands.
     pub fn open_paths(
         &mut self,
         paths: Vec<PathBuf>,
@@ -173,16 +178,15 @@ impl AppState {
     ) {
         let together = paths.iter().filter(|path| path.is_file()).count() > 1;
         for path in paths {
-            let mut path = resolve(&path);
-            let file = path.is_file();
+            let path = resolve(&path);
             // A file shows on the stage; a folder, as its row.
-            if announce && !file {
-                cx.emit(StateEvent::FolderAdded);
-            }
-            if file {
-                let folder = path.parent().map(Path::to_path_buf);
+            if path.is_file() {
                 self.asked_files.push((path.clone(), together));
-                path = folder.unwrap_or(path);
+                self.open_file(path, cx);
+                continue;
+            }
+            if announce {
+                cx.emit(StateEvent::FolderAdded);
             }
             let saved = waiting
                 .iter()
@@ -215,14 +219,44 @@ impl AppState {
         cx.notify();
     }
 
+    /// A file asked for that no tree lists, and that no folder being read
+    /// may list: a top-level row of its own. One already a row that could
+    /// not be read is read again.
+    fn open_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        let waits = self.listed(&path).is_some()
+            || self
+                .folders
+                .iter()
+                .any(|folder| !folder.shown && folder.holds(&path));
+        if waits {
+            return;
+        }
+        if let Some(key) = self
+            .folders
+            .iter()
+            .find(|folder| folder.path == path)
+            .map(|folder| folder.key)
+        {
+            return self.refresh_folder(key, cx);
+        }
+        let key = self.next_key;
+        self.next_key += 1;
+        let mut entry = Folder::new(key, path, None);
+        entry.file = true;
+        self.folders.push(entry);
+        self.follow(key, cx);
+        self.start_scan(key, cx);
+    }
+
     /// Shows each file asked for that a tree now lists, with its row the
     /// focus row: in the file view, or checked into the gallery when it
     /// was asked for with others. A file whose folder is still to land
-    /// waits, as does every file while a launch settles, so the saved view
-    /// does not replace it. One that no tree lists once its folder landed
-    /// (deleted meanwhile, or its folder could not be read) is forgotten.
-    /// The files shown are one step in the history, what the stage shows
-    /// once they all are: it never shows them one by one.
+    /// waits, as does one whose own row is being read again, and every file
+    /// while a launch settles, so the saved view does not replace it. One
+    /// that no tree lists once its folder landed becomes a row of its own
+    /// if it is a file on disk, and is forgotten otherwise. The files shown
+    /// are one step in the history, what the stage shows once they all
+    /// are: it never shows them one by one.
     pub(super) fn settle_asked_files(&mut self, cx: &mut Context<Self>) {
         if self.asked_files.is_empty() || self.restore.is_some() {
             return;
@@ -237,11 +271,16 @@ impl AppState {
                 }
                 self.reveal(id, cx);
                 shown = true;
-            } else if self
-                .folders
-                .iter()
-                .any(|folder| !folder.shown && folder.holds(&path))
-            {
+            } else if self.folders.iter().any(|folder| {
+                (!folder.shown && folder.holds(&path))
+                    || (folder.path == path && folder.scanning.is_some())
+            }) {
+                self.asked_files.push((path, check));
+            } else if path.is_file() && !self.folders.iter().any(|folder| folder.path == path) {
+                // Its folder landed and does not list it (its ignore rules
+                // hide it): a row of its own, shown once read. One that is
+                // a row already could not be read, and is not read again.
+                self.open_file(path.clone(), cx);
                 self.asked_files.push((path, check));
             }
         }
@@ -302,10 +341,10 @@ impl AppState {
         }
     }
 
-    /// Removes the top-level folder `top` with its checks, and stops its
-    /// scan and its watcher: its row's remove button, and ⌘⌫. Removing the
-    /// last folder shows the empty state. Does nothing for a row that is
-    /// not a top-level folder.
+    /// Removes the top-level folder `top` with its checks, or the file
+    /// opened on its own there, and stops its scan and its watcher: its
+    /// row's remove button, and ⌘⌫. Removing the last shows the empty
+    /// state. Does nothing for a row that is not a top-level row.
     pub fn remove_folder(&mut self, top: NodeId, cx: &mut Context<Self>) {
         if !self.is_folder_row(top) {
             return;
@@ -346,14 +385,15 @@ impl AppState {
         self.landed_keeping(before, &map, cx);
     }
 
-    /// ⌘⌫ on the focus row: removes it if it is a top-level folder.
+    /// ⌘⌫ on the focus row: removes it if it is a top-level row.
     pub fn remove_focus_folder(&mut self, cx: &mut Context<Self>) {
         if let Some(focus) = self.focus {
             self.remove_folder(focus, cx);
         }
     }
 
-    /// Whether `id` is the row of a top-level folder, which can be removed.
+    /// Whether `id` is a top-level row, which can be removed: a folder's,
+    /// or a file's opened on its own.
     #[must_use]
     pub fn is_folder_row(&self, id: NodeId) -> bool {
         self.explorer
@@ -362,7 +402,8 @@ impl AppState {
     }
 
     /// The tree's accessible name: the folder's name with one folder open,
-    /// the application's name otherwise.
+    /// or the file's with one file opened on its own; the application's
+    /// name otherwise.
     #[must_use]
     pub fn title(&self) -> SharedString {
         let [folder] = self.folders.as_slice() else {
@@ -372,9 +413,10 @@ impl AppState {
         name.to_string_lossy().into_owned().into()
     }
 
-    /// A top-level folder row's tooltip: its full path, which tells two
-    /// folders of one name apart, and the operating system's message when
-    /// it could not be read. `None` for any other row.
+    /// A top-level row's tooltip, a folder's or a file's opened on its own:
+    /// its full path, which tells two of one name apart, and the operating
+    /// system's message when it could not be read. `None` for any other
+    /// row.
     #[must_use]
     pub fn folder_tooltip(&self, id: NodeId) -> Option<SharedString> {
         let explorer = self.explorer.as_ref()?;
@@ -410,8 +452,41 @@ impl AppState {
     }
 }
 
-/// Whether `id` is a top-level folder of a tree of folders.
+/// Whether `id` is a top-level entry of a tree of folders: a folder, or a
+/// file opened on its own.
 fn folder_row(explorer: &Explorer, id: NodeId) -> bool {
     let tree = explorer.tree();
     tree.is_joined() && tree.parent(id) == Some(NodeId::ROOT)
+}
+
+#[cfg(test)]
+mod tests {
+    use explorer::ScanError;
+    use gpui_kit::{AppContext as _, TestAppContext};
+
+    use crate::state::{AppState, Launch};
+
+    #[gpui_kit::test]
+    fn a_file_row_that_could_not_be_read_is_not_read_again_on_its_own(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.txt");
+        std::fs::write(&file, "a").unwrap();
+        let state = cx.new(|cx| AppState::new(Launch::Empty, cx));
+        state.update(cx, |state, cx| {
+            state.open_paths(vec![file.clone()], Vec::new(), cx);
+            // Its scan never lands; this one fails, though the file is there.
+            state.folders[0].scan_task = None;
+            let generation = state.folders[0].generation;
+            let error = ScanError::Root(std::io::Error::other("cannot be read"));
+            state.finish_scan(0, generation, Err(error), cx);
+        });
+        cx.run_until_parked();
+        // An unreadable row, and the file asked for is forgotten: asking
+        // for it once more would read it again, and again if it failed.
+        state.read_with(cx, |state, _| {
+            assert_eq!(state.scans(), 1);
+            assert!(state.folders[0].error.is_some());
+            assert_eq!(state.current(), None);
+        });
+    }
 }

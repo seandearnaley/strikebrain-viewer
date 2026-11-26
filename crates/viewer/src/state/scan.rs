@@ -181,15 +181,11 @@ impl AppState {
             return None;
         }
         if error.is_none() {
-            // Folders this scan lists leave, with what was asked inside
-            // them; the join takes in those on screen, with their checks
-            // and open folders.
-            let lists = |other: &super::Folder| {
-                other.key != key
-                    && tree
-                        .find_abs(&other.path)
-                        .is_some_and(|node| tree.kind(node).is_folder())
-            };
+            // Entries this scan lists leave: folders, with what was asked
+            // inside them, and files opened on their own. The join takes in
+            // those on screen, with their checks and open folders.
+            let lists =
+                |other: &super::Folder| other.key != key && tree.find_abs(&other.path).is_some();
             let taken: Vec<u64> = self
                 .folders
                 .iter()

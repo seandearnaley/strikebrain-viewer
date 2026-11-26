@@ -55,7 +55,7 @@ fn a_folder_row_shows_its_remove_button_while_hovered(cx: &mut TestAppContext) {
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         let button = window.within(row(top_two)).find("remove-folder");
-        assert_eq!(button.label(), Some("Remove Folder"));
+        assert_eq!(button.label(), Some("Remove from Sidebar"));
         // Over the Size cell, in place of the size.
         assert!(window.within(row(top_two)).try_find("size").is_none());
         assert!(window.within(row(top_one)).try_find("size").is_some());
@@ -80,6 +80,34 @@ fn a_folder_row_shows_its_remove_button_while_hovered(cx: &mut TestAppContext) {
     .unwrap();
     cx.run_until_parked();
     assert_eq!(rows_now(cx, handle), under(one.path(), &["docs", "a.txt"]));
+}
+
+#[gpui_kit::test]
+fn a_file_row_has_the_same_remove_button(cx: &mut TestAppContext) {
+    let dir = folder(&[("a.txt", "a")]);
+    let file = dir.path().join("a.txt");
+    let (handle, view) = open_app(cx, Launch::Folders(vec![file.clone()]));
+    let top = node_at(cx, &view, &file);
+    // Its tooltip is its full path, as a folder row's is.
+    let tooltip = read(cx, &view, |state| state.folder_tooltip(top));
+    assert_eq!(
+        tooltip.as_deref(),
+        explorer::canonical(&file).unwrap().to_str()
+    );
+
+    cx.update_window(handle, |_, window, cx| window.hover(row(top), cx))
+        .unwrap();
+    cx.run_until_parked();
+    assert!(shows_remove(cx, handle, top));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        let button = window.within(row(top)).find("remove-folder");
+        assert_eq!(button.label(), Some("Remove from Sidebar"));
+        window.within(row(top)).click("remove-folder", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert!(read(cx, &view, AppState::is_empty));
 }
 
 #[gpui_kit::test]
