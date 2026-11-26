@@ -1,12 +1,16 @@
 //! The window's title bar: one row above both panes, its part over the
-//! explorer as wide as the explorer, its buttons, and the stage's title.
+//! explorer as wide as the explorer, its buttons, its More menu, and the
+//! stage's title.
 
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AnyWindowHandle, AppContext as _, Role, TestAppContext, px};
-use viewer::AppState;
-use viewer::keys::SelectAllFiles;
+use viewer::keys::{SelectAllFiles, ToggleShowIgnored};
+use viewer::{AppState, Launch};
 
-use crate::{PROJECT, click, dispatch, drag_divider, node, open_app, read, row, tree};
+use crate::{
+    PROJECT, click, dispatch, drag_divider, folder, node, open_app, press, read, row, rows_now,
+    tree,
+};
 
 /// The stage's title in the bar after a fresh frame; `None` when it shows
 /// none.
@@ -102,6 +106,81 @@ fn more_holds_the_explorers_commands(cx: &mut TestAppContext) {
             "Deselect All"
         ]
     );
+}
+
+/// Whether More's Show Ignored shows its check, in a menu opened afresh.
+fn show_ignored_checked(cx: &mut TestAppContext, handle: AnyWindowHandle) -> Option<bool> {
+    click(cx, handle, "more");
+    let checked = cx
+        .update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window
+                .within("popup-menu")
+                .find_by_label("Show Ignored")
+                .checked()
+        })
+        .expect("read the menu");
+    // Esc closes the menu; the next click on More builds it again.
+    press(cx, handle, "escape");
+    checked
+}
+
+#[gpui_kit::test]
+fn more_checks_show_ignored_while_it_is_on(cx: &mut TestAppContext) {
+    let dir = folder(&[
+        (".gitignore", "secret.txt\n"),
+        ("secret.txt", "s"),
+        ("keep.txt", "k"),
+    ]);
+    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
+    assert_eq!(show_ignored_checked(cx, handle), Some(false));
+
+    dispatch(cx, handle, ToggleShowIgnored);
+    assert!(read(cx, &view, AppState::shows_ignored));
+    assert_eq!(show_ignored_checked(cx, handle), Some(true));
+}
+
+#[gpui_kit::test]
+fn an_item_chosen_in_more_runs_its_command(cx: &mut TestAppContext) {
+    let (handle, _) = open_app(cx, tree(PROJECT));
+    click(cx, handle, "more");
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        let mut menu = window.within("popup-menu");
+        // An item's id is its place in the menu; find it by its name.
+        let id = menu
+            .find_by_label("Expand All")
+            .path()
+            .last()
+            .cloned()
+            .expect("an item has an id");
+        menu.click(id, cx);
+    })
+    .expect("choose Expand All");
+    cx.run_until_parked();
+
+    assert_eq!(
+        rows_now(cx, handle),
+        [
+            "docs",
+            "a.md",
+            "b.md",
+            "src",
+            "app",
+            "view.rs",
+            "lib.rs",
+            "main.rs",
+            "file2.txt",
+            "file10.txt",
+            "README.md"
+        ]
+    );
+    // Choosing closes the menu.
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("popup-menu").is_none());
+    })
+    .unwrap();
 }
 
 #[gpui_kit::test]

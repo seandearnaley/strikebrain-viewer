@@ -100,7 +100,9 @@ pub struct AppView {
     split: Entity<ResizableState>,
     /// The explorer's width when the split is first laid out.
     explorer_width: Pixels,
-    /// The explorer's width the bar was last drawn for.
+    /// The explorer's width as last seen from the split, only to tell when
+    /// it moved and the bar must redraw; the bar itself is drawn from
+    /// [`AppView::explorer_width`].
     bar_width: Option<Pixels>,
     /// The title last given to the window.
     title: Option<SharedString>,
@@ -176,8 +178,9 @@ impl AppView {
                 this.schedule_save(cx);
             }),
             // The bar's explorer part follows the split while it is dragged.
-            // The split notifies whenever either panel's size changes, so
-            // the bar redraws only when the explorer's width moved.
+            // The split notifies whenever a panel's bounds change, a move as
+            // well as a resize (a taller window, the stage's edge in a drag),
+            // so this redraws the bar only when the explorer's width moved.
             cx.observe(&split, |this, split, cx| {
                 let width = split.read(cx).sizes().first().copied();
                 if width != this.bar_width {
