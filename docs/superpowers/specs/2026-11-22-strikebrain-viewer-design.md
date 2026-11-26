@@ -1,6 +1,6 @@
 # Strikebrain Viewer design
 
-Status: design approved by Sean on 2026-11-22. Milestones 0 to 5 are built (2026-11-23), with the final review's fixes, milestone 6, several folders, and milestone 7, the gallery (2026-11-23), and milestone 8, the window, approved and built on 2026-11-26; where the build settled a question the design left open, the section below says so. Milestone 8's check by hand was done on 2026-11-26: after `tccutil reset`, the bundled app opened a picture from `~/Downloads` as a row of its own with no request for access; watching that file alone did ask, so file rows are not watched (see the M8 As built).
+Status: design approved by Sean on 2026-11-22. Milestones 0 to 5 are built (2026-11-23), with the final review's fixes, milestone 6, several folders, and milestone 7, the gallery (2026-11-23), and milestone 8, the window, approved and built on 2026-11-26; where the build settled a question the design left open, the section below says so. Milestone 8's check by hand was done on 2026-11-26: after `tccutil reset`, the bundled app opened a picture from `~/Downloads` as a row of its own with no request for access; watching that file alone did ask, so file rows are not watched (see the M8 As built). Milestone 9, updates, was approved on 2026-11-26 and is not built yet.
 Companion page: https://claude.ai/artifact/4PaAcuEDiMKYJKyEFCpkD3
 
 ## Purpose
@@ -37,6 +37,7 @@ Platform: macOS on Apple silicon. GPUI also targets Windows and Linux. Nothing h
 | `notify` 9, `directories` 6, `serde` 1, `serde_json` latest | | Milestone 5. No debouncer crate: the 150 ms window runs on GPUI's timer, which tests drive. |
 | `futures` 0.3 | | Milestone 5: the channel from the file watcher's thread into a GPUI task. GPUI exposes none and already builds this crate. |
 | `image` 0.25 | | Milestone 7: the gallery's thumbnails, decoded and scaled down to the tile; a GPUI image is made of its frames. GPUI already builds it with the same formats; it was a dev-dependency before. |
+| `ureq` 3 (`platform-verifier`), `semver` 1, `sha2` latest | | Milestone 9: the update check and download. |
 | `criterion` 0.8, `proptest` latest, `tempfile` latest | | Dev-dependencies of the engine. |
 
 Rules for every dependency:
@@ -562,7 +563,57 @@ Milestone 8 is built (2026-11-26); the sections above describe it (Purpose, Repo
 - **The filter** sits 8 px under the bar's rule, as far as from the pane's sides; under the toolbar it sat 2 px below.
 - **Tests** run commands by dispatching their actions from the public `viewer::keys` (`dispatch` in `tests/ui/main.rs`) rather than clicking inside the More menu; the menu's own tests in `tests/ui/bar.rs` click its items. `tests/ui/main.rs` also gained `open_app_with_session`, a window over a `Session` (a saved view, a state store, the explorer hidden). `tests/ui/toolbar.rs` went; its selection bar tests are in `tests/ui/checks.rs`.
 
+## Milestone 9: updates
+
+Asked for on 2026-11-26, before release 0.1.2: a way to learn of and install a new version with the least friction, in the canonical way. Sean chose on 2026-11-26: the update ships in 0.1.2, so every later version reaches people on it; the app downloads an update by itself and installs it on one click; automatic checks can be turned off. It follows GPUI Kit's guide, Auto Update (https://gpui-kit.com/docs/auto-update.md, read on 2026-11-26): the app checks, downloads, verifies and offers; whatever owns the installation installs. GPUI Kit has no updater of its own. Research, with sources, chose this over Sparkle, Velopack and `cargo-packager-updater`: each would add a framework or replace the installers, and none updates all three platforms' current packages. Where this section and an earlier one disagree, this section wins; the build rewrites the earlier sections it changes.
+
+### Checking
+
+- **The feed** is GitHub's latest release of `seandearnaley/strikebrain-viewer`: one unauthenticated request to `https://api.github.com/repos/seandearnaley/strikebrain-viewer/releases/latest`, with GitHub's JSON media type and API version, and the user agent `strikebrain-viewer/<version>`. Nothing about the person or their files is sent. The reply names each file of the release with its size and a `sha256` digest GitHub computed. Pre-releases and drafts are never the latest, so they are never offered.
+- **Newer** means the release's tag (`v<version>`) parses as a version (`semver`) greater than the running one. Anything else, a lower or equal version, a tag that does not parse, is not an update.
+- **When.** About 5 seconds after launch, so it does not compete with the first scans, then every 24 hours while the app runs; a launch within 24 hours of the last check, saved with the app's state, does not check. **Check for Updates…** checks at once, whatever the time.
+- **Errors.** An automatic check that fails (offline, refused, rate-limited, a reply that does not parse) says nothing and tries again at the next check. A check never blocks the interface: the request and everything after it run on the background executor.
+- **Check Automatically**, on by default, turns the automatic checks off and on; saved with the app's state as `check_updates` (a file without it checks, so the format stays version 2). **Check for Updates…** works either way.
+
+### Which file, and who installs it
+
+Each installation keeps its owner, as the guide's table says:
+
+| Installed as | The update |
+| --- | --- |
+| macOS, the signed `.app` | `Strikebrain-Viewer-<v>-macos-arm64.dmg`. The new app replaces the whole bundle; on **Restart to Update** the app relaunches as the new version. |
+| macOS, where the bundle cannot be replaced (running from the disk image or translocated, or its folder not writable) | The same DMG, verified, opened in Finder: **Install Update**. |
+| Windows, through the installer (the uninstaller, `unins000.exe`, sits beside the app) | `Strikebrain-Viewer-<v>-windows-x64-setup.exe`, run silently on **Restart to Update**; the app quits and the installer, which owns the files, the shortcuts and the uninstall record, relaunches it. A per-user install asks for no administrator. |
+| Windows, from the `.zip` | The release page opens: **Install Update**. |
+| Linux, from the `.deb` (the app is `/usr/bin/strikebrain-viewer`) | `strikebrain-viewer_<v>_amd64.deb`, verified, opened with the desktop's software installer: **Install Update**. The package manager stays the owner. |
+| Linux, from the `.tar.gz` | The release page opens: **Install Update**. |
+| A build not signed by the release (a development build, a bundle made by `just bundle` without `CODESIGN_IDENTITY`) | Never installs over itself: the release page opens. |
+
+### Downloading and verifying
+
+- **Staging.** The file downloads on the background executor into the platform's cache folder for the app (`directories`), `updates/<version>/`, away from the installation; older versions' files there are removed. The download stops at the size the release gives and is hashed as it streams; a size or digest that differs from the release's discards it. Nothing partly downloaded is ever opened or run.
+- **macOS.** The DMG is attached read-only and hidden (`hdiutil attach -readonly -nobrowse`). Its app must pass `codesign --verify --deep --strict`, be accepted by Gatekeeper (`spctl --assess --type execute`) and carry the same Team ID and bundle identifier as the running app; it is copied (`ditto`) into a staging folder on the installed app's volume and the image detached. **Restart to Update** moves the installed app aside, moves the new one into its place, removes the old one, and relaunches through GPUI's `App::restart`; if a move fails, the old app is moved back and the DMG opens instead.
+- **Windows.** The installer must carry a valid Authenticode signature from the same publisher as the running app (read with PowerShell's `Get-AuthenticodeSignature`, as GPUI's own restart uses PowerShell). **Restart to Update** starts it with `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART` and quits, so none of its files is in use; the installer installs and relaunches the app (a `[Run]` entry for silent installs, added to `bundle/windows.iss`).
+- **Linux.** The `.deb` is checked against the digest only: GitHub's HTTPS and digest are its authenticity.
+- **Authenticity** rests on what the release already has: HTTPS to GitHub, GitHub's own digest of each file, and on macOS and Windows the Developer ID and Authenticode signatures, checked against the running app's. No second signing key. Verifying the release's build attestation in the app is left out: `sigstore-rs` does not verify attestations yet.
+
+### What shows
+
+- **The phases** are the guide's, kept by an updater entity apart from the app's state: idle, checking, downloading, verifying, ready (with the version and how it installs) and failed (with the reason, shown only to a manual check).
+- **The title bar** shows nothing while a check or a download runs. When an update is ready (downloaded and verified, or, where the release page opens, found), one button appears at the right end of the bar's part over the stage, left of Present: **Restart to Update**, or **Install Update** where another program installs; the Kit's primary button, small; its tooltip and accessible label give the version, "Version <v>". No bar shows while presenting, so neither does the button; it stays until used or the app quits.
+- **Check for Updates…** and **Check Automatically** are in the app menu on macOS, after About. Windows and Linux have no menu bar, so there they are the last items of the bar's More menu, after a separator.
+- **A manual check** answers in the system's alert when there is nothing to install: "Strikebrain Viewer is up to date" with "Version <v>", or "Couldn't check for updates" with the system's message; OK. When an update is found, the button appears once it is ready.
+
+### For development
+
+- The feed's address is the updater's to hold: tests serve a feed and files from a local HTTP server, and `STRIKEBRAIN_VIEWER_UPDATE_FEED=<url>` points a run at another feed, for the check by hand. Tests never reach GitHub.
+- New crates, each because nothing in the graph covers it for the app: `ureq` 3 (HTTP, with its `platform-verifier` feature so certificates come from the system's store and no root bundle is vendored), `semver` 1, `sha2`. GPUI's `HttpClient` trait has only a null client on desktop.
+- Copy: "Check for Updates…", "Check Automatically", "Restart to Update", "Install Update", "Version <v>", "Strikebrain Viewer is up to date", "Couldn't check for updates", "OK".
+- **Checked by hand before 0.1.2 ships.** Install the signed 0.1.2 from the release workflow's dry run, point it at a local feed that offers the same DMG as a newer version, and watch it download, verify, swap and relaunch.
+
 ## Left out on purpose
+
+From update frameworks (milestone 9): Sparkle and WinSparkle, Velopack, delta updates, release channels, verifying build attestations in the app; Homebrew, winget and an apt repository are later channels that need no code in the app.
 
 From current Mac apps: an animated sidebar, a toolbar the person arranges, a history kept across launches, and files opened on their own kept across launches. On Linux, the app drawing its own frame where the system draws one.
 
@@ -631,6 +682,7 @@ Each ends with something that runs and tests that hold it. Each gets its own imp
 | M6 Several folders | Folders as top-level rows of one joined tree; Add Folder and Remove Folder; per-folder scans, sizes, live refresh and saved views; the old state file still loads. | Several folders come back in order, each with its own view, and adding 6,000 files to a 1 M-entry tree meets its budget. Done: `tests/ui/persist.rs` (`several_folders_come_back_in_order_each_with_its_own_view`), `tests/ui/folders.rs`, `tests/ui/launch.rs`; bench group `folders`, 7.9 ms. |
 | M7 Gallery | A grid of the checked files in front of the stage. | Which view shows follows the checks; tiles open, Esc and the grid button go back; the grid builds only the rows on screen at 100,000 files within budget. Done: `tests/ui/gallery.rs`, `tests/ui/persist.rs` (`the_stage_comes_back_in_the_view_it_showed`), the probe `timing_the_gallery_over_a_hundred_thousand_checked_files`. |
 | M8 Window | One title bar holding the panes' commands, a sidebar that hides, back and forward, a file opened on its own. | The bar, the sidebar, the history and file rows pass their tests on all three platforms' CI; a picture opened from Downloads in the bundled app shows with no request for access, tried by hand on a Mac. Done: `tests/ui/bar.rs`, `tests/ui/commands.rs`, `tests/ui/sidebar.rs`, `tests/ui/history.rs`, `tests/ui/files.rs` (`a_file_row_opened_again_is_read_again`), `tests/ui/watch.rs` (`a_file_opened_on_its_own_is_not_followed_and_refresh_reads_it_again`), `tests/ui/persist.rs` (`a_file_alone_reopens_the_saved_folders_and_shows_the_file`); Linux and Windows build and test in CI; checked by hand on 2026-11-26 (above). |
+| M9 Updates | Checking GitHub's latest release, downloading and verifying the platform's file, installing through its owner, one button in the bar, Check for Updates… and Check Automatically. | The feed, the file choice, the download and verification, and the macOS swap pass their tests on all three platforms' CI; the signed app from the release workflow's dry run updates itself to a newer version offered by a local feed and relaunches, tried by hand on a Mac. |
 
 Milestone 0 detail:
 
@@ -680,6 +732,7 @@ Each is set up with its signature, doc comment and failing tests. Sean writes th
 - **Esc inside the fullscreen animation.** GPUI 0.3.12 makes a window fullscreen asynchronously and keeps AppKit's will-enter and did-enter callbacks to itself; nothing public says a transition is under way. Space then Esc within the half second of the animation can leave the window fullscreen with the presentation ended (the toggle that should undo it may land mid-animation, or before the window reports fullscreen). The green button puts it right. Not handled.
 - **Live refresh on very large folders.** Each change a scan would show rescans the whole folder it is in, as decided; the other folders are left alone. With Show ignored on, a busy folder the tree then shows (a build's `target/`) is rescanned back to back while it changes. On Linux, `notify` uses inotify, which watches every folder separately; a 1.65 M-entry tree would exceed default watch limits. Neither is handled. A change to `.git/info/exclude` or the global excludes does not rescan.
 - **A file watched on its own** (milestone 8). Opening a file no folder lists reads only that file, and macOS asks nothing. Watching it asks: tried by hand on 2026-11-26 with a picture in Downloads, a watch on the file alone (`notify`'s FSEvents backend, not recursive) made macOS ask for access to Downloads within 9 ms. So file rows are not followed on disk, on any platform. A change to a file opened on its own shows after Refresh, after opening it again, or once a folder that lists it is added.
+- **Updates not yet seen** (milestone 9). Whether macOS shows its "Verifying…" pause on the first launch of a replaced, notarized app; whether a standard user may replace an app they dragged into `/Applications`; whether SmartScreen stops an installer the app downloaded itself: none has been tried. Unauthenticated requests to GitHub's API are limited to 60 an hour per address, and a conditional request answered "not modified" was measured to count against it (2026-11-26), whatever GitHub's documentation says; a daily check stays far below it, and an automatic check that is refused says nothing.
 - **The bar on Windows and Linux** (milestone 8). The Kit's caption buttons on Windows are checked only on GitHub's runner. Where a Linux desktop draws its own title bar, the window has two bars, the system's and the app's, where macOS and Windows have one.
 
 ## References
