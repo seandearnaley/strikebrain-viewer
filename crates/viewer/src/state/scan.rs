@@ -20,6 +20,7 @@ use explorer::{
 use gpui_kit::{AppContext as _, Context};
 
 use super::AppState;
+use super::history::Record;
 
 /// A scan that takes longer than this shows the progress bar.
 const SLOW_SCAN: Duration = Duration::from_millis(200);
@@ -239,12 +240,15 @@ impl AppState {
         let settling = self.restore.is_some() || self.restore_top.is_some();
         match self.folder_node(&path) {
             // Added while the app runs: its row is the focus row, on screen.
+            // Checks saved for it can put a file on a blank stage, a change
+            // the person did not make.
             Some(top) if first && !settling => {
                 let row = self.explorer.as_ref().and_then(|e| e.row_of(top));
                 if let Some(row) = row {
                     self.set_focus(top, row);
                 }
                 self.rows_replaced(cx);
+                self.record(Record::Replace);
             }
             _ => self.landed_keeping(before, &map, cx),
         }

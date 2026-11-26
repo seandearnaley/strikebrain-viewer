@@ -22,6 +22,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use explorer::{Explorer, NodeId, SavedFolder};
 use gpui_kit::{Context, PathPromptOptions, Result, SharedString, Task, TaskExt as _};
 
+use super::history::Record;
 use super::{AppState, ScanStatus, StateEvent};
 use crate::menus::APP_NAME;
 use crate::persist::resolve;
@@ -220,18 +221,22 @@ impl AppState {
     /// waits, as does every file while a launch settles, so the saved view
     /// does not replace it. One that no tree lists once its folder landed
     /// (deleted meanwhile, or its folder could not be read) is forgotten.
+    /// The files shown are one step in the history, what the stage shows
+    /// once they all are: it never shows them one by one.
     pub(super) fn settle_asked_files(&mut self, cx: &mut Context<Self>) {
         if self.asked_files.is_empty() || self.restore.is_some() {
             return;
         }
+        let mut shown = false;
         for (path, check) in std::mem::take(&mut self.asked_files) {
             if let Some(id) = self.listed(&path) {
                 if check {
                     self.check_and_show(id, cx);
                 } else {
-                    self.show(id, cx);
+                    self.show_file(id, cx);
                 }
                 self.reveal(id, cx);
+                shown = true;
             } else if self
                 .folders
                 .iter()
@@ -239,6 +244,9 @@ impl AppState {
             {
                 self.asked_files.push((path, check));
             }
+        }
+        if shown {
+            self.record(Record::Add);
         }
     }
 

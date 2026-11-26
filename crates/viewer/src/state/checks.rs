@@ -29,7 +29,8 @@ impl AppState {
     }
 
     /// Checks the file `id`, if it is not checked, and puts it on the
-    /// stage as a check by hand does: a file opened with others.
+    /// stage as a check by hand does: a file opened with others. Records no
+    /// step: the files opened together are one (see `settle_asked_files`).
     pub(super) fn check_and_show(&mut self, id: NodeId, cx: &mut Context<Self>) {
         let before = self.current;
         let Some(explorer) = self.explorer.as_mut() else {
@@ -39,7 +40,7 @@ impl AppState {
             explorer.toggle_check(id);
         }
         self.current = Some(id);
-        self.checks_changed(before, cx);
+        self.settle_checks(before, cx);
     }
 
     /// Checks every file the filter shows: Select All.
@@ -65,27 +66,41 @@ impl AppState {
     }
 
     /// After the person changed the checks, the file on the stage having
-    /// been `before`: the stage shows what they hold (see
-    /// `state/gallery.rs`).
+    /// been `before`: the stage shows what they hold, a new step.
     fn checks_changed(&mut self, before: Option<NodeId>, cx: &mut Context<Self>) {
+        self.settle_checks(before, cx);
+        self.record(Record::Add);
+    }
+
+    /// The stage shows what the checks hold, the file on the stage having
+    /// been `before` (see `state/gallery.rs`). Records no step.
+    fn settle_checks(&mut self, before: Option<NodeId>, cx: &mut Context<Self>) {
         self.selection_changed();
         self.show_for_checks(before, cx);
-        self.record(Record::Add);
         cx.notify();
     }
 
-    /// Shows `id` in the file view if it is a file, checked or not. Does
-    /// nothing on a folder.
+    /// Shows `id` in the file view if it is a file, checked or not, a new
+    /// step. Does nothing on a folder.
     pub(super) fn show(&mut self, id: NodeId, cx: &mut Context<Self>) {
-        let Some(explorer) = &self.explorer else {
-            return;
-        };
-        if explorer.tree().is_file(id) {
+        if self.show_file(id, cx) {
+            self.record(Record::Add);
+        }
+    }
+
+    /// Shows `id` in the file view as [`AppState::show`] does, recording
+    /// no step. Returns whether `id` is a file.
+    pub(super) fn show_file(&mut self, id: NodeId, cx: &mut Context<Self>) -> bool {
+        let is_file = self
+            .explorer
+            .as_ref()
+            .is_some_and(|explorer| explorer.tree().is_file(id));
+        if is_file {
             self.current = Some(id);
             self.view = super::StageView::File;
-            self.record(Record::Add);
             cx.notify();
         }
+        is_file
     }
 
     /// → on the stage: the next gallery file. From a file that is not

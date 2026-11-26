@@ -2,18 +2,19 @@
 //! by the arrows, passed over when they cannot be shown, from the bar, the
 //! keys and the mouse.
 
+use explorer::{SavedFolder, SavedSelection};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
-    AppContext as _, InputEvent as _, Modifiers, MouseButton, MouseDownEvent, NavigationDirection,
-    TestAppContext, point, px,
+    AnyWindowHandle, AppContext as _, InputEvent as _, Modifiers, MouseButton, MouseDownEvent,
+    NavigationDirection, TestAppContext, point, px,
 };
-use viewer::keys::{DeselectAll, GoBack, GoForward, SelectAllFiles};
+use viewer::keys::{DeselectAll, GoBack, GoForward, Refresh, SelectAllFiles};
 use viewer::{AppState, Launch, SavedView, Session};
 
 use crate::stage::code_view;
 use crate::{
-    PROJECT, click, current, dispatch, folder, node, open_app, open_app_with_session, press, read,
-    row, tree,
+    PROJECT, click, current, dispatch, folder, node, node_at, open_app, open_app_with_session,
+    press, read, row, state, tree,
 };
 
 /// Back on this platform.
@@ -22,6 +23,30 @@ const BACK: &str = if cfg!(target_os = "macos") {
 } else {
     "alt-left"
 };
+
+/// Forward on this platform.
+const FORWARD: &str = if cfg!(target_os = "macos") {
+    "cmd-]"
+} else {
+    "alt-right"
+};
+
+/// Presses the mouse's back or forward button over the stage.
+fn mouse(cx: &mut TestAppContext, handle: AnyWindowHandle, direction: NavigationDirection) {
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        let event = MouseDownEvent {
+            button: MouseButton::Navigate(direction),
+            position: point(px(500.), px(300.)),
+            modifiers: Modifiers::default(),
+            click_count: 1,
+            first_mouse: false,
+        };
+        window.dispatch_event(event.to_platform_input(), cx);
+    })
+    .expect("press the mouse's button");
+    cx.run_until_parked();
+}
 
 #[gpui_kit::test]
 fn back_and_forward_walk_what_the_stage_showed(cx: &mut TestAppContext) {
@@ -107,20 +132,12 @@ fn the_keys_the_mouse_and_the_bar_go_back(cx: &mut TestAppContext) {
     press(cx, handle, BACK);
     assert_eq!(current(cx, &view), Some(ten));
 
-    // The mouse's back button, anywhere over the window.
-    cx.update_window(handle, |_, window, cx| {
-        window.render_frame(cx);
-        let event = MouseDownEvent {
-            button: MouseButton::Navigate(NavigationDirection::Back),
-            position: point(px(500.), px(300.)),
-            modifiers: Modifiers::default(),
-            click_count: 1,
-            first_mouse: false,
-        };
-        window.dispatch_event(event.to_platform_input(), cx);
-    })
-    .unwrap();
-    cx.run_until_parked();
+    // The mouse's back and forward buttons, anywhere over the window.
+    mouse(cx, handle, NavigationDirection::Back);
+    assert_eq!(current(cx, &view), Some(two));
+    mouse(cx, handle, NavigationDirection::Forward);
+    assert_eq!(current(cx, &view), Some(ten));
+    mouse(cx, handle, NavigationDirection::Back);
     assert_eq!(current(cx, &view), Some(two));
 
     click(cx, handle, "forward");
@@ -190,4 +207,148 @@ fn a_launch_shows_its_saved_file_as_the_first_step(cx: &mut TestAppContext) {
     click(cx, handle, row(two));
     dispatch(cx, handle, GoBack);
     assert_eq!(current(cx, &view), Some(readme));
+}
+
+#[gpui_kit::test]
+fn back_passes_over_a_file_no_longer_in_the_tree(cx: &mut TestAppContext) {
+    let dir = folder(&[("a.txt", "a"), ("b.txt", "b"), ("c.txt", "c")]);
+    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
+    for name in ["c.txt", "a.txt", "b.txt"] {
+        let id = node(cx, &view, name);
+        click(cx, handle, row(id));
+    }
+
+    std::fs::remove_file(dir.path().join("a.txt")).unwrap();
+    dispatch(cx, handle, Refresh);
+    let (b, c) = (node(cx, &view, "b.txt"), node(cx, &view, "c.txt"));
+    assert_eq!(current(cx, &view), Some(b));
+
+    dispatch(cx, handle, GoBack);
+    assert_eq!(current(cx, &view), Some(c));
+    assert!(!read(cx, &view, AppState::can_go_back));
+    dispatch(cx, handle, GoForward);
+    assert_eq!(current(cx, &view), Some(b));
+    assert!(!read(cx, &view, AppState::can_go_forward));
+}
+
+#[gpui_kit::test]
+fn back_and_forward_do_nothing_while_presenting(cx: &mut TestAppContext) {
+    let (handle, view) = open_app(cx, tree(PROJECT));
+    let (two, ten, readme) = (
+        node(cx, &view, "file2.txt"),
+        node(cx, &view, "file10.txt"),
+        node(cx, &view, "README.md"),
+    );
+    click(cx, handle, row(two));
+    click(cx, handle, row(ten));
+    click(cx, handle, row(readme));
+    dispatch(cx, handle, GoBack);
+    // Steps lie both ways.
+    assert_eq!(current(cx, &view), Some(ten));
+
+    click(cx, handle, "present");
+    assert!(read(cx, &view, AppState::is_presenting));
+    press(cx, handle, BACK);
+    press(cx, handle, FORWARD);
+    mouse(cx, handle, NavigationDirection::Back);
+    mouse(cx, handle, NavigationDirection::Forward);
+    // The menu bar's items.
+    dispatch(cx, handle, GoBack);
+    dispatch(cx, handle, GoForward);
+    assert_eq!(current(cx, &view), Some(ten));
+    assert!(read(cx, &view, AppState::is_presenting));
+}
+
+#[gpui_kit::test]
+fn back_to_the_gallery_from_the_code_view_keeps_the_gallerys_keys(cx: &mut TestAppContext) {
+    let dir = folder(&[("a.rs", "a"), ("b.rs", "b"), ("c.rs", "c")]);
+    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
+    let (a, b) = (node(cx, &view, "a.rs"), node(cx, &view, "b.rs"));
+    dispatch(cx, handle, SelectAllFiles);
+    // To the stage, then the first tile opens in the code view.
+    press(cx, handle, "tab");
+    press(cx, handle, "enter");
+    assert_eq!(current(cx, &view), Some(a));
+    click(cx, handle, "stage-code");
+
+    press(cx, handle, BACK);
+    assert!(read(cx, &view, AppState::shows_gallery));
+    assert_eq!(read(cx, &view, AppState::tile), Some(a));
+    // The gallery's keys: → moves its focus.
+    press(cx, handle, "right");
+    assert_eq!(read(cx, &view, AppState::tile), Some(b));
+}
+
+#[gpui_kit::test]
+fn files_opened_together_at_launch_are_one_step(cx: &mut TestAppContext) {
+    let dir = folder(&[("a.txt", "a"), ("b.txt", "b"), ("c.txt", "c")]);
+    let (b, c) = (dir.path().join("b.txt"), dir.path().join("c.txt"));
+    let (handle, view) = open_app(cx, Launch::Folders(vec![b, c]));
+    assert!(read(cx, &view, AppState::shows_gallery));
+    assert!(!read(cx, &view, AppState::can_go_back));
+
+    // The gallery is the only step before a file shown from the tree.
+    let a = node(cx, &view, "a.txt");
+    click(cx, handle, row(a));
+    dispatch(cx, handle, GoBack);
+    assert!(read(cx, &view, AppState::shows_gallery));
+    assert!(!read(cx, &view, AppState::can_go_back));
+}
+
+#[gpui_kit::test]
+fn back_from_files_opened_together_shows_what_showed_before(cx: &mut TestAppContext) {
+    let dir = folder(&[("a.txt", "a"), ("b.txt", "b"), ("c.txt", "c")]);
+    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
+    let a = node(cx, &view, "a.txt");
+    click(cx, handle, row(a));
+
+    let (b, c) = (dir.path().join("b.txt"), dir.path().join("c.txt"));
+    view.update(cx, |view, cx| view.open_paths(vec![b, c], cx));
+    cx.run_until_parked();
+    assert!(read(cx, &view, AppState::shows_gallery));
+    dispatch(cx, handle, GoBack);
+    assert_eq!(current(cx, &view), Some(a));
+    assert!(!read(cx, &view, AppState::shows_gallery));
+}
+
+#[gpui_kit::test]
+fn a_file_opened_at_launch_is_the_first_step_not_the_saved_one(cx: &mut TestAppContext) {
+    let dir = folder(&[("a.txt", "a"), ("b.txt", "b")]);
+    let saved = explorer::canonical(&dir.path().join("a.txt")).unwrap();
+    let session = Session {
+        view: Some(SavedView {
+            current: Some(saved),
+            ..SavedView::default()
+        }),
+        ..Session::default()
+    };
+    let b = dir.path().join("b.txt");
+    let (_, view) = open_app_with_session(cx, Launch::Folders(vec![b.clone()]), session);
+    assert_eq!(current(cx, &view), Some(node_at(cx, &view, &b)));
+    assert!(!read(cx, &view, AppState::can_go_back));
+}
+
+#[gpui_kit::test]
+fn a_folder_bringing_its_checks_to_a_blank_stage_is_a_step(cx: &mut TestAppContext) {
+    let dir = folder(&[("a.txt", "a"), ("b.txt", "b")]);
+    let (handle, view) = open_app(cx, Launch::Empty);
+    // A folder added with a saved view waiting for it: open, a.txt checked.
+    let saved = SavedFolder {
+        path: explorer::canonical(dir.path()).unwrap(),
+        open: vec![String::new()],
+        selection: SavedSelection {
+            files: vec!["a.txt".into()],
+            ..SavedSelection::default()
+        },
+    };
+    state(cx, &view).update(cx, |state, cx| {
+        state.open_paths(vec![dir.path().to_owned()], vec![saved], cx);
+    });
+    cx.run_until_parked();
+    let (a, b) = (node(cx, &view, "a.txt"), node(cx, &view, "b.txt"));
+    assert_eq!(current(cx, &view), Some(a));
+
+    click(cx, handle, row(b));
+    dispatch(cx, handle, GoBack);
+    assert_eq!(current(cx, &view), Some(a));
 }
