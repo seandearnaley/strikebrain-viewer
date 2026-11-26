@@ -71,6 +71,29 @@ pub(super) struct Folder {
     pub(super) file: bool,
 }
 
+/// The files one call asked for, in the order asked. They show together,
+/// once a tree lists each one that is not forgotten.
+#[derive(Debug)]
+pub(super) struct AskedFiles {
+    paths: Vec<PathBuf>,
+    /// Asked for with others: checked, so they show as the gallery.
+    check: bool,
+}
+
+/// Where a file asked for stands.
+#[derive(Clone, Copy, Debug)]
+enum Standing {
+    /// A tree on screen lists it.
+    Listed,
+    /// A folder being read may list it, or its own row is being read again.
+    Waits,
+    /// No tree lists it or may: it is to be a row of its own.
+    Unlisted,
+    /// Gone from disk, or a row of its own already that could not be read,
+    /// which is not read again.
+    Forgotten,
+}
+
 impl std::fmt::Debug for Folder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Folder")
@@ -176,13 +199,13 @@ impl AppState {
         announce: bool,
         cx: &mut Context<Self>,
     ) {
-        let together = paths.iter().filter(|path| path.is_file()).count() > 1;
+        let mut files = Vec::new();
         for path in paths {
             let path = resolve(&path);
             // A file shows on the stage; a folder, as its row.
             if path.is_file() {
-                self.asked_files.push((path.clone(), together));
-                self.open_file(path, cx);
+                self.open_file(path.clone(), cx);
+                files.push(path);
                 continue;
             }
             if announce {
@@ -214,6 +237,13 @@ impl AppState {
             self.folders.push(Folder::new(key, path, saved));
             self.follow(key, cx);
             self.start_scan(key, cx);
+        }
+        if !files.is_empty() {
+            let check = files.len() > 1;
+            self.asked_files.push(AskedFiles {
+                paths: files,
+                check,
+            });
         }
         self.settle_asked_files(cx);
         cx.notify();
@@ -248,44 +278,90 @@ impl AppState {
         self.start_scan(key, cx);
     }
 
-    /// Shows each file asked for that a tree now lists, with its row the
-    /// focus row: in the file view, or checked into the gallery when it
-    /// was asked for with others. A file whose folder is still to land
-    /// waits, as does one whose own row is being read again, and every file
-    /// while a launch settles, so the saved view does not replace it. One
-    /// that no tree lists once its folder landed becomes a row of its own
-    /// if it is a file on disk, and is forgotten otherwise. The files shown
-    /// are one step in the history, what the stage shows once they all
-    /// are: it never shows them one by one.
+    /// Shows the files each call asked for once a tree lists every one of
+    /// them that is not forgotten, in the order asked, each row the focus
+    /// row in turn, so the last asked for ends it: in the file view, or
+    /// checked into the gallery when they were several. A file whose folder
+    /// is still to land waits, as does one whose own row is being read
+    /// again, and with it the rest of its call; every file waits while a
+    /// launch settles, so the saved view does not replace it. One that no
+    /// tree lists once its folder landed becomes a row of its own if it is
+    /// a file on disk, and is forgotten otherwise. The files shown are one
+    /// step in the history, what the stage shows once they all are: it
+    /// never shows them one by one.
     pub(super) fn settle_asked_files(&mut self, cx: &mut Context<Self>) {
         if self.asked_files.is_empty() || self.restore.is_some() {
             return;
         }
         let mut shown = false;
-        for (path, check) in std::mem::take(&mut self.asked_files) {
-            if let Some(id) = self.listed(&path) {
-                if check {
+        for mut asked in std::mem::take(&mut self.asked_files) {
+            let mut ready = true;
+            asked.paths.retain(|path| match self.standing(path) {
+                Standing::Listed => true,
+                Standing::Waits => {
+                    ready = false;
+                    true
+                }
+                Standing::Unlisted => {
+                    // Its folder landed and does not list it (its ignore
+                    // rules hide it): a row of its own, shown once read.
+                    self.open_file(path.clone(), cx);
+                    ready = false;
+                    true
+                }
+                Standing::Forgotten => false,
+            });
+            if !ready {
+                self.asked_files.push(asked);
+                continue;
+            }
+            for path in &asked.paths {
+                let Some(id) = self.listed(path) else {
+                    continue;
+                };
+                if asked.check {
                     self.check_and_show(id, cx);
                 } else {
                     self.show_file(id, cx);
                 }
                 self.reveal(id, cx);
                 shown = true;
-            } else if self.folders.iter().any(|folder| {
-                (!folder.shown && folder.holds(&path))
-                    || (folder.path == path && folder.scanning.is_some())
-            }) {
-                self.asked_files.push((path, check));
-            } else if path.is_file() && !self.folders.iter().any(|folder| folder.path == path) {
-                // Its folder landed and does not list it (its ignore rules
-                // hide it): a row of its own, shown once read. One that is
-                // a row already could not be read, and is not read again.
-                self.open_file(path.clone(), cx);
-                self.asked_files.push((path, check));
             }
         }
         if shown {
             self.record(Record::Add);
+        }
+    }
+
+    /// Whether the files `asked` for show at the next settle: a tree lists
+    /// each one that is not forgotten, and one at least.
+    pub(super) fn shows_now(&self, asked: &AskedFiles) -> bool {
+        let mut listed = false;
+        for path in &asked.paths {
+            match self.standing(path) {
+                Standing::Listed => listed = true,
+                Standing::Forgotten => {}
+                Standing::Waits | Standing::Unlisted => return false,
+            }
+        }
+        listed
+    }
+
+    /// Where the file asked for at `path` stands.
+    fn standing(&self, path: &Path) -> Standing {
+        if self.listed(path).is_some() {
+            return Standing::Listed;
+        }
+        let waits = self.folders.iter().any(|folder| {
+            (!folder.shown && folder.holds(path))
+                || (folder.path == path && folder.scanning.is_some())
+        });
+        if waits {
+            Standing::Waits
+        } else if path.is_file() && !self.folders.iter().any(|folder| folder.path == path) {
+            Standing::Unlisted
+        } else {
+            Standing::Forgotten
         }
     }
 
@@ -362,8 +438,9 @@ impl AppState {
             .and_then(|at| Some((*rows.get(at)?, at)));
         let none_left = explorer.tree().folders().len() == 0;
         self.folders.retain(|folder| folder.path != path);
-        self.asked_files
-            .retain(|(file, _)| !file.starts_with(&path));
+        for asked in &mut self.asked_files {
+            asked.paths.retain(|file| !file.starts_with(&path));
+        }
         self.current = current;
         self.focus = self.focus.and_then(|focus| map.get(focus));
         self.tile = self.tile.and_then(|tile| map.get(tile));
@@ -383,6 +460,8 @@ impl AppState {
         }
         self.selection_changed();
         self.landed_keeping(before, &map, cx);
+        // Files asked for together with one the row held may wait no more.
+        self.settle_asked_files(cx);
     }
 
     /// ⌘⌫ on the focus row: removes it if it is a top-level row.

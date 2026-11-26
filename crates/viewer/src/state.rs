@@ -32,7 +32,7 @@ use gpui_kit::component::history::History;
 use gpui_kit::{Context, EventEmitter, Result, Task};
 
 use crate::persist::SavedView;
-use folders::Folder;
+use folders::{AskedFiles, Folder};
 pub use gallery::StageView;
 pub(crate) use gallery::{DrawnTile, TileMotion};
 use history::{Record, Step};
@@ -212,9 +212,9 @@ pub struct AppState {
     show_ignored: bool,
     /// How many scans have started, across folders; each scan's number.
     scans: u64,
-    /// Files asked for, each waiting for a tree that lists it to show, and
-    /// whether to check it: it was asked for with others.
-    asked_files: Vec<(PathBuf, bool)>,
+    /// Files asked for, grouped by the call that asked: each call's files
+    /// wait for trees that list them, to show together.
+    asked_files: Vec<AskedFiles>,
     /// The parts of a saved view that wait for the folders to land.
     restore: Option<Pending>,
     /// The saved top row, waiting for sizes before a Size sort settles.

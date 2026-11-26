@@ -86,10 +86,7 @@ impl AppState {
         }
         // Files asked for record their own step as they show; the saved
         // view they replace is never on screen.
-        let asked_show = self
-            .asked_files
-            .iter()
-            .any(|(path, _)| self.listed(path).is_some());
+        let asked_show = self.asked_files.iter().any(|asked| self.shows_now(asked));
         if !asked_show {
             self.record(Record::Replace);
         }

@@ -129,10 +129,10 @@ impl AppState {
         folder.rescan_pending = false;
         let had_error = folder.watch_error.take().is_some();
         if let Some(quiet) = quiet {
-            let root = folder.path.clone();
-            folder.watch_task = Some(
-                cx.spawn(async move |this, cx| follow_folder(this, key, root, quiet, cx).await),
-            );
+            let (root, file) = (folder.path.clone(), folder.file);
+            folder.watch_task = Some(cx.spawn(async move |this, cx| {
+                follow_folder(this, key, root, file, quiet, cx).await
+            }));
         }
         if had_error {
             cx.notify();
@@ -167,19 +167,20 @@ impl AppState {
     }
 }
 
-/// Follows the folder `key` at `root` until the task is dropped: starts
-/// the watcher off the UI thread, then turns each window of changes into at
-/// most one rescan.
+/// Follows the folder `key` at `root`, or the `file` opened on its own
+/// there, until the task is dropped: starts the watcher off the UI thread,
+/// then turns each window of changes into at most one rescan.
 async fn follow_folder(
     this: WeakEntity<AppState>,
     key: u64,
     root: PathBuf,
+    file: bool,
     quiet: Vec<PathBuf>,
     cx: &mut AsyncApp,
 ) -> Result<()> {
     let (sender, changes) = unbounded();
     let started = cx
-        .background_spawn(async move { watch(&root, &quiet, sender) })
+        .background_spawn(async move { watch(&root, file, &quiet, sender) })
         .await;
     // Held for as long as the task runs; dropping it stops the events.
     let _watcher = match started {
@@ -235,10 +236,12 @@ async fn follow_changes(
 }
 
 /// A watcher on `root`, made canonical so the paths it reports start with
-/// the scanned tree's root, sending what it sees to `sender`. Changes to
-/// the `quiet` files are dropped.
+/// the scanned tree's root, sending what it sees to `sender`: recursive on
+/// a folder, alone on a `file` opened on its own. Changes to the `quiet`
+/// files are dropped.
 fn watch(
     root: &Path,
+    file: bool,
     quiet: &[PathBuf],
     sender: UnboundedSender<Change>,
 ) -> notify::Result<RecommendedWatcher> {
@@ -271,10 +274,10 @@ fn watch(
     let config = Config::default().with_event_kinds(EventKindMask::CORE);
     let mut watcher = RecommendedWatcher::new(handler, config)?;
     // A file opened on its own is watched alone: its folder is never read.
-    let mode = if root.is_dir() {
-        RecursiveMode::Recursive
-    } else {
+    let mode = if file {
         RecursiveMode::NonRecursive
+    } else {
+        RecursiveMode::Recursive
     };
     watcher.watch(&root, mode)?;
     Ok(watcher)
