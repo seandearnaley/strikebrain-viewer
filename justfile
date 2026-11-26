@@ -90,24 +90,51 @@ bundle:
     echo "$app ($version)"
 
 # The image holds the app beside a link to /Applications, and is signed
-# when CODESIGN_IDENTITY is set. Notarizing it is the release workflow's
-# step.
+# when CODESIGN_IDENTITY is set. When NOTARY_KEY also names an App Store
+# Connect API key (.p8), with NOTARY_KEY_ID and NOTARY_ISSUER_ID, Apple
+# notarizes the app and then the image, and each gets its ticket stapled:
+# Gatekeeper then needs no network to open the app copied out of the image.
 # Build the macOS disk image: target/release/bundle/Strikebrain-Viewer-<version>-macos-<arch>.dmg.
 [macos]
 dmg: bundle
     #!/usr/bin/env bash
     set -euo pipefail
     version=$(cargo pkgid -p viewer | sed 's/.*[#@]//')
+    app="target/release/bundle/osx/Strikebrain Viewer.app"
     dmg="target/release/bundle/Strikebrain-Viewer-$version-macos-$(uname -m).dmg"
-    root="$(mktemp -d)"
-    cp -R "target/release/bundle/osx/Strikebrain Viewer.app" "$root/"
-    ln -s /Applications "$root/Applications"
-    hdiutil create -volname "Strikebrain Viewer" -srcfolder "$root" -ov -format UDZO "$dmg" > /dev/null
-    rm -r "$root"
+    work="$(mktemp -d)"
+    trap 'rm -rf "$work"' EXIT
+    # Submits $1 and staples its ticket to $2. `--wait` returns once Apple
+    # has an answer, whatever it is.
+    notarize() {
+        xcrun notarytool submit "$1" --key "$NOTARY_KEY" --key-id "$NOTARY_KEY_ID" \
+            --issuer "$NOTARY_ISSUER_ID" --wait --output-format json > "$work/notary.json"
+        cat "$work/notary.json"
+        if ! jq -e '.status == "Accepted"' "$work/notary.json" > /dev/null; then
+            xcrun notarytool log "$(jq -r .id "$work/notary.json")" --key "$NOTARY_KEY" \
+                --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID"
+            exit 1
+        fi
+        xcrun stapler staple "$2"
+        xcrun stapler validate "$2"
+    }
+    if [ -n "${NOTARY_KEY:-}" ]; then
+        [ -n "${CODESIGN_IDENTITY:-}" ] || { echo "notarizing needs CODESIGN_IDENTITY" >&2; exit 1; }
+        # A zip can be notarized but not stapled; its ticket goes on the app.
+        ditto -c -k --keepParent "$app" "$work/app.zip"
+        notarize "$work/app.zip" "$app"
+    fi
+    mkdir "$work/root"
+    cp -R "$app" "$work/root/"
+    ln -s /Applications "$work/root/Applications"
+    hdiutil create -volname "Strikebrain Viewer" -srcfolder "$work/root" -ov -format UDZO "$dmg" > /dev/null
     if [ -n "${CODESIGN_IDENTITY:-}" ]; then
         codesign --force --timestamp -s "$CODESIGN_IDENTITY" "$dmg"
     fi
     hdiutil verify -quiet "$dmg"
+    if [ -n "${NOTARY_KEY:-}" ]; then
+        notarize "$dmg" "$dmg"
+    fi
     echo "$dmg"
 
 # The .tar.gz is laid out as a prefix (bin/, share/), to unpack into
