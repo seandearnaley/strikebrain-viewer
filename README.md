@@ -19,10 +19,11 @@ Needs the toolchain in `rust-toolchain.toml` (rustup installs it). It is develop
 
 ```sh
 cargo run -p viewer -- ~/some/folder ~/another   # open these folders
+cargo run -p viewer -- ~/Downloads/photo.jpg     # reopen the last folders, and show this file
 cargo run -p viewer                              # reopen the last folders as you left them
 ```
 
-Add Folder (⌘O, the toolbar's folder button, or File > Add Folder…) adds more, as does a folder or a file dropped on the window; each folder is a top-level row, removed with the button that shows on its row when you point at it, or ⌘⌫. The app remembers the folders, their open folders and checks, the filter, sort, scroll, the file on the stage and whether the gallery showed, the explorer's width and the window, in `~/Library/Application Support/ai.brainstrike.viewer/state.json`. It follows each folder on disk and refreshes that folder when its files change.
+Add Folder (⌘O, the bar's folder button, or File > Add Folder…) adds more, as does a folder dropped on the window; each folder is a top-level row, removed with the button that shows on its row when you point at it, or ⌘⌫. A file opened on its own (named on the command line, dropped on the window, or sent by Open With) shows in an open folder that holds it, or else as a row of its own, without reading its folder, until the app quits. The explorer hides with ⌃⌘S, the bar's sidebar button or View > Hide Sidebar, and the stage takes the window. Back and Forward (⌘[ and ⌘], the bar's arrows, the Go menu or the mouse's side buttons) go through what the stage showed. The app remembers the folders, their open folders and checks, the filter, sort, scroll, the file on the stage and whether the gallery showed, the explorer's width and whether it was hidden, and the window, in `~/Library/Application Support/ai.brainstrike.viewer/state.json`. It follows each folder and each file row on disk and refreshes it when it changes.
 
 ## Keys
 
@@ -38,7 +39,9 @@ Add Folder (⌘O, the toolbar's folder button, or File > Add Folder…) adds mor
 | Page Up, Page Down | Jump | A screen of rows | Jump within text | Jump within text |
 | ⌘F | Filter | Filter | Filter | |
 | ⌘O | Add folders | Add folders | Add folders | |
-| ⌘⌫ | Remove the focused folder | | | |
+| ⌘⌫ | Remove the focused folder or file row | | | |
+| ⌘[ ⌘] | Back, Forward | Back, Forward | Back, Forward | |
+| ⌃⌘S | Hide the explorer | Hide or show the explorer | Hide or show the explorer | |
 | ⌘R | Refresh | Refresh | Refresh | Refresh |
 | ⇧⌘. | Show ignored files, or hide them | The same | The same | The same |
 | ⇧⌘R | Reveal the focused row in Finder | Reveal the file | Reveal the file | Reveal the file |
@@ -46,7 +49,7 @@ Add Folder (⌘O, the toolbar's folder button, or File > Add Folder…) adds mor
 | ⌃⌘F | Fullscreen, or back | The same | The same | The same |
 | Tab | Next pane | Next pane | Next pane | |
 
-On Windows and Linux, Ctrl stands for ⌘ and F11 is fullscreen.
+On Windows and Linux, Ctrl stands for ⌘, F11 is fullscreen, Alt+← and Alt+→ go back and forward, and Ctrl+B hides or shows the explorer.
 
 A click on a tile opens it too; under the file, the grid button left of its place ("2 / 3") goes back to the gallery. In the filter, Esc clears the text, then returns to the tree.
 
@@ -59,7 +62,7 @@ just linux-packages   # Linux: a .tar.gz and a .deb
 just windows-packages # Windows: a .zip and an installer (needs Inno Setup 6)
 ```
 
-On macOS this builds the release binary and wraps it in an `.app`, signed ad hoc for this Mac. You can then drop a folder or a file on its Dock icon, or choose it in Finder's Open With: a folder is added, and a file opens its folder and shows.
+On macOS this builds the release binary and wraps it in an `.app`, signed ad hoc for this Mac. You can then drop a folder or a file on its Dock icon, or choose it in Finder's Open With: a folder is added, and a file shows in an open folder that holds it, or as a row of its own.
 
 ## Develop
 
