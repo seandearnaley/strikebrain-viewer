@@ -233,7 +233,7 @@ fn the_title_names_what_the_stage_shows(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn a_long_title_truncates_and_present_stays_in_the_window(cx: &mut TestAppContext) {
-    // Some 1,400 px of name over a stage part 700 px wide.
+    // Some 1,900 px of name over a stage part 700 px wide.
     let name = format!("{}.txt", "a-very-long-name-for-a-file-".repeat(8));
     let (handle, view) = open_app(cx, tree(&[name.as_str(), "short.txt"]));
     let file = node(cx, &view, &name);
