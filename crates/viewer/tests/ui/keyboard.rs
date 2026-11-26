@@ -117,8 +117,8 @@ fn home_end_and_page_keys_jump_and_keep_focus_on_screen(cx: &mut TestAppContext)
     assert_eq!(focus(cx, &view), Some(node(cx, &view, "file000.txt")));
     assert!(focus_row_visible(cx));
 
-    // Under 134 px of the bar, filter, kinds and header, a 700 px window
-    // leaves a 566 px tree: 19 whole 29 px rows.
+    // Under 140 px of the bar, filter, kinds and header, a 700 px window
+    // leaves a 560 px tree: 19 whole 29 px rows.
     press(cx, "pagedown");
     assert_eq!(focus(cx, &view), Some(node(cx, &view, "file019.txt")));
     assert!(focus_row_visible(cx));

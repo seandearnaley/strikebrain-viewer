@@ -15,7 +15,7 @@ use gpui_kit::{
     AnyWindowHandle, AppContext as _, Bounds, ElementId, Entity, HeadlessAppContext, Pixels,
     ScrollDelta, Size, WindowBounds, WindowOptions, point, px, size,
 };
-use viewer::keys::{SelectAllFiles, ToggleShowIgnored};
+use viewer::keys::{SelectAllFiles, ToggleShowIgnored, ToggleSidebar};
 use viewer::{AppAssets, AppView, Launch, ScanStatus, Session};
 
 /// A small project with nested folders, sizes and a long name.
@@ -577,6 +577,29 @@ fn main() {
             &format!("hover-{suffix}"),
         ));
 
+        // The explorer hidden, a file on the stage after another: the bar
+        // holds the lights' room, the sidebar button, Back and Forward, the
+        // title and Present, with no rule, and the stage has the window.
+        let mut cx = context();
+        let (handle, view) = open(&mut cx, fixture());
+        let (first, second) = (
+            node(&mut cx, &view, "file2.txt"),
+            node(&mut cx, &view, "README.md"),
+        );
+        cx.update_window(handle, |_, window, cx| {
+            window.click(first, cx);
+            window.click(second, cx);
+        })
+        .expect("show two files in turn");
+        dispatch(&mut cx, handle, ToggleSidebar);
+        written.push(save(
+            &mut cx,
+            handle,
+            mode,
+            &dir,
+            &format!("sidebar-hidden-{suffix}"),
+        ));
+
         // A long list scrolled to its middle, the pointer on the overlay
         // scrollbar so it shows: it must not cover the sizes.
         let mut cx = context();
@@ -828,6 +851,25 @@ fn main() {
             mode,
             &dir,
             &format!("remove-folder-{suffix}"),
+        ));
+
+        // A picture opened on its own: a row of its own, its folder never
+        // read, and the picture on the stage. Its long name truncates in the
+        // row and in the bar's title.
+        let (_alone, alone) = folder("Downloads", &[]);
+        std::fs::create_dir_all(&alone).expect("make the picture's folder");
+        let picture = alone
+            .join("evening-walk-along-the-ridge-above-the-lake-once-the-storm-had-cleared.png");
+        std::fs::write(&picture, photo(1600, 1000)).expect("write the picture");
+        std::fs::write(alone.join("unrelated.txt"), "x").expect("write a file beside it");
+        let mut cx = context();
+        let (handle, _) = open(&mut cx, Launch::Folders(vec![picture]));
+        written.push(save(
+            &mut cx,
+            handle,
+            mode,
+            &dir,
+            &format!("file-alone-{suffix}"),
         ));
 
         // A folder that cannot be read: one row, with a warning.
