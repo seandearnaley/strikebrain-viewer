@@ -12,3 +12,5 @@ extend-exclude = [
 [default.extend-identifiers]
 # "Filter terms are ANDed" in the design spec.
 ANDed = "ANDed"
+# The plural of PNG, which typos splits as "PN" and "Gs".
+PNGs = "PNGs"

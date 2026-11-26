@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Strikebrain on dark</title>
+  <desc id="desc">A circle with a classic zigzag lightning bolt cut out of it. On a dark neutral.</desc>
+  <rect width="1024" height="1024" fill="#10131A"/>
+  <path fill="#FF2E93" fill-rule="evenodd" clip-rule="evenodd" d="M512 78 A434 434 0 1 1 512 946 A434 434 0 1 1 512 78 Z M618 128 L251 558 L493 558 L358 892 L734 440 L524 440 Z"/>
+</svg>
