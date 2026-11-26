@@ -167,10 +167,11 @@ linux-packages:
 # The .zip holds the executable and the licenses; the installer, made with
 # Inno Setup 6 from crates/viewer/bundle/windows.iss, puts them in the
 # user's Programs folder with a Start menu entry. Unsigned unless SIGNTOOL
-# holds a whole signing command, to which the file is added: `signtool.exe
-# sign ...`, as the release workflow sets it. Inno Setup then signs the
-# executable, the uninstaller and the installer with it, and the .zip, made
-# afterwards, holds the signed executable.
+# holds a whole signing command, to which the file is added; the release
+# workflow sets it to run crates/viewer/bundle/windows-sign.ps1. Inno Setup
+# then signs the executable (unless it is signed already), the uninstaller
+# and the installer with it, and the .zip, made afterwards, holds the signed
+# executable.
 # Build the Windows packages, a .zip and an installer, in target\release\bundle.
 [windows]
 [extension(".ps1")]

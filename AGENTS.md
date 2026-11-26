@@ -43,15 +43,19 @@ CI (`.github/workflows/ci.yml`) runs `just check` on macOS for every pull reques
 
 ## Releasing
 
-`.github/workflows/release.yml` builds the macOS disk image, the Linux packages and the Windows packages with the recipes above. A pull request that touches the workflow, the `justfile`, `crates/viewer/bundle` or `crates/viewer/build.rs` runs it as a rehearsal and keeps the files as artifacts. To release:
+`.github/workflows/release.yml` builds the macOS disk image, the Linux packages and the Windows packages with the recipes above, signs them, checks them as a person would install them, and publishes them. To release:
 
 1. Set `version` in the root `Cargo.toml`, run `cargo check` so `Cargo.lock` follows, and merge that.
-2. Tag the merged commit `v<version>` and push the tag. The workflow fails if the tag and the version differ.
-3. The workflow attaches the files, `SHA256SUMS` and a build attestation to a draft release. Read it, then publish it on GitHub.
+2. Run `gh workflow run release.yml --ref main` (or Actions > Release > Run workflow). Add `-f dry_run=true` to do everything but publish. Follow it with `gh run watch`.
+3. When every package passes, the workflow tags the commit `v<version>`, publishes the release with `SHA256SUMS` and a build attestation, then downloads and verifies the published files. A failure anywhere publishes nothing; a version already tagged or released stops the run before it builds.
 
-macOS signs with a Developer ID certificate and notarizes only when the repository has the secrets the workflow's header lists; without them the image is signed ad hoc, and Gatekeeper refuses it on another Mac. `just bundle` and `just dmg` sign with `CODESIGN_IDENTITY` when it is set. The hardened runtime is on either way.
+A pull request that touches the workflow, the `justfile`, `crates/viewer/bundle` or `crates/viewer/build.rs` runs it as a rehearsal: unsigned, unpublished, its files kept as artifacts.
 
-Windows signs with Azure Artifact Signing only when the repository has the secrets and variables the workflow's header lists; without them nothing is signed, and SmartScreen warns about the installer. The workflow puts a whole `signtool.exe sign ...` command in `SIGNTOOL`, and `just windows-packages` hands it to Inno Setup, which signs the executable, the uninstaller and the installer. `crates/viewer/build.rs` compiles `bundle/windows.rc` into the executable: icon 1, which GPUI loads for the window, and the version details.
+Signing runs in the repository's `release` environment, which only `main` can use; its secrets and variables are named in the workflow's header. macOS imports the Developer ID Application certificate into a keychain made for the job, signs with the hardened runtime, notarizes the disk image with an App Store Connect API key (`strikebrain-viewer-notarize`), staples it, and checks it with Gatekeeper. Locally, `just bundle` and `just dmg` sign ad hoc, or with `CODESIGN_IDENTITY` when it is set.
+
+Windows signs with Azure Artifact Signing (account `seandsigning`, profile `public-trust`). The Entra app `strikebrain-viewer-release` trusts only this repository's `release` environment through GitHub's OIDC token, so no Azure password is stored. The workflow signs the executable with Microsoft's action, then sets `SIGNTOOL` to run `crates/viewer/bundle/windows-sign.ps1`, which `just windows-packages` hands to Inno Setup to sign the uninstaller and the installer. The check requires every file to carry a valid, timestamped signature from one publisher. `crates/viewer/build.rs` compiles `bundle/windows.rc` into the executable: icon 1, which GPUI loads for the window, and the version details.
+
+To renew: a new Developer ID certificate means a new `MACOS_APPLICATION_P12`, `MACOS_P12_PASSWORD` and `MACOS_APPLICATION_IDENTITY` (`gh secret set <name> --env release`); a revoked notary key means new `NOTARY_API_*` secrets. Azure rotates its short-lived certificates itself; keep the identity validation current.
 
 Iterate on the narrowest check. Engine work needs only the engine tests.
 
@@ -114,9 +118,9 @@ Neither was added. Rebuild and restart instead.
 
 - A command's key takes ⌘ on macOS and Ctrl elsewhere: `secondary!` in `crates/viewer/src/keys.rs` writes it for the platform the app is built for, and a test presses it as `secondary-f`. GPUI draws no menu bar on Windows and Linux, so the commands there are their keys and the buttons. Tests that make symlinks or FIFOs are `#[cfg(unix)]`.
 - Paths compared with a tree's go through `explorer::canonical`, which on Windows drops the `\\?\` prefix of the system's canonical form where the path means the same without it (`dunce`); Clippy rejects `std::fs::canonicalize`. A path that needs the prefix (a reserved name such as `con`, more than 260 characters) keeps it, and shows with it.
-- A local bundle is signed ad hoc (`codesign -s -`), for this Mac and for tools that find the app by bundle identifier. The release workflow signs with a Developer ID certificate and notarizes once its secrets exist; until then its image is ad hoc too.
+- A local bundle is signed ad hoc (`codesign -s -`), for this Mac and for tools that find the app by bundle identifier. Only the release workflow signs with the Developer ID certificate and notarizes.
 - Releases cover macOS on Apple silicon, and Linux and Windows on x86-64. There is no Intel Mac build (none can be run here to test), no Linux Arm build and no Windows Arm build.
-- The Windows packages are built and checked only on GitHub's runner: the installer runs silently there, the installed binary prints its version, and the uninstaller removes it. Nobody has watched the installer's pages or the app's icon on a real Windows desktop from them. Signing with Azure has never run.
+- The Windows packages are checked only on GitHub's runner: the installer runs silently there, the installed app opens its window, and the uninstaller removes it. Nobody has watched the installer's pages or the app's icon on a real Windows desktop from them.
 - Live refresh rescans the whole folder a change is in, on any change a scan would show, as the design says; the other folders are left alone. With Show ignored on, a busy folder the tree then shows (a build's `target/`) is rescanned back to back while it changes.
 - Folders are told apart by their canonical paths, and `realpath` does not join macOS firmlinks: `/System/Volumes/Data/Users/x` and `/Users/x` stay different, so the same folder added under both is listed twice. The picker and Finder give `/Users/...`.
 - A saved folder that no longer exists at launch is dropped from the saved state, as the design asks, even when it is only on a volume not mounted that day.
