@@ -112,7 +112,8 @@ pub struct AppView {
     stage: Entity<Stage>,
     /// The sizes of the explorer and the stage beside it.
     split: Entity<ResizableState>,
-    /// The explorer's width when the split is first laid out.
+    /// The explorer's width when the split is first laid out, fitted to
+    /// the window.
     explorer_width: Pixels,
     /// Whether the explorer is hidden: the stage has the window below the
     /// bar. The split keeps the explorer's width meanwhile.
@@ -188,15 +189,20 @@ impl AppView {
                 // The bar shows the state.
                 cx.notify();
             }),
-            cx.subscribe(&app_state, |this, _, event: &StateEvent, cx| {
-                // Adding a folder shows it: its row is what adding shows.
-                if *event == StateEvent::FolderAdded {
-                    this.show_explorer(cx);
-                }
-            }),
+            cx.subscribe_in(
+                &app_state,
+                window,
+                |this, _, event: &StateEvent, window, cx| {
+                    // Adding a folder shows it: its row is what adding shows.
+                    if *event == StateEvent::FolderAdded {
+                        this.show_explorer(window, cx);
+                    }
+                },
+            ),
             cx.observe_window_appearance(window, |_, window, cx| theme::follow_system(window, cx)),
             cx.observe_window_bounds(window, |this, window, cx| {
                 this.follow_fullscreen(window);
+                this.fit_split(window, cx);
                 this.window = Some(this.place(window, cx));
                 this.schedule_save(cx);
             }),
@@ -362,10 +368,35 @@ impl AppView {
             if self.fullscreen.entered {
                 window.toggle_fullscreen();
             }
-        } else if std::mem::take(&mut self.fullscreen.entered) && window.is_fullscreen() {
-            window.toggle_fullscreen();
+        } else {
+            if std::mem::take(&mut self.fullscreen.entered) && window.is_fullscreen() {
+                window.toggle_fullscreen();
+            }
+            // The split comes back.
+            self.fit_split(window, cx);
         }
         cx.notify();
+    }
+
+    /// Narrows the explorer when the stage beside it would have less than
+    /// its minimum: the window is never narrower than both panes at their
+    /// narrowest, so the explorer gives way, and keeps its width otherwise.
+    /// Only while the split is drawn: a width kept while the explorer is
+    /// hidden or the stage presents is fitted when the split comes back.
+    fn fit_split(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.explorer_hidden || self.presenting {
+            return;
+        }
+        let width = self.explorer_width(cx);
+        let fitted = fit_explorer(width, window.viewport_size().width.as_f32());
+        if fitted >= width {
+            return;
+        }
+        // What a split not laid out yet starts at.
+        self.explorer_width = px(fitted);
+        self.split.update(cx, |split, cx| {
+            split.resize_panel(0, px(fitted), window, cx);
+        });
     }
 
     /// Follows the window in and out of fullscreen, which changes its
@@ -506,7 +537,7 @@ impl AppView {
 
     fn toggle_sidebar(&mut self, _: &ToggleSidebar, window: &mut Window, cx: &mut Context<Self>) {
         if self.explorer_hidden {
-            return self.show_explorer(cx);
+            return self.show_explorer(window, cx);
         }
         // Focus never stays in what hides.
         if matches!(
@@ -518,10 +549,12 @@ impl AppView {
         self.set_explorer_hidden(true, cx);
     }
 
-    /// Shows the explorer if it is hidden.
-    fn show_explorer(&mut self, cx: &mut Context<Self>) {
+    /// Shows the explorer if it is hidden, narrowed to leave the stage its
+    /// minimum if the window narrowed meanwhile.
+    fn show_explorer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.explorer_hidden {
             self.set_explorer_hidden(false, cx);
+            self.fit_split(window, cx);
         }
     }
 
@@ -564,7 +597,7 @@ impl AppView {
 
     /// ⌘F: the filter, showing the explorer if it is hidden.
     fn focus_filter(&mut self, _: &FocusFilter, window: &mut Window, cx: &mut Context<Self>) {
-        self.show_explorer(cx);
+        self.show_explorer(window, cx);
         self.focus_pane(Pane::Filter, window, cx);
     }
 

@@ -81,6 +81,30 @@ fn every_bar_button_is_a_labelled_icon(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn the_sidebar_button_starts_after_the_lights_room(cx: &mut TestAppContext) {
+    let (handle, _) = open_app(cx, tree(PROJECT));
+    let left = |cx: &mut TestAppContext| {
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.find("sidebar").bounds().left()
+        })
+        .unwrap()
+    };
+    // The traffic lights' room: 80 px on macOS, the Kit's 12 elsewhere.
+    let room = if cfg!(target_os = "macos") {
+        px(80.)
+    } else {
+        px(12.)
+    };
+    assert_eq!(left(cx), room);
+    // In fullscreen the room closes; the Kit's own inset is left.
+    cx.update_window(handle, |_, window, _| window.toggle_fullscreen())
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(left(cx), px(12.));
+}
+
+#[gpui_kit::test]
 fn more_holds_the_explorers_commands(cx: &mut TestAppContext) {
     let (handle, _) = open_app(cx, tree(PROJECT));
     click(cx, handle, "more");
