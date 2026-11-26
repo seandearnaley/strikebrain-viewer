@@ -7,10 +7,11 @@ use gpui_kit::{
     TestAppContext,
 };
 use viewer::Launch;
+use viewer::keys::SelectAllFiles;
 
 use crate::stage::{jpeg, png};
 use crate::timing::{megabytes, resident_mb};
-use crate::{click, is_focused, open_app, press, write};
+use crate::{dispatch, is_focused, open_app, press, write};
 
 /// How much the process may grow while flicking through the 1,000 files:
 /// 64 MB. The stage keeps 8 decoded images of 192 KB and at most 32 MB of
@@ -65,7 +66,7 @@ fn flicking_through_a_thousand_mixed_files_stays_under_a_memory_ceiling(cx: &mut
         }
     }
     let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
-    click(cx, handle, "select-all");
+    dispatch(cx, handle, SelectAllFiles);
     press(cx, handle, "tab");
     assert!(is_focused(cx, handle, "stage"));
     // A thousand checked files show the gallery: Enter opens the first.

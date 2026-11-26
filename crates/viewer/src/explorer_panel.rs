@@ -1,14 +1,14 @@
 //! The explorer pane: the folder tree and the controls above it.
 //!
-//! Top to bottom, the spec's regions: toolbar (`toolbar.rs`), filter input
-//! and kind control (`filter_bar.rs`), column header (`header.rs`), the
-//! tree, and a selection bar floating over the tree (`selection_bar.rs`).
-//! With no folder the pane shows only "Add Folder".
+//! Top to bottom, the spec's regions: filter input and kind control
+//! (`filter_bar.rs`), column header (`header.rs`), the tree, and a
+//! selection bar floating over the tree (`selection_bar.rs`). The pane
+//! starts at the filter: its commands are in the window's title bar
+//! (`title_bar.rs`). With no folder the pane shows only "Add Folder".
 
 mod filter_bar;
 mod header;
 mod selection_bar;
-mod toolbar;
 
 use std::ops::Range;
 use std::rc::Rc;
@@ -362,8 +362,9 @@ impl ExplorerPanel {
         }
     }
 
-    /// Any pointer press in the pane hides the focus ring.
-    fn pointer_down(&mut self, cx: &mut Context<Self>) {
+    /// Any pointer press in the pane, or on the window's title bar, hides
+    /// the focus ring.
+    pub(crate) fn pointer_down(&mut self, cx: &mut Context<Self>) {
         if self.ring {
             self.ring = false;
             cx.notify();
@@ -570,7 +571,6 @@ impl Render for ExplorerPanel {
         };
 
         panel
-            .child(self.render_toolbar(cx))
             .child(self.render_filter_bar(cx))
             .children(header)
             .child(body)

@@ -16,7 +16,7 @@
 //! second scan. A change while a scan runs asks for one more scan of that
 //! folder once it lands, never more. A watcher error, or a watcher that
 //! lost track, rescans once. A watcher that cannot start leaves its folder
-//! unfollowed, and the toolbar's Refresh button says so; Refresh tries
+//! unfollowed, and the title bar's Refresh button says so; Refresh tries
 //! again.
 
 use std::path::{Path, PathBuf};

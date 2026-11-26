@@ -2,11 +2,12 @@
 
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AppContext as _, TestAppContext};
+use viewer::keys::{Refresh, ToggleShowIgnored};
 use viewer::{AppState, Launch};
 
 use crate::{
-    checked, click, current, folder, node, open_app, press, read, row, rows_now, tree, type_query,
-    under, write,
+    checked, current, dispatch, folder, node, open_app, press, read, row, rows_now, tree,
+    type_query, under, write,
 };
 
 #[gpui_kit::test]
@@ -36,7 +37,7 @@ fn refresh_shows_the_disk_and_keeps_checks_and_the_stage(cx: &mut TestAppContext
 
     std::fs::remove_file(dir.path().join("b.txt")).unwrap();
     write(dir.path(), "d.txt", "d");
-    click(cx, handle, "refresh");
+    dispatch(cx, handle, Refresh);
 
     assert_eq!(
         rows_now(cx, handle),
@@ -66,7 +67,7 @@ fn a_file_added_to_a_fully_checked_folder_is_checked(cx: &mut TestAppContext) {
     .unwrap();
     write(dir.path(), "sub/new.txt", "n");
     write(dir.path(), "new.txt", "n");
-    click(cx, handle, "refresh");
+    dispatch(cx, handle, Refresh);
     assert_eq!(
         checked(cx, &view),
         ["sub/a.txt", "sub/b.txt", "sub/new.txt"]
@@ -86,7 +87,7 @@ fn refresh_keeps_open_folders_and_the_filter(cx: &mut TestAppContext) {
     type_query(cx, handle, "main");
 
     write(dir.path(), "src/lib.rs", "");
-    click(cx, handle, "refresh");
+    dispatch(cx, handle, Refresh);
     assert_eq!(rows_now(cx, handle), under(dir.path(), &["src", "main.rs"]));
 
     // Focus is still in the filter: Esc clears it.
@@ -115,16 +116,12 @@ fn show_ignored_lists_ignored_files_only_while_on(cx: &mut TestAppContext) {
         under(dir.path(), &[".gitignore", "keep.txt"])
     );
 
-    click(cx, handle, "show-ignored");
+    dispatch(cx, handle, ToggleShowIgnored);
     assert_eq!(
         rows_now(cx, handle),
         under(dir.path(), &[".gitignore", "keep.txt", "secret.txt"])
     );
     assert!(read(cx, &view, AppState::shows_ignored));
-    cx.update_window(handle, |_, window, _| {
-        assert_eq!(window.find("show-ignored").checked(), Some(true));
-    })
-    .unwrap();
     // The check carried across by path.
     let keep = node(cx, &view, "keep.txt");
     assert!(read(cx, &view, |state| state
@@ -132,7 +129,7 @@ fn show_ignored_lists_ignored_files_only_while_on(cx: &mut TestAppContext) {
         .unwrap()
         .is_selected(keep)));
 
-    click(cx, handle, "show-ignored");
+    dispatch(cx, handle, ToggleShowIgnored);
     assert_eq!(
         rows_now(cx, handle),
         under(dir.path(), &[".gitignore", "keep.txt"])
@@ -148,7 +145,7 @@ fn refresh_rescans_every_folder_each_on_its_own(cx: &mut TestAppContext) {
     assert_eq!(read(cx, &view, AppState::scans), 2);
     write(one.path(), "new.txt", "n");
     std::fs::remove_file(two.path().join("b.txt")).unwrap();
-    click(cx, handle, "refresh");
+    dispatch(cx, handle, Refresh);
     assert_eq!(read(cx, &view, AppState::scans), 4);
     let mut rows = under(one.path(), &["a.txt", "new.txt"]);
     rows.extend(under(two.path(), &[]));
@@ -160,12 +157,7 @@ fn show_ignored_does_nothing_without_a_folder(cx: &mut TestAppContext) {
     // A tree built in memory has no folder to rescan.
     let (handle, view) = open_app(cx, tree(&["a.txt"]));
 
-    click(cx, handle, "show-ignored");
+    dispatch(cx, handle, ToggleShowIgnored);
 
     assert!(!read(cx, &view, AppState::shows_ignored));
-    cx.update_window(handle, |_, window, cx| {
-        window.render_frame(cx);
-        assert_eq!(window.find("show-ignored").checked(), Some(false));
-    })
-    .unwrap();
 }

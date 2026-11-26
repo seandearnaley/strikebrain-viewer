@@ -10,13 +10,14 @@ use gpui_kit::{
     AnyWindowHandle, AppContext as _, Entity, ScrollDelta, TestAppContext, WindowBounds, point, px,
     size,
 };
+use viewer::keys::{SelectAllFiles, ToggleShowIgnored};
 use viewer::{
     AppState, AppView, Launch, SAVE_DELAY, Saved, StageView, StateStore, open_main_window,
 };
 
 use crate::{
-    checked, click, drag_divider, filter_value, folder, labels, name_of, node, node_at, not_found,
-    read, row, rows_now, under, write,
+    checked, click, dispatch, drag_divider, filter_value, folder, labels, name_of, node, node_at,
+    not_found, read, row, rows_now, under, write,
 };
 
 /// Launches the app as the binary does, without following the disk.
@@ -155,7 +156,7 @@ fn quitting_and_reopening_returns_the_same_view(cx: &mut TestAppContext) {
     // Show ignored, open two folders, check a folder and a file, put a
     // file on the stage, sort by size, filter, widen the explorer,
     // resize the window and scroll.
-    click(cx, handle, "show-ignored");
+    dispatch(cx, handle, ToggleShowIgnored);
     let [docs, many, readme] = ["docs", "many", "README.md"].map(|path| node(cx, &view, path));
     cx.update_window(handle, |_, window, cx| {
         window.within(row(readme)).click("check", cx);
@@ -252,7 +253,7 @@ fn several_folders_come_back_in_order_each_with_its_own_view(cx: &mut TestAppCon
     .unwrap();
     cx.run_until_parked();
     let before = seen(cx, handle, &view);
-    assert_eq!(before.title.as_deref(), Some("Strikebrain Viewer"));
+    assert_eq!(before.title.as_deref(), Some("Gallery"));
     assert_eq!(
         before.current,
         Some(format!("{}/d.txt", name_of(two.path())))
@@ -305,7 +306,7 @@ fn the_stage_comes_back_in_the_view_it_showed(cx: &mut TestAppContext) {
 
     // The file view, on a file opened from the gallery.
     let (handle, view) = launch(cx, &[dir.path()], &store);
-    click(cx, handle, "select-all");
+    dispatch(cx, handle, SelectAllFiles);
     let b = node(cx, &view, "b.rs");
     click(cx, handle, ("tile", b.index()));
     let file_view = (StageView::File, Some("b.rs".to_owned()), None);

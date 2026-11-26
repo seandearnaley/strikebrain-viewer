@@ -23,9 +23,10 @@ use gpui_kit::{
     AnyWindowHandle, AppContext as _, Entity, InputEvent as _, Role, ScrollDelta, ScrollEvent,
     TestAppContext, point, px,
 };
+use viewer::keys::{CollapseAll, ExpandAll, SelectAllFiles};
 use viewer::{AppView, Launch};
 
-use crate::{click, open_app, press, read};
+use crate::{click, dispatch, open_app, press, read};
 
 /// 10 top folders, 100 folders in each, 1,000 files in each of those:
 /// 1,001,011 nodes.
@@ -97,15 +98,15 @@ fn timing_a_keystroke_over_a_million_names(cx: &mut TestAppContext) {
     }
     eprintln!("worst keystroke: {worst:.2?} (budget 16 ms)");
 
-    let took = timed(cx, handle, |cx| click(cx, handle, "expand-all"));
+    let took = timed(cx, handle, |cx| dispatch(cx, handle, ExpandAll));
     eprintln!("expand all: {took:.2?} ({} rows)", rows(cx, &view));
     let took = timed(cx, handle, |cx| click(cx, handle, "header-size"));
     eprintln!("sort by size over every row: {took:.2?}");
     let took = timed(cx, handle, |cx| click(cx, handle, "header-size"));
     eprintln!("flip to largest first: {took:.2?}");
-    let took = timed(cx, handle, |cx| click(cx, handle, "select-all"));
+    let took = timed(cx, handle, |cx| dispatch(cx, handle, SelectAllFiles));
     eprintln!("select all: {took:.2?}");
-    let took = timed(cx, handle, |cx| click(cx, handle, "collapse-all"));
+    let took = timed(cx, handle, |cx| dispatch(cx, handle, CollapseAll));
     eprintln!("collapse all: {took:.2?} ({} rows)", rows(cx, &view));
 }
 
@@ -623,7 +624,7 @@ fn timing_the_gallery_over_a_hundred_thousand_checked_files(cx: &mut TestAppCont
     );
     // Select all, as the platform delivers a click and the frame after:
     // the checks, the gallery's first frame and the tree's redraw.
-    let took = timed(cx, handle, |cx| click(cx, handle, "select-all"));
+    let took = timed(cx, handle, |cx| dispatch(cx, handle, SelectAllFiles));
     let probe = cx.update(|cx| view.read(cx).gallery_probe(cx));
     eprintln!(
         "select all, the gallery on screen: {took:.2?} ({} columns, {} rows drawn)",
@@ -663,7 +664,7 @@ fn timing_the_gallery_over_large_photos(cx: &mut TestAppContext) {
     let before = resident_mb();
     // The test executor reads the tiles one after another on this thread,
     // so this is their whole cost, not the time to the screen.
-    let took = timed(cx, handle, |cx| click(cx, handle, "select-all"));
+    let took = timed(cx, handle, |cx| dispatch(cx, handle, SelectAllFiles));
     let probe = cx.update(|cx| view.read(cx).gallery_probe(cx));
     eprintln!(
         "select all over 40 photos of 6000 x 4000, {:.1} MB each: {took:.2?} to read {} tiles \

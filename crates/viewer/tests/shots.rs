@@ -15,6 +15,7 @@ use gpui_kit::{
     AnyWindowHandle, AppContext as _, Bounds, ElementId, Entity, HeadlessAppContext, Pixels,
     ScrollDelta, Size, WindowBounds, WindowOptions, point, px, size,
 };
+use viewer::keys::{SelectAllFiles, ToggleShowIgnored};
 use viewer::{AppAssets, AppView, Launch, ScanStatus, Session};
 
 /// A small project with nested folders, sizes and a long name.
@@ -429,6 +430,18 @@ fn click(cx: &mut HeadlessAppContext, handle: AnyWindowHandle, id: &'static str)
     cx.run_until_parked();
 }
 
+/// Dispatches `action` from the focused element, as a key, a menu item or
+/// a button does.
+fn dispatch(cx: &mut HeadlessAppContext, handle: AnyWindowHandle, action: impl gpui_kit::Action) {
+    cx.update_window(handle, |_, window, cx| {
+        // The action travels the dispatch path of the frame on screen.
+        window.render_frame(cx);
+        window.dispatch_action(Box::new(action), cx);
+    })
+    .expect("dispatch an action");
+    cx.run_until_parked();
+}
+
 /// Drives the tree with keys so one frame shows every row state: open and
 /// closed folders, mixed and full checks, the current row and the focus ring.
 fn exercise(cx: &mut HeadlessAppContext, handle: AnyWindowHandle) {
@@ -582,8 +595,8 @@ fn main() {
             &format!("long-scrolled-{suffix}"),
         ));
 
-        // A folder scanning for more than 200 ms: the progress bar under
-        // the toolbar.
+        // A folder scanning for more than 200 ms: the progress bar along
+        // the bottom of the bar's part over the explorer.
         let mut cx = context();
         let (handle, view) = open(&mut cx, Launch::Empty);
         open_slowly(
@@ -599,7 +612,7 @@ fn main() {
             &format!("scanning-{suffix}"),
         ));
 
-        // Show ignored on: the ignored file listed, the eye pressed.
+        // Show ignored on: the ignored file listed.
         let (_ignoring, ignoring) = folder(
             "notes",
             &[
@@ -610,7 +623,7 @@ fn main() {
         );
         let mut cx = context();
         let (handle, _) = open(&mut cx, Launch::Folders(vec![ignoring]));
-        click(&mut cx, handle, "show-ignored");
+        dispatch(&mut cx, handle, ToggleShowIgnored);
         written.push(save(
             &mut cx,
             handle,
@@ -651,7 +664,7 @@ fn main() {
             Launch::Folders(vec![stage.clone()]),
             size(px(1200.), px(760.)),
         );
-        click(&mut cx, handle, "select-all");
+        dispatch(&mut cx, handle, SelectAllFiles);
         written.push(save(
             &mut cx,
             handle,
@@ -691,7 +704,7 @@ fn main() {
             Launch::Folders(vec![stage.clone()]),
             size(px(1200.), px(760.)),
         );
-        click(&mut cx, handle, "select-all");
+        dispatch(&mut cx, handle, SelectAllFiles);
         cx.update_window(handle, |_, window, cx| {
             window.press("tab", cx);
             window.press("enter", cx);
@@ -724,7 +737,7 @@ fn main() {
             Launch::Folders(vec![stage.clone()]),
             size(px(1200.), px(760.)),
         );
-        click(&mut cx, handle, "select-all");
+        dispatch(&mut cx, handle, SelectAllFiles);
         cx.update_window(handle, |_, window, cx| {
             window.press("tab", cx);
             window.press("space", cx);

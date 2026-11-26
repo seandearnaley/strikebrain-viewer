@@ -12,6 +12,7 @@ use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
     AnyWindowHandle, AppContext as _, Entity, Pixels, Point, Subscription, TestAppContext,
 };
+use viewer::keys::{Refresh, ToggleShowIgnored};
 use viewer::{AppState, AppView, Launch, ScanStatus};
 
 use crate::{
@@ -192,7 +193,7 @@ fn a_refresh_while_a_filter_job_is_pending_shows_the_new_tree_filtered(cx: &mut 
     cx.update_window(handle, |_, window, cx| {
         window.click("filter", cx);
         window.input("main", cx);
-        window.click("refresh", cx);
+        window.dispatch_action(Box::new(Refresh), cx);
     })
     .unwrap();
     cx.run_until_parked();
@@ -219,8 +220,8 @@ fn show_ignored_clicked_twice_before_a_scan_lands_shows_them_hidden(cx: &mut Tes
     let (seen, _log) = log_rows(cx, &view);
 
     cx.update_window(handle, |_, window, cx| {
-        window.click("show-ignored", cx);
-        window.click("show-ignored", cx);
+        window.dispatch_action(Box::new(ToggleShowIgnored), cx);
+        window.dispatch_action(Box::new(ToggleShowIgnored), cx);
     })
     .unwrap();
     cx.run_until_parked();
@@ -240,10 +241,6 @@ fn show_ignored_clicked_twice_before_a_scan_lands_shows_them_hidden(cx: &mut Tes
         read(cx, &view, |state| state.status().clone()),
         ScanStatus::Idle
     );
-    cx.update_window(handle, |_, window, _| {
-        assert_eq!(window.find("show-ignored").checked(), Some(false));
-    })
-    .unwrap();
 }
 
 /// A refresh that starts the moment an opened tree lands, while its sizes

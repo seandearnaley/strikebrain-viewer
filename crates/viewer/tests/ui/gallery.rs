@@ -9,11 +9,13 @@ use gpui_kit::test::{TestQueryExt as _, TestWindowExt as _};
 use gpui_kit::{
     AnyWindowHandle, AppContext as _, Entity, Pixels, Role, ScrollDelta, TestAppContext, point, px,
 };
+use viewer::keys::{DeselectAll, SelectAllFiles};
 use viewer::{AppState, AppView, GalleryProbe, Launch, StageView};
 
 use crate::stage::{Shown, numbered, png, position, shown, turned_jpeg};
 use crate::{
-    click, current, drag_divider, is_focused, node, open_app, press, read, row, state, tree, write,
+    click, current, dispatch, drag_divider, is_focused, node, open_app, press, read, row, state,
+    tree, write,
 };
 
 /// The tiles on screen, by the names they carry, top left to bottom right.
@@ -110,7 +112,7 @@ fn files(count: usize) -> tempfile::TempDir {
 /// which shows the gallery.
 fn gallery_of(cx: &mut TestAppContext, dir: &Path) -> (AnyWindowHandle, Entity<AppView>) {
     let (handle, view) = open_app(cx, Launch::Folders(vec![dir.to_owned()]));
-    click(cx, handle, "select-all");
+    dispatch(cx, handle, SelectAllFiles);
     press(cx, handle, "tab");
     assert!(is_focused(cx, handle, "stage"));
     assert_eq!(read(cx, &view, AppState::stage_view), StageView::Gallery);
@@ -145,10 +147,10 @@ fn two_checked_files_show_the_gallery_one_shows_the_file_none_a_blank_stage(
     assert_eq!(current(cx, &view), None);
 
     // Select all, then Clear.
-    click(cx, handle, "select-all");
+    dispatch(cx, handle, SelectAllFiles);
     assert_eq!(view_of(cx, handle), View::Gallery);
     assert_eq!(tiles(cx, handle), ["f000.rs", "f001.rs", "f002.rs"]);
-    click(cx, handle, "clear");
+    dispatch(cx, handle, DeselectAll);
     assert_eq!(view_of(cx, handle), View::Blank);
 
     // A folder's checkbox checks its files: the gallery.
@@ -236,7 +238,7 @@ fn escape_after_flicking_goes_back_to_that_files_tile_scrolled_into_view(cx: &mu
 fn the_grid_button_goes_back_with_two_or_more_files_checked(cx: &mut TestAppContext) {
     let dir = files(3);
     let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
-    click(cx, handle, "select-all");
+    dispatch(cx, handle, SelectAllFiles);
     let a = node(cx, &view, "f000.rs");
     click(cx, handle, row(a));
     assert_eq!(view_of(cx, handle), code("f000.rs"));
@@ -519,7 +521,7 @@ fn a_hundred_thousand_checked_files_build_only_the_rows_on_screen(cx: &mut TestA
     let names: Vec<String> = (0..100_000).map(|i| format!("f{i:06}")).collect();
     let paths: Vec<&str> = names.iter().map(String::as_str).collect();
     let (handle, view) = open_app(cx, tree(&paths));
-    click(cx, handle, "select-all");
+    dispatch(cx, handle, SelectAllFiles);
     press(cx, handle, "tab");
     let built = |cx: &mut TestAppContext| {
         cx.update_window(handle, |_, window, cx| {

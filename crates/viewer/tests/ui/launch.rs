@@ -23,7 +23,7 @@ fn first_folder(cx: &mut TestAppContext, view: &Entity<AppView>) -> NodeId {
 }
 
 #[gpui_kit::test]
-fn a_folder_argument_scans_the_folder_and_names_the_window(cx: &mut TestAppContext) {
+fn a_folder_argument_scans_the_folder_and_the_window_keeps_the_apps_name(cx: &mut TestAppContext) {
     let (handle, view) = open_app(cx, Launch::Folders(vec![fixture_folder()]));
 
     cx.update_window(handle, |_, window, cx| {
@@ -37,8 +37,9 @@ fn a_folder_argument_scans_the_folder_and_names_the_window(cx: &mut TestAppConte
         assert_eq!(window.find_all("size").len(), 4);
     })
     .unwrap();
+    // Nothing on the stage: the window takes the app's name.
     let title = cx.update(|cx| view.read(cx).title().cloned());
-    assert_eq!(title.as_deref(), Some("fixture"));
+    assert_eq!(title.as_deref(), Some("Strikebrain Viewer"));
 }
 
 #[gpui_kit::test]
@@ -132,7 +133,7 @@ fn add_folder_and_command_o_show_the_picker_which_adds_several(cx: &mut TestAppC
     cx.simulate_path_prompt_response(|_| None);
     cx.run_until_parked();
     assert_eq!(rows_now(cx, handle).len(), 6);
-    // The toolbar's button does the same.
+    // The bar's button does the same.
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         assert_eq!(window.find("add-folder").label(), Some("Add Folder"));
@@ -216,8 +217,9 @@ fn a_folder_added_around_open_folders_takes_them_in(cx: &mut TestAppContext) {
             .collect::<Vec<_>>()
     });
     assert_eq!(checked, [format!("{}/one/a.txt", name_of(dir.path()))]);
+    // The one checked file is on the stage, and names the window.
     let title = cx.update(|cx| view.read(cx).title().cloned());
-    assert_eq!(title.as_deref(), Some(name_of(dir.path()).as_str()));
+    assert_eq!(title.as_deref(), Some("a.txt"));
 }
 
 #[gpui_kit::test]
@@ -230,7 +232,7 @@ fn a_file_argument_opens_its_folder_and_shows_the_file(cx: &mut TestAppContext) 
     let notes = dir.path().join("notes");
     assert_eq!(rows_now(cx, handle), under(&notes, &["a.txt", "b.txt"]));
     let title = cx.update(|cx| view.read(cx).title().cloned());
-    assert_eq!(title.as_deref(), Some("notes"));
+    assert_eq!(title.as_deref(), Some("b.txt"));
     // The file is on the stage, unchecked, and its row is the focus row.
     let b = node_at(cx, &view, &file);
     assert_eq!(crate::current(cx, &view), Some(b));

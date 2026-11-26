@@ -1,10 +1,11 @@
-//! Checkboxes and the file on the stage.
+//! Checkboxes, the selection bar and the file on the stage.
 
 use gpui_kit::AppContext as _;
 use gpui_kit::TestAppContext;
 use gpui_kit::test::TestWindowExt as _;
+use viewer::keys::SelectAllFiles;
 
-use crate::{PROJECT, current, node, open_app, row, stage_now, tree};
+use crate::{PROJECT, click, current, dispatch, node, open_app, press, row, stage_now, tree};
 
 #[gpui_kit::test]
 fn a_mixed_folder_completes_on_click(cx: &mut TestAppContext) {
@@ -155,6 +156,77 @@ fn enter_shows_a_file_and_does_nothing_on_a_folder(cx: &mut TestAppContext) {
     cx.update_window(handle, |_, window, _| {
         // Enter shows a file without checking it.
         assert_eq!(window.find(row(file2)).checked(), Some(false));
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn the_selection_bar_counts_checked_files_and_clears_them(cx: &mut TestAppContext) {
+    let (handle, view) = open_app(cx, tree(PROJECT));
+    let docs = node(cx, &view, "docs");
+
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("selection-bar").is_none());
+        window.within(row(docs)).click("check", cx);
+        assert_eq!(window.find("selection-bar").label(), Some("2 selected"));
+    })
+    .unwrap();
+
+    click(cx, handle, "clear-selection");
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("selection-bar").is_none());
+        assert_eq!(window.find(row(docs)).checked(), Some(false));
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn the_selection_bar_never_covers_a_row_and_never_moves_one(cx: &mut TestAppContext) {
+    let names: Vec<String> = (0..200).map(|i| format!("file{i:03}.txt")).collect();
+    let paths: Vec<&str> = names.iter().map(String::as_str).collect();
+    let (handle, view) = open_app(cx, tree(&paths));
+    let (first, last) = (
+        node(cx, &view, "file000.txt"),
+        node(cx, &view, "file199.txt"),
+    );
+
+    let top_before = cx
+        .update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.find(row(first)).bounds().top()
+        })
+        .unwrap();
+    press(cx, handle, "space");
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        // Showing the bar moved no row.
+        assert_eq!(window.find(row(first)).bounds().top(), top_before);
+    })
+    .unwrap();
+
+    press(cx, handle, "end");
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        let bar = window.find("selection-bar").bounds();
+        let last_row = window.find(row(last)).bounds();
+        assert!(last_row.bottom() <= bar.top(), "{last_row:?} under {bar:?}");
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn the_selection_bar_groups_the_digits_of_its_count(cx: &mut TestAppContext) {
+    let names: Vec<String> = (0..1_234).map(|i| format!("f{i:04}")).collect();
+    let paths: Vec<&str> = names.iter().map(String::as_str).collect();
+    let (handle, _) = open_app(cx, tree(&paths));
+
+    dispatch(cx, handle, SelectAllFiles);
+
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(window.find("selection-bar").label(), Some("1,234 selected"));
     })
     .unwrap();
 }

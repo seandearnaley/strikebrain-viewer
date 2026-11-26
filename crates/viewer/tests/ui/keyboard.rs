@@ -117,8 +117,8 @@ fn home_end_and_page_keys_jump_and_keep_focus_on_screen(cx: &mut TestAppContext)
     assert_eq!(focus(cx, &view), Some(node(cx, &view, "file000.txt")));
     assert!(focus_row_visible(cx));
 
-    // Under 136 px of toolbar, filter, kinds and header, a 700 px window
-    // leaves a 564 px tree: 19 whole 29 px rows.
+    // Under 134 px of the bar, filter, kinds and header, a 700 px window
+    // leaves a 566 px tree: 19 whole 29 px rows.
     press(cx, "pagedown");
     assert_eq!(focus(cx, &view), Some(node(cx, &view, "file019.txt")));
     assert!(focus_row_visible(cx));
@@ -151,7 +151,7 @@ fn the_focus_ring_shows_after_a_key_press_and_clears_on_pointer_down(cx: &mut Te
 }
 
 #[gpui_kit::test]
-fn a_toolbar_click_hides_the_ring_and_keeps_focus_in_the_tree(cx: &mut TestAppContext) {
+fn a_bar_click_hides_the_ring_and_keeps_focus_in_the_tree(cx: &mut TestAppContext) {
     let (handle, view) = open_app(cx, tree(PROJECT));
 
     press(cx, handle, "down");
@@ -161,7 +161,10 @@ fn a_toolbar_click_hides_the_ring_and_keeps_focus_in_the_tree(cx: &mut TestAppCo
     })
     .unwrap();
 
-    click(cx, handle, "expand-all");
+    click(cx, handle, "add-folder");
+    assert!(cx.did_prompt_for_paths());
+    cx.simulate_path_prompt_response(|_| None);
+    cx.run_until_parked();
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         assert!(window.try_find("ring").is_none());

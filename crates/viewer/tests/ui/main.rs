@@ -4,6 +4,7 @@
 //!
 //! One module per area of the interface; the helpers they share are here.
 
+mod bar;
 mod checks;
 mod commands;
 mod filter;
@@ -24,7 +25,6 @@ mod rows;
 mod scale;
 mod stage;
 mod timing;
-mod toolbar;
 mod watch;
 
 use std::path::{Path, PathBuf};
@@ -212,7 +212,7 @@ fn checked(cx: &mut TestAppContext, view: &Entity<AppView>) -> Vec<String> {
     })
 }
 
-/// A folder's name: what its row and the window title show.
+/// A folder's name: what its row shows.
 fn name_of(folder: &Path) -> String {
     folder
         .file_name()

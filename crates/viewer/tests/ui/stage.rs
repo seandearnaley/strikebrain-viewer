@@ -12,9 +12,10 @@ use gpui_kit::{
     AnyWindowHandle, AppContext as _, Entity, InputEvent as _, Role, ScrollDelta, ScrollEvent,
     TestAppContext, Window, point, px,
 };
+use viewer::keys::{Refresh, SelectAllFiles};
 use viewer::{AppState, AppView, Launch, StageProbe};
 
-use crate::{click, current, focus, is_focused, node, open_app, press, read, row, write};
+use crate::{click, current, dispatch, focus, is_focused, node, open_app, press, read, row, write};
 
 /// What the stage shows: the kind of view and the file's name.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -166,7 +167,7 @@ pub(crate) fn open_checked(
     dir: &Path,
 ) -> (AnyWindowHandle, Entity<AppView>) {
     let (handle, view) = open_app(cx, Launch::Folders(vec![dir.to_owned()]));
-    click(cx, handle, "select-all");
+    dispatch(cx, handle, SelectAllFiles);
     press(cx, handle, "tab");
     assert!(is_focused(cx, handle, "stage"));
     if read(cx, &view, AppState::shows_gallery) {
@@ -618,7 +619,7 @@ fn deleting_the_file_on_the_stage_then_refreshing_shows_its_neighbour(cx: &mut T
     assert_eq!(shown(cx, handle), Some(Shown::Code("b.rs".into())));
 
     std::fs::remove_file(dir.path().join("b.rs")).unwrap();
-    click(cx, handle, "refresh");
+    dispatch(cx, handle, Refresh);
     assert_eq!(shown(cx, handle), Some(Shown::Code("c.rs".into())));
     assert_eq!(position(cx, handle).as_deref(), Some("2 / 2"));
 }
@@ -635,16 +636,16 @@ fn a_file_changed_on_disk_is_read_again_on_refresh(cx: &mut TestAppContext) {
     press(cx, handle, "pagedown");
     let scrolled = probe(cx, &view).scroll();
     assert!(scrolled > 0.);
-    click(cx, handle, "refresh");
+    dispatch(cx, handle, Refresh);
     assert_eq!(shown(cx, handle), Some(Shown::Code("a.rs".into())));
     assert_eq!(probe(cx, &view).scroll(), scrolled);
 
-    // A changed one is read again. The toolbar's buttons leave keyboard
-    // focus on the stage.
+    // A changed one is read again. Refresh leaves keyboard focus on the
+    // stage.
     assert!(is_focused(cx, handle, "stage"));
     press(cx, handle, "right");
     write(dir.path(), "b.rs", "two, longer");
-    click(cx, handle, "refresh");
+    dispatch(cx, handle, Refresh);
     assert_eq!(shown(cx, handle), Some(Shown::Code("b.rs".into())));
     cx.update_window(handle, |_, window, _| {
         assert_eq!(code_view(window).value(), Some("two, longer"));

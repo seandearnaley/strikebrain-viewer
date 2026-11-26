@@ -1,10 +1,10 @@
-//! The root view: the explorer and the stage side by side, and keyboard
-//! focus moving between the panes: filter, tree, stage. While presenting,
-//! the same stage alone, fullscreen.
+//! The root view: the window's title bar above the explorer and the stage
+//! side by side, and keyboard focus moving between the panes: filter, tree,
+//! stage. While presenting, the same stage alone, fullscreen, with no bar.
 //!
 //! Both panes are embedded as cached views: a frame reuses a pane's last
 //! drawing unless that pane notified, so a key in the tree never rebuilds
-//! the stage.
+//! the stage, and redrawing the bar leaves both panes' drawings alone.
 //!
 //! The split's sizes live in an entity this view owns rather than in the
 //! split element's own state, which lasts only while the split is drawn:
@@ -18,7 +18,9 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use gpui_kit::component::{ResizablePanelEvent, ResizableState, h_resizable, resizable_panel};
+use gpui_kit::component::{
+    ResizablePanelEvent, ResizableState, h_resizable, resizable_panel, v_flex,
+};
 use gpui_kit::{
     App, AppContext as _, Bounds, ClipboardItem, Context, Entity, ExternalPaths, Focusable as _,
     IntoElement, ParentElement as _, Pixels, Render, SharedString, StyleRefinement, Styled as _,
@@ -35,7 +37,7 @@ use crate::menus;
 use crate::persist::{SavedView, SavedWindow, Snapshot, StateStore};
 use crate::stage::{GalleryProbe, Stage, StageProbe};
 use crate::state::{AppState, Launch, StateOptions};
-use crate::theme;
+use crate::{theme, title_bar};
 
 /// Starting width of the explorer pane, in pixels.
 pub const EXPLORER_WIDTH: f32 = 300.0;
@@ -86,10 +88,10 @@ enum Pane {
     Stage,
 }
 
-/// The root view: explorer on the left, stage on the right. Owns the
-/// [`AppState`] both observe, keeps the window title on the folder's name
-/// or the app's, handles ⌘O, ⌘F, moving between panes and the menu bar's
-/// commands, follows the presentation, and saves the state.
+/// The root view: the title bar on top, explorer on the left, stage on the
+/// right. Owns the [`AppState`] all three show, keeps the window title on
+/// the stage's or the app's, handles ⌘O, ⌘F, moving between panes and the
+/// menu bar's commands, follows the presentation, and saves the state.
 pub struct AppView {
     state: Entity<AppState>,
     explorer: Entity<ExplorerPanel>,
@@ -98,6 +100,8 @@ pub struct AppView {
     split: Entity<ResizableState>,
     /// The explorer's width when the split is first laid out.
     explorer_width: Pixels,
+    /// The explorer's width the bar was last drawn for.
+    bar_width: Option<Pixels>,
     /// The title last given to the window.
     title: Option<SharedString>,
     /// Whether the window is laid out for the presentation: follows
@@ -159,6 +163,8 @@ impl AppView {
                 this.sync_presentation(window, cx);
                 this.sync_menus(cx);
                 this.schedule_save(cx);
+                // The bar shows the state.
+                cx.notify();
             }),
             cx.observe_window_appearance(window, |_, window, cx| theme::follow_system(window, cx)),
             cx.observe_window_bounds(window, |this, window, cx| {
@@ -168,6 +174,16 @@ impl AppView {
             }),
             cx.subscribe(&split, |this, _, _: &ResizablePanelEvent, cx| {
                 this.schedule_save(cx);
+            }),
+            // The bar's explorer part follows the split while it is dragged.
+            // The split notifies whenever either panel's size changes, so
+            // the bar redraws only when the explorer's width moved.
+            cx.observe(&split, |this, split, cx| {
+                let width = split.read(cx).sizes().first().copied();
+                if width != this.bar_width {
+                    this.bar_width = width;
+                    cx.notify();
+                }
             }),
             cx.on_app_quit(|this, cx| {
                 let saved = this.save(cx);
@@ -189,6 +205,7 @@ impl AppView {
                 session.explorer_width.unwrap_or(EXPLORER_WIDTH),
                 window.viewport_size().width.as_f32(),
             )),
+            bar_width: None,
             title: None,
             presenting: false,
             fullscreen: Fullscreen {
@@ -229,8 +246,8 @@ impl AppView {
         self.stage.read(cx).gallery_probe(cx)
     }
 
-    /// The title this view gave the window: the folder's name with one
-    /// folder open, the application's name otherwise.
+    /// The title this view gave the window: the stage's title, or the
+    /// application's name while the stage is blank.
     #[must_use]
     pub fn title(&self) -> Option<&SharedString> {
         self.title.as_ref()
@@ -261,7 +278,7 @@ impl AppView {
     }
 
     fn sync_title(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let title = self.state.read(cx).title();
+        let title = self.state.read(cx).window_title();
         if self.title.as_ref() != Some(&title) {
             window.set_window_title(&title);
             self.title = Some(title);
@@ -539,8 +556,8 @@ fn pane() -> StyleRefinement {
 }
 
 impl Render for AppView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let root = div()
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let root = v_flex()
             .size_full()
             .on_action(cx.listener(Self::next_pane))
             .on_action(cx.listener(Self::previous_pane))
@@ -561,6 +578,12 @@ impl Render for AppView {
             // whose item then shows disabled.
             return root.child(self.stage.clone().cached(pane()));
         }
+        let bar = title_bar::window_bar(
+            self.state.read(cx),
+            Some(px(self.explorer_width(cx))),
+            window,
+            cx,
+        );
         // Folders and files dropped on the window open as those dropped on
         // the Dock icon do.
         root.on_drop(cx.listener(|this, dropped: &ExternalPaths, _, cx| {
@@ -571,32 +594,44 @@ impl Render for AppView {
         .on_action(cx.listener(Self::collapse_all))
         .on_action(cx.listener(Self::select_all_files))
         .on_action(cx.listener(Self::deselect_all))
+        // A press on the bar hides the tree's focus ring, as one in the
+        // explorer does: the bar holds the explorer's commands.
         .child(
-            h_resizable("panes")
-                .with_state(&self.split)
-                .child(
-                    resizable_panel()
-                        .size(self.explorer_width)
-                        .size_range(px(EXPLORER_MIN_WIDTH)..Pixels::MAX)
-                        .child(
-                            div()
-                                .id("explorer-pane")
-                                .test_support()
-                                .size_full()
-                                .child(self.explorer.clone().cached(pane())),
-                        ),
-                )
-                .child(
-                    resizable_panel()
-                        .size_range(px(STAGE_MIN_WIDTH)..Pixels::MAX)
-                        .child(
-                            div()
-                                .id("stage-pane")
-                                .test_support()
-                                .size_full()
-                                .child(self.stage.clone().cached(pane())),
-                        ),
-                ),
+            div()
+                .flex_shrink_0()
+                .capture_any_mouse_down(cx.listener(|this, _, _, cx| {
+                    this.explorer.update(cx, ExplorerPanel::pointer_down);
+                }))
+                .child(bar),
+        )
+        .child(
+            div().flex_1().min_h_0().child(
+                h_resizable("panes")
+                    .with_state(&self.split)
+                    .child(
+                        resizable_panel()
+                            .size(self.explorer_width)
+                            .size_range(px(EXPLORER_MIN_WIDTH)..Pixels::MAX)
+                            .child(
+                                div()
+                                    .id("explorer-pane")
+                                    .test_support()
+                                    .size_full()
+                                    .child(self.explorer.clone().cached(pane())),
+                            ),
+                    )
+                    .child(
+                        resizable_panel()
+                            .size_range(px(STAGE_MIN_WIDTH)..Pixels::MAX)
+                            .child(
+                                div()
+                                    .id("stage-pane")
+                                    .test_support()
+                                    .size_full()
+                                    .child(self.stage.clone().cached(pane())),
+                            ),
+                    ),
+            ),
         )
     }
 }

@@ -6,9 +6,10 @@ use std::rc::Rc;
 use gpui_kit::test::{TestQueryExt as _, TestWindowExt as _};
 use gpui_kit::{AppContext as _, ElementId, Role, TestAppContext};
 use viewer::AppState;
+use viewer::keys::SelectAllFiles;
 
 use crate::{
-    PROJECT, click, filter_value, is_focused, node, open_app, press, read, row, rows_now, tree,
+    PROJECT, dispatch, filter_value, is_focused, node, open_app, press, read, row, rows_now, tree,
     type_query,
 };
 
@@ -197,7 +198,7 @@ fn select_all_under_a_filter_selects_only_matches(cx: &mut TestAppContext) {
     let (handle, view) = open_app(cx, tree(PROJECT));
 
     type_query(cx, handle, "main");
-    click(cx, handle, "select-all");
+    dispatch(cx, handle, SelectAllFiles);
     press(cx, handle, "escape");
 
     assert_eq!(read(cx, &view, AppState::selected_count), 1);
