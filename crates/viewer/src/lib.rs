@@ -4,7 +4,7 @@ mod app;
 mod assets;
 mod columns;
 mod explorer_panel;
-mod keys;
+pub mod keys;
 mod launch;
 mod menus;
 mod persist;

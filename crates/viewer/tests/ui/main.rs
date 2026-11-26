@@ -5,6 +5,7 @@
 //! One module per area of the interface; the helpers they share are here.
 
 mod checks;
+mod commands;
 mod filter;
 mod flick;
 mod folders;
@@ -289,6 +290,18 @@ fn click(cx: &mut TestAppContext, handle: AnyWindowHandle, id: impl Into<Element
     let id = id.into();
     cx.update_window(handle, |_, window, cx| window.click(id, cx))
         .expect("click");
+    cx.run_until_parked();
+}
+
+/// Dispatches `action` from the focused element, as a key, a menu item or
+/// a button does, and lets every task finish.
+fn dispatch(cx: &mut TestAppContext, handle: AnyWindowHandle, action: impl gpui_kit::Action) {
+    cx.update_window(handle, |_, window, cx| {
+        // The action travels the dispatch path of the frame on screen.
+        window.render_frame(cx);
+        window.dispatch_action(Box::new(action), cx);
+    })
+    .expect("dispatch an action");
     cx.run_until_parked();
 }
 
