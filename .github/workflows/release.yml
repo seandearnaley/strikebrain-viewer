@@ -127,31 +127,23 @@ jobs:
           security list-keychains -d user -s "$keychain" "$HOME/Library/Keychains/login.keychain-db"
           security find-identity -v -p codesigning "$keychain" | grep -Fq "\"$MACOS_APPLICATION_IDENTITY\""
           echo "CODESIGN_IDENTITY=$MACOS_APPLICATION_IDENTITY" >> "$GITHUB_ENV"
-      - run: just dmg
-      - name: Notarize and staple
-        if: env.SIGN == 'true'
+      # On a release, `just dmg` notarizes the app and the image with the
+      # API key and staples each.
+      - name: Build the disk image
         env:
           NOTARY_API_KEY: ${{ secrets.NOTARY_API_KEY }}
-          NOTARY_API_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
-          NOTARY_API_ISSUER_ID: ${{ secrets.NOTARY_API_ISSUER_ID }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_API_ISSUER_ID }}
         run: |
-          key="$RUNNER_TEMP/notary.p8"
-          printf '%s' "$NOTARY_API_KEY" | base64 --decode > "$key"
-          notary() { xcrun notarytool "$@" --key "$key" --key-id "$NOTARY_API_KEY_ID" --issuer "$NOTARY_API_ISSUER_ID"; }
-          dmg=$(ls target/release/bundle/*.dmg)
-          # `--wait` returns once Apple has an answer, whatever it is.
-          notary submit "$dmg" --wait --output-format json > "$RUNNER_TEMP/notary.json"
-          cat "$RUNNER_TEMP/notary.json"
-          if ! jq -e '.status == "Accepted"' "$RUNNER_TEMP/notary.json" > /dev/null; then
-            notary log "$(jq -r .id "$RUNNER_TEMP/notary.json")"
-            rm "$key"; exit 1
+          if [ "$SIGN" = true ]; then
+            export NOTARY_KEY="$RUNNER_TEMP/notary.p8"
+            printf '%s' "$NOTARY_API_KEY" | base64 --decode > "$NOTARY_KEY"
+            trap 'rm -f "$NOTARY_KEY"' EXIT
           fi
-          rm "$key"
-          xcrun stapler staple "$dmg"
-          xcrun stapler validate "$dmg"
+          just dmg
       # The image as a person gets it: mounted, its app's signature
-      # checked, and the binary inside run. A signed build must pass
-      # Gatekeeper.
+      # checked, and the binary inside run. A signed build must carry both
+      # tickets and pass Gatekeeper.
       - name: Check the disk image
         run: |
           dmg=$(ls target/release/bundle/*.dmg)
@@ -162,6 +154,8 @@ jobs:
           "$app/Contents/MacOS/strikebrain-viewer" --version
           if [ "$SIGN" = true ]; then
             codesign -dvv "$app" 2>&1 | grep -Fx "Authority=$CODESIGN_IDENTITY"
+            # The app carries its own ticket, for a first launch offline.
+            xcrun stapler validate "$app"
             spctl --assess --type execute --verbose=2 "$app"
             spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
           fi
