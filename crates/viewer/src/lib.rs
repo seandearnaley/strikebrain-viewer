@@ -13,6 +13,7 @@ mod stage;
 mod state;
 mod theme;
 mod title_bar;
+mod update;
 
 pub use app::{AppView, EXPLORER_MIN_WIDTH, EXPLORER_WIDTH, SAVE_DELAY, STAGE_MIN_WIDTH, Session};
 pub use assets::AppAssets;
