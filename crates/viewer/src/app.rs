@@ -27,8 +27,9 @@ use gpui_kit::{
 
 use crate::explorer_panel::{ExplorerFocus, ExplorerPanel};
 use crate::keys::{
-    AddFolder, CloseWindow, CopyPath, FocusExplorer, FocusFilter, Minimize, NextPane, PreviousPane,
-    Refresh, Reveal, StartPresenting, ToggleFullScreen, ToggleShowIgnored, Zoom,
+    AddFolder, CloseWindow, CollapseAll, CopyPath, DeselectAll, ExpandAll, FocusExplorer,
+    FocusFilter, Minimize, NextPane, PreviousPane, Refresh, Reveal, SelectAllFiles,
+    StartPresenting, ToggleFullScreen, ToggleShowIgnored, Zoom,
 };
 use crate::menus;
 use crate::persist::{SavedView, SavedWindow, Snapshot, StateStore};
@@ -395,6 +396,22 @@ impl AppView {
 
     // Actions
 
+    fn expand_all(&mut self, _: &ExpandAll, _: &mut Window, cx: &mut Context<Self>) {
+        self.state.update(cx, AppState::expand_all);
+    }
+
+    fn collapse_all(&mut self, _: &CollapseAll, _: &mut Window, cx: &mut Context<Self>) {
+        self.state.update(cx, AppState::collapse_all);
+    }
+
+    fn select_all_files(&mut self, _: &SelectAllFiles, _: &mut Window, cx: &mut Context<Self>) {
+        self.state.update(cx, AppState::select_all);
+    }
+
+    fn deselect_all(&mut self, _: &DeselectAll, _: &mut Window, cx: &mut Context<Self>) {
+        self.state.update(cx, AppState::clear_selection);
+    }
+
     fn add_folder_picker(&mut self, _: &AddFolder, _: &mut Window, cx: &mut Context<Self>) {
         self.state
             .update(cx, |_, cx| AppState::prompt_for_folders(cx));
@@ -550,6 +567,10 @@ impl Render for AppView {
             this.open_paths(dropped.paths().to_vec(), cx);
         }))
         .on_action(cx.listener(Self::add_folder_picker))
+        .on_action(cx.listener(Self::expand_all))
+        .on_action(cx.listener(Self::collapse_all))
+        .on_action(cx.listener(Self::select_all_files))
+        .on_action(cx.listener(Self::deselect_all))
         .child(
             h_resizable("panes")
                 .with_state(&self.split)

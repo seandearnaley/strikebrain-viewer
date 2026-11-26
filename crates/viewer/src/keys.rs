@@ -1,25 +1,25 @@
 //! Keyboard commands: GPUI actions and the keys bound to them.
 //!
 //! Each pane declares a key context while it holds focus: the explorer's
-//! tree [`EXPLORER`], its filter input [`FILTER`] and the stage [`STAGE`],
-//! or [`GALLERY`] while the stage shows its grid of checked files.
+//! tree `EXPLORER`, its filter input `FILTER` and the stage `STAGE`,
+//! or `GALLERY` while the stage shows its grid of checked files.
 //! Before a tree is on screen (no folder, or the first scans still
 //! running) the explorer's body holds focus in the tree's place, in
-//! [`EXPLORER_BODY`]; a folder that cannot be read is a row of the tree.
+//! `EXPLORER_BODY`; a folder that cannot be read is a row of the tree.
 //! Tab moves between the panes from each of them. Adding a folder,
 //! quitting and the other window commands bind everywhere.
 //!
-//! A command's modifier is ⌘ on macOS and Ctrl elsewhere: [`secondary!`]
+//! A command's modifier is ⌘ on macOS and Ctrl elsewhere: `secondary!`
 //! writes the key for the platform the app is built for.
 //!
 //! The stage's code view is the Kit's editor, which takes focus on a click
 //! so its text can be selected and copied. It declares the Kit's `Input`
-//! context, whose arrows move a caret; [`STAGE_EDITOR`] binds the stage's
+//! context, whose arrows move a caret; `STAGE_EDITOR` binds the stage's
 //! keys over them. Both match at the same depth, and these bindings are
 //! added after the Kit's, so they win.
 //!
-//! While presenting, the stage declares [`PRESENTATION`] instead (and
-//! [`PRESENTATION_EDITOR`] over its editor). Keys the presentation leaves
+//! While presenting, the stage declares `PRESENTATION` instead (and
+//! `PRESENTATION_EDITOR` over its editor). Keys the presentation leaves
 //! out are bound there to `NoAction`, which hides every binding they have
 //! elsewhere: ⌘O, ⌘F, Tab and Enter do nothing until Esc. ⌘Q still quits.
 
@@ -142,6 +142,14 @@ actions!(
         Reveal,
         /// Copies that file's or folder's path.
         CopyPath,
+        /// Opens every folder: the bar's More menu.
+        ExpandAll,
+        /// Closes every folder.
+        CollapseAll,
+        /// Checks every file the filter shows.
+        SelectAllFiles,
+        /// Unchecks every file, hidden ones included.
+        DeselectAll,
     ]
 );
 
@@ -494,7 +502,16 @@ mod tests {
 
     #[test]
     fn the_menu_only_actions_have_no_key() {
-        let actions: [&dyn Action; 4] = [&About, &StartPresenting, &Zoom, &ShowAll];
+        let actions: [&dyn Action; 8] = [
+            &About,
+            &StartPresenting,
+            &Zoom,
+            &ShowAll,
+            &ExpandAll,
+            &CollapseAll,
+            &SelectAllFiles,
+            &DeselectAll,
+        ];
         for action in actions {
             assert!(
                 bindings()
