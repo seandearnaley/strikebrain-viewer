@@ -1,8 +1,8 @@
 //! The saved state: which folders were open and how they were seen, the
-//! explorer's width and the window's bounds. One JSON file in the
-//! platform's config folder (on macOS `~/Library/Application
-//! Support/ai.brainstrike.viewer/state.json`), read once at launch and
-//! written in the background as the view changes.
+//! explorer's width, whether it was hidden, and the window's bounds. One
+//! JSON file in the platform's config folder (on macOS
+//! `~/Library/Application Support/ai.brainstrike.viewer/state.json`), read
+//! once at launch and written in the background as the view changes.
 //!
 //! Each folder is saved by its canonical path, with its open folders and
 //! checks relative to it, with `/` separators, so they outlive a tree's
@@ -75,6 +75,8 @@ pub struct Saved {
     pub view: SavedView,
     /// The explorer's width, in pixels.
     pub explorer_width: Option<f32>,
+    /// Whether the explorer was hidden.
+    pub explorer_hidden: bool,
     /// Where the window was.
     pub window: Option<SavedWindow>,
 }
@@ -89,6 +91,8 @@ pub struct Plan {
     pub view: Option<SavedView>,
     /// The explorer's saved width.
     pub explorer_width: Option<f32>,
+    /// Whether the explorer was hidden.
+    pub explorer_hidden: bool,
     /// The window's saved place.
     pub window: Option<SavedWindow>,
 }
@@ -98,9 +102,9 @@ pub struct Plan {
 /// stands for its folder. With none,
 /// the saved folders reopen with their views; one that no longer exists is
 /// dropped. The filter, the sort, Show ignored, the file on the stage and
-/// the top row come back with any saved folder that opens. The window and
-/// the explorer's width are restored either way. Touches the disk:
-/// canonicalizing paths and asking whether folders exist.
+/// the top row come back with any saved folder that opens. The window, the
+/// explorer's width and whether it was hidden are restored either way.
+/// Touches the disk: canonicalizing paths and asking whether folders exist.
 #[must_use]
 pub fn plan_launch(folders: Vec<PathBuf>, saved: Option<Saved>) -> Plan {
     let saved = saved.unwrap_or_default();
@@ -127,6 +131,7 @@ pub fn plan_launch(folders: Vec<PathBuf>, saved: Option<Saved>) -> Plan {
         },
         view: (!view.folders.is_empty()).then_some(view),
         explorer_width: saved.explorer_width,
+        explorer_hidden: saved.explorer_hidden,
         window: saved.window,
     }
 }
@@ -181,6 +186,7 @@ pub fn fit(bounds: Bounds<Pixels>, area: Bounds<Pixels>) -> Bounds<Pixels> {
 pub(crate) struct Snapshot {
     pub(crate) view: SnapshotView,
     pub(crate) explorer_width: Option<f32>,
+    pub(crate) explorer_hidden: bool,
     pub(crate) window: Option<SavedWindow>,
 }
 
@@ -240,6 +246,7 @@ impl Snapshot {
         Saved {
             view: self.view.named(),
             explorer_width: self.explorer_width,
+            explorer_hidden: self.explorer_hidden,
             window: self.window,
         }
     }

@@ -68,6 +68,7 @@ fn full(root: &Path) -> Saved {
             view: StageView::Gallery,
         },
         explorer_width: Some(412.5),
+        explorer_hidden: true,
         window: Some(SavedWindow {
             bounds: WindowBounds::Fullscreen(Bounds::new(
                 point(px(40.), px(60.)),
@@ -97,6 +98,17 @@ fn a_state_survives_the_trip_through_json() {
         "{text}"
     );
     assert!(text.contains("\"view\": \"gallery\""), "{text}");
+    assert!(text.contains("\"explorer_hidden\": true"), "{text}");
+}
+
+#[test]
+fn a_hidden_explorer_is_saved_and_read_back() {
+    let saved = Saved {
+        explorer_hidden: true,
+        ..Saved::default()
+    };
+    let back = decode(&encode(&saved).unwrap()).unwrap();
+    assert!(back.explorer_hidden);
 }
 
 #[test]
@@ -141,6 +153,7 @@ fn a_file_of_the_old_one_folder_format_loads_as_one_folder() {
     assert_eq!(saved.view.kind, KindFilter::Images);
     assert_eq!(saved.view.sort.key, SortKey::Type);
     assert_eq!(saved.explorer_width, Some(280.));
+    assert!(!saved.explorer_hidden);
     // With no usable root, nothing is relative to anything.
     let rootless = br#"{"version": 1, "root": "relative", "current": "a.txt"}"#;
     assert_eq!(decode(rootless), Some(Saved::default()));
@@ -170,6 +183,8 @@ fn a_file_that_is_not_a_state_of_a_known_version_is_ignored() {
     // used are dropped, not trusted.
     let sparse = br#"{"version": 2, "folders": [{"root": "relative/path"}], "current": "a.txt", "first_visible_row": "b", "explorer_width": -3, "window": {"state": "windowed", "x": 0, "y": 0, "width": 0, "height": 10, "display": null}, "future": true}"#;
     assert_eq!(decode(sparse), Some(Saved::default()));
+    // A file from before the explorer could hide shows it.
+    assert!(!decode(sparse).unwrap().explorer_hidden);
 }
 
 #[test]
@@ -293,6 +308,7 @@ fn folder_arguments_open_exactly_those_each_with_its_own_saved_view() {
     let view = plan.view.unwrap();
     assert_eq!(view.query, saved.view.query);
     assert_eq!(plan.explorer_width, Some(412.5));
+    assert!(plan.explorer_hidden);
     assert!(plan.window.is_some());
 
     // Folders never saved: no view, but the window and the width stay.
@@ -355,6 +371,7 @@ fn no_argument_reopens_the_saved_folders_that_still_exist() {
     let plan = plan_launch(Vec::new(), None);
     assert!(matches!(plan.launch, Launch::Empty));
     assert!(plan.window.is_none() && plan.explorer_width.is_none());
+    assert!(!plan.explorer_hidden);
 }
 
 #[test]
@@ -397,6 +414,7 @@ fn a_snapshot_names_each_folder_in_order() {
     let saved = Snapshot {
         view,
         explorer_width: Some(300.),
+        explorer_hidden: true,
         window: None,
     }
     .saved();
@@ -420,6 +438,7 @@ fn a_snapshot_names_each_folder_in_order() {
     );
     assert_eq!(saved.view.current, Some(PathBuf::from("/x/docs/a.md")));
     assert_eq!(saved.explorer_width, Some(300.));
+    assert!(saved.explorer_hidden);
 }
 
 /// Saving 100,000 checked files. Run in release:
@@ -465,6 +484,7 @@ fn timing_saving_a_hundred_thousand_checked_files() {
                 rest: SavedView::default(),
             },
             explorer_width: Some(300.),
+            explorer_hidden: false,
             window: None,
         };
         let ui = started.elapsed();

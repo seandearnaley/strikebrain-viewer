@@ -8,7 +8,9 @@
 //!
 //! The split's sizes live in an entity this view owns rather than in the
 //! split element's own state, which lasts only while the split is drawn:
-//! so the explorer keeps its width while the presentation hides it.
+//! so the explorer keeps its width while the presentation hides it, or the
+//! person does. Hidden, the explorer is left out of the layout and the
+//! stage laid out alone below the bar, as the presentation lays it out.
 //!
 //! With a [`StateStore`] the view saves itself: half a second after a
 //! change (at most one save per half second), and when the app quits. A
@@ -31,12 +33,12 @@ use crate::explorer_panel::{ExplorerFocus, ExplorerPanel};
 use crate::keys::{
     AddFolder, CloseWindow, CollapseAll, CopyPath, DeselectAll, ExpandAll, FocusExplorer,
     FocusFilter, Minimize, NextPane, PreviousPane, Refresh, Reveal, SelectAllFiles,
-    StartPresenting, ToggleFullScreen, ToggleShowIgnored, Zoom,
+    StartPresenting, ToggleFullScreen, ToggleShowIgnored, ToggleSidebar, Zoom,
 };
 use crate::menus;
 use crate::persist::{SavedView, SavedWindow, Snapshot, StateStore};
 use crate::stage::{GalleryProbe, Stage, StageProbe};
-use crate::state::{AppState, Launch, StateOptions};
+use crate::state::{AppState, Launch, StateEvent, StateOptions};
 use crate::{theme, title_bar};
 
 /// Starting width of the explorer pane, in pixels.
@@ -60,6 +62,8 @@ pub struct Session {
     pub view: Option<SavedView>,
     /// The explorer's saved width, in pixels.
     pub explorer_width: Option<f32>,
+    /// The explorer was hidden.
+    pub explorer_hidden: bool,
     /// Where to save. `None` saves nothing.
     pub store: Option<StateStore>,
     /// Rescan a folder when it changes on disk.
@@ -80,6 +84,15 @@ struct Fullscreen {
     was: bool,
 }
 
+/// What the menu bar was last set with.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct MenuBar {
+    /// Whether Show Ignored is checked.
+    shows_ignored: bool,
+    /// Whether the View menu offers Show Sidebar.
+    explorer_hidden: bool,
+}
+
 /// A pane that takes keyboard focus, in Tab order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Pane {
@@ -91,7 +104,8 @@ enum Pane {
 /// The root view: the title bar on top, explorer on the left, stage on the
 /// right. Owns the [`AppState`] all three show, keeps the window title on
 /// the stage's or the app's, handles ⌘O, ⌘F, moving between panes and the
-/// menu bar's commands, follows the presentation, and saves the state.
+/// menu bar's commands, hides and shows the explorer, follows the
+/// presentation, and saves the state.
 pub struct AppView {
     state: Entity<AppState>,
     explorer: Entity<ExplorerPanel>,
@@ -100,6 +114,9 @@ pub struct AppView {
     split: Entity<ResizableState>,
     /// The explorer's width when the split is first laid out.
     explorer_width: Pixels,
+    /// Whether the explorer is hidden: the stage has the window below the
+    /// bar. The split keeps the explorer's width meanwhile.
+    explorer_hidden: bool,
     /// The explorer's width as last seen from the split, only to tell when
     /// it moved and the bar must redraw; the bar itself is drawn from
     /// [`AppView::explorer_width`].
@@ -121,8 +138,8 @@ pub struct AppView {
     store: Option<StateStore>,
     /// The save waiting for its delay. While it waits, changes add nothing.
     save_task: Option<Task<()>>,
-    /// Whether the menu bar's Show Ignored is checked.
-    menu_shows_ignored: bool,
+    /// What the menu bar was last set with.
+    menu_bar: MenuBar,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -143,7 +160,9 @@ impl AppView {
     }
 
     /// Builds the window's content as [`AppView::new`] does, restoring,
-    /// saving and following the folders as `session` says.
+    /// saving and following the folders as `session` says. A session saved
+    /// with the explorer hidden opens with it hidden and the stage focused,
+    /// unless there is nothing to open: the empty state is in the explorer.
     pub fn with_session(
         launch: Launch,
         session: Session,
@@ -156,6 +175,7 @@ impl AppView {
             quiet: session.store.as_ref().map_or_default(StateStore::own_files),
         };
         let app_state = cx.new(|cx| AppState::with_options(launch, options, cx));
+        let explorer_hidden = session.explorer_hidden && !app_state.read(cx).is_empty();
         let explorer = cx.new(|cx| ExplorerPanel::new(app_state.clone(), window, cx));
         let stage = cx.new(|cx| Stage::new(app_state.clone(), window, cx));
         let split = cx.new(|_| ResizableState::default());
@@ -167,6 +187,12 @@ impl AppView {
                 this.schedule_save(cx);
                 // The bar shows the state.
                 cx.notify();
+            }),
+            cx.subscribe(&app_state, |this, _, event: &StateEvent, cx| {
+                // Adding a folder shows it: its row is what adding shows.
+                if *event == StateEvent::FolderAdded {
+                    this.show_explorer(cx);
+                }
             }),
             cx.observe_window_appearance(window, |_, window, cx| theme::follow_system(window, cx)),
             cx.observe_window_bounds(window, |this, window, cx| {
@@ -197,7 +223,11 @@ impl AppView {
                 }
             }),
         ];
-        window.focus(&explorer.focus_handle(cx), cx);
+        if explorer_hidden {
+            window.focus(&stage.focus_handle(cx), cx);
+        } else {
+            window.focus(&explorer.focus_handle(cx), cx);
+        }
 
         let mut view = Self {
             state: app_state,
@@ -208,6 +238,7 @@ impl AppView {
                 session.explorer_width.unwrap_or(EXPLORER_WIDTH),
                 window.viewport_size().width.as_f32(),
             )),
+            explorer_hidden,
             bar_width: None,
             title: None,
             presenting: false,
@@ -219,7 +250,7 @@ impl AppView {
             windowed: session.opened_at,
             store: session.store,
             save_task: None,
-            menu_shows_ignored: false,
+            menu_bar: MenuBar::default(),
             _subscriptions: subscriptions,
         };
         view.window = Some(view.place(window, cx));
@@ -270,6 +301,12 @@ impl AppView {
             .as_f32()
     }
 
+    /// Whether the explorer is hidden.
+    #[must_use]
+    pub fn explorer_hidden(&self) -> bool {
+        self.explorer_hidden
+    }
+
     /// Opens `paths` beside the folders on screen: the system's "Open
     /// With", and folders or files dropped on the Dock icon. A file opens
     /// its folder and shows on the stage; several files show as the
@@ -288,12 +325,16 @@ impl AppView {
         }
     }
 
-    /// Keeps the menu bar's Show Ignored check on the state.
+    /// Keeps the menu bar's Show Ignored check on the state, and its Hide
+    /// or Show Sidebar on the explorer.
     fn sync_menus(&mut self, cx: &mut Context<Self>) {
-        let shows_ignored = self.state.read(cx).shows_ignored();
-        if shows_ignored != self.menu_shows_ignored {
-            self.menu_shows_ignored = shows_ignored;
-            menus::install(shows_ignored, cx);
+        let menu_bar = MenuBar {
+            shows_ignored: self.state.read(cx).shows_ignored(),
+            explorer_hidden: self.explorer_hidden,
+        };
+        if menu_bar != self.menu_bar {
+            self.menu_bar = menu_bar;
+            menus::install(menu_bar.shows_ignored, menu_bar.explorer_hidden, cx);
         }
     }
 
@@ -404,6 +445,7 @@ impl AppView {
         let snapshot = Snapshot {
             view,
             explorer_width: Some(self.explorer_width(cx)),
+            explorer_hidden: self.explorer_hidden,
             window: self.window.clone(),
         };
         let ticket = store.ticket();
@@ -462,6 +504,34 @@ impl AppView {
         self.state.update(cx, AppState::refresh);
     }
 
+    fn toggle_sidebar(&mut self, _: &ToggleSidebar, window: &mut Window, cx: &mut Context<Self>) {
+        if self.explorer_hidden {
+            return self.show_explorer(cx);
+        }
+        // Focus never stays in what hides.
+        if matches!(
+            self.focused_pane(window, cx),
+            Some(Pane::Filter | Pane::Tree)
+        ) {
+            self.focus_pane(Pane::Stage, window, cx);
+        }
+        self.set_explorer_hidden(true, cx);
+    }
+
+    /// Shows the explorer if it is hidden.
+    fn show_explorer(&mut self, cx: &mut Context<Self>) {
+        if self.explorer_hidden {
+            self.set_explorer_hidden(false, cx);
+        }
+    }
+
+    fn set_explorer_hidden(&mut self, hidden: bool, cx: &mut Context<Self>) {
+        self.explorer_hidden = hidden;
+        self.sync_menus(cx);
+        self.schedule_save(cx);
+        cx.notify();
+    }
+
     /// The file or folder a command about one acts on: the file on the
     /// stage while the stage holds focus, the focus row otherwise.
     fn pointed(&self, window: &Window, cx: &App) -> Option<PathBuf> {
@@ -492,11 +562,18 @@ impl AppView {
         self.cycle_pane(false, window, cx);
     }
 
+    /// ⌘F: the filter, showing the explorer if it is hidden.
     fn focus_filter(&mut self, _: &FocusFilter, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_explorer(cx);
         self.focus_pane(Pane::Filter, window, cx);
     }
 
+    /// Esc from the file view or the gallery: the tree, unless the explorer
+    /// is hidden, when focus stays where it is.
     fn focus_explorer(&mut self, _: &FocusExplorer, window: &mut Window, cx: &mut Context<Self>) {
+        if self.explorer_hidden {
+            return;
+        }
         self.focus_pane(Pane::Tree, window, cx);
     }
 
@@ -511,9 +588,11 @@ impl AppView {
     }
 
     /// Tab and shift-Tab: filter, tree, stage, round again. The filter is
-    /// skipped while no folder is open.
+    /// skipped while no folder is open, and the explorer while it is hidden.
     fn cycle_pane(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let order: &[Pane] = if self.explorer.read(cx).filter_on_screen(cx) {
+        let order: &[Pane] = if self.explorer_hidden {
+            &[Pane::Stage]
+        } else if self.explorer.read(cx).filter_on_screen(cx) {
             &[Pane::Filter, Pane::Tree, Pane::Stage]
         } else {
             &[Pane::Tree, Pane::Stage]
@@ -583,31 +662,21 @@ impl Render for AppView {
         }
         let bar = title_bar::window_bar(
             self.state.read(cx),
-            Some(px(self.explorer_width(cx))),
+            (!self.explorer_hidden).then(|| px(self.explorer_width(cx))),
             window,
             cx,
         );
-        // Folders and files dropped on the window open as those dropped on
-        // the Dock icon do.
-        root.on_drop(cx.listener(|this, dropped: &ExternalPaths, _, cx| {
-            this.open_paths(dropped.paths().to_vec(), cx);
-        }))
-        .on_action(cx.listener(Self::add_folder_picker))
-        .on_action(cx.listener(Self::expand_all))
-        .on_action(cx.listener(Self::collapse_all))
-        .on_action(cx.listener(Self::select_all_files))
-        .on_action(cx.listener(Self::deselect_all))
-        // A press on the bar hides the tree's focus ring, as one in the
-        // explorer does: the bar holds the explorer's commands.
-        .child(
-            div()
-                .flex_shrink_0()
-                .capture_any_mouse_down(cx.listener(|this, _, _, cx| {
-                    this.explorer.update(cx, ExplorerPanel::pointer_down);
-                }))
-                .child(bar),
-        )
-        .child(
+        let panes = if self.explorer_hidden {
+            // The stage alone below the bar, as the presentation lays it
+            // out; the split is not drawn and keeps the explorer's width.
+            div().flex_1().min_h_0().child(
+                div()
+                    .id("stage-pane")
+                    .test_support()
+                    .size_full()
+                    .child(self.stage.clone().cached(pane())),
+            )
+        } else {
             div().flex_1().min_h_0().child(
                 h_resizable("panes")
                     .with_state(&self.split)
@@ -615,6 +684,9 @@ impl Render for AppView {
                         resizable_panel()
                             .size(self.explorer_width)
                             .size_range(px(EXPLORER_MIN_WIDTH)..Pixels::MAX)
+                            // A window resize changes the stage's width, not
+                            // the explorer's.
+                            .fixed()
                             .child(
                                 div()
                                     .id("explorer-pane")
@@ -634,7 +706,29 @@ impl Render for AppView {
                                     .child(self.stage.clone().cached(pane())),
                             ),
                     ),
-            ),
+            )
+        };
+        // Folders and files dropped on the window open as those dropped on
+        // the Dock icon do.
+        root.on_drop(cx.listener(|this, dropped: &ExternalPaths, _, cx| {
+            this.open_paths(dropped.paths().to_vec(), cx);
+        }))
+        .on_action(cx.listener(Self::add_folder_picker))
+        .on_action(cx.listener(Self::expand_all))
+        .on_action(cx.listener(Self::collapse_all))
+        .on_action(cx.listener(Self::select_all_files))
+        .on_action(cx.listener(Self::deselect_all))
+        .on_action(cx.listener(Self::toggle_sidebar))
+        // A press on the bar hides the tree's focus ring, as one in the
+        // explorer does: the bar holds the explorer's commands.
+        .child(
+            div()
+                .flex_shrink_0()
+                .capture_any_mouse_down(cx.listener(|this, _, _, cx| {
+                    this.explorer.update(cx, ExplorerPanel::pointer_down);
+                }))
+                .child(bar),
         )
+        .child(panes)
     }
 }

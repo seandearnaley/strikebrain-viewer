@@ -17,7 +17,9 @@ const VERSION: u32 = 2;
 
 /// Version 2: every folder with its own open folders and checks; the file
 /// on the stage and the top row by their paths on disk; which of the
-/// stage's views showed, `file` in a file saved before the gallery.
+/// stage's views showed, `file` in a file saved before the gallery;
+/// whether the explorer was hidden, `false` in a file saved before it
+/// could hide.
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 struct StateFile {
@@ -31,6 +33,7 @@ struct StateFile {
     sort: SortFile,
     first_visible_row: Option<PathBuf>,
     explorer_width: Option<f32>,
+    explorer_hidden: bool,
     window: Option<WindowFile>,
 }
 
@@ -173,6 +176,7 @@ pub(super) fn encode(saved: &Saved) -> io::Result<Vec<u8>> {
         },
         first_visible_row: view.top_row.clone(),
         explorer_width: saved.explorer_width.filter(|width| width.is_finite()),
+        explorer_hidden: saved.explorer_hidden,
         window: saved.window.as_ref().and_then(window_file),
     };
     serde_json::to_vec_pretty(&file).map_err(io::Error::other)
@@ -256,6 +260,7 @@ pub(super) fn decode(bytes: &[u8]) -> Option<Saved> {
         explorer_width: file
             .explorer_width
             .filter(|width| width.is_finite() && *width > 0.),
+        explorer_hidden: file.explorer_hidden,
         window: file.window.and_then(saved_window),
     })
 }
@@ -289,6 +294,7 @@ fn from_version_1(file: StateFileV1) -> StateFile {
         kind: file.kind,
         sort: file.sort,
         explorer_width: file.explorer_width,
+        explorer_hidden: false,
         window: file.window,
     }
 }

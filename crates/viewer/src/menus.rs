@@ -16,7 +16,7 @@ use gpui_kit::{App, Menu, MenuItem, OsAction, PromptLevel, SystemMenuType};
 
 use crate::keys::{
     About, AddFolder, CloseWindow, CopyPath, Hide, HideOthers, Minimize, Quit, Refresh, Reveal,
-    ShowAll, StartPresenting, ToggleShowIgnored, Zoom,
+    ShowAll, StartPresenting, ToggleShowIgnored, ToggleSidebar, Zoom,
 };
 
 /// The name the menus show.
@@ -29,8 +29,9 @@ const REVEAL: &str = if cfg!(target_os = "macos") {
     "Show in File Manager"
 };
 
-/// Sets the menu bar, with Show Ignored checked while ignored files show.
-pub(crate) fn install(shows_ignored: bool, cx: &App) {
+/// Sets the menu bar, with Show Ignored checked while ignored files show,
+/// and Show Sidebar in place of Hide Sidebar while the explorer is hidden.
+pub(crate) fn install(shows_ignored: bool, explorer_hidden: bool, cx: &App) {
     cx.set_menus([
         Menu::new(APP_NAME).items([
             MenuItem::action(format!("About {APP_NAME}"), About),
@@ -63,6 +64,15 @@ pub(crate) fn install(shows_ignored: bool, cx: &App) {
             MenuItem::os_action("Select All", SelectAll, OsAction::SelectAll),
         ]),
         Menu::new("View").items([
+            MenuItem::action(
+                if explorer_hidden {
+                    "Show Sidebar"
+                } else {
+                    "Hide Sidebar"
+                },
+                ToggleSidebar,
+            ),
+            MenuItem::separator(),
             MenuItem::action("Present", StartPresenting),
             MenuItem::separator(),
             MenuItem::action("Show Ignored", ToggleShowIgnored).checked(shows_ignored),
@@ -124,7 +134,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn the_menu_bar_holds_the_app_file_edit_view_and_window_menus(cx: &mut TestAppContext) {
-        cx.update(|cx| install(false, cx));
+        cx.update(|cx| install(false, false, cx));
         let bar = menus(cx);
         let names: Vec<&str> = bar.iter().map(|(name, _)| name.as_str()).collect();
         assert_eq!(
@@ -162,11 +172,24 @@ mod tests {
             items(2),
             ["Undo", "Redo", "-", "Cut", "Copy", "Paste", "Select All"]
         );
-        assert_eq!(items(3), ["Present", "-", "Show Ignored", "Refresh"]);
+        assert_eq!(
+            items(3),
+            [
+                "Hide Sidebar",
+                "-",
+                "Present",
+                "-",
+                "Show Ignored",
+                "Refresh"
+            ]
+        );
         assert_eq!(items(4), ["Minimize", "Zoom"]);
-        assert!(!bar[3].1[2].1);
+        assert!(!bar[3].1[4].1);
 
-        cx.update(|cx| install(true, cx));
-        assert!(menus(cx)[3].1[2].1, "Show Ignored is checked");
+        cx.update(|cx| install(true, false, cx));
+        assert!(menus(cx)[3].1[4].1, "Show Ignored is checked");
+
+        cx.update(|cx| install(false, true, cx));
+        assert_eq!(menus(cx)[3].1[0].0, "Show Sidebar");
     }
 }

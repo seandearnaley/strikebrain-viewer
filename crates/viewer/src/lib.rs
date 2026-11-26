@@ -35,6 +35,6 @@ pub fn init(cx: &mut App) {
     cx.on_action(|_: &keys::Hide, cx| cx.hide());
     cx.on_action(|_: &keys::HideOthers, cx| cx.hide_other_apps());
     cx.on_action(|_: &keys::ShowAll, cx| cx.unhide_other_apps());
-    menus::install(false, cx);
+    menus::install(false, false, cx);
     theme::install(cx);
 }

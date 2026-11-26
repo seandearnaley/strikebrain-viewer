@@ -45,6 +45,7 @@ pub fn open_main_window(
     let session = Session {
         view: plan.view,
         explorer_width: plan.explorer_width,
+        explorer_hidden: plan.explorer_hidden,
         store,
         watch,
         opened_at: window_bounds.map(|bounds| bounds.get_bounds()),

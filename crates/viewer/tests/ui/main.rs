@@ -23,6 +23,7 @@ mod redraw;
 mod refresh;
 mod rows;
 mod scale;
+mod sidebar;
 mod stage;
 mod timing;
 mod watch;
@@ -37,7 +38,7 @@ use gpui_kit::{
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Role, TestAppContext,
     Window, WindowBounds, WindowOptions, point, px, size,
 };
-use viewer::{AppState, AppView, Launch};
+use viewer::{AppState, AppView, Launch, Session};
 
 /// A small project. Display order: docs, src, file2.txt, file10.txt,
 /// README.md; inside src: app, lib.rs, main.rs.
@@ -142,6 +143,15 @@ fn write(root: &Path, path: &str, bytes: impl AsRef<[u8]>) {
 
 /// Opens the app in a 1000 x 700 window with the app's key bindings.
 fn open_app(cx: &mut TestAppContext, launch: Launch) -> (AnyWindowHandle, Entity<AppView>) {
+    open_app_with_session(cx, launch, Session::default())
+}
+
+/// Opens the app as `open_app` does, with `session`.
+fn open_app_with_session(
+    cx: &mut TestAppContext,
+    launch: Launch,
+    session: Session,
+) -> (AnyWindowHandle, Entity<AppView>) {
     cx.update(|cx| {
         gpui_kit::init(cx);
         viewer::init(cx);
@@ -156,7 +166,7 @@ fn open_app(cx: &mut TestAppContext, launch: Launch) -> (AnyWindowHandle, Entity
                 ..Default::default()
             },
             cx,
-            |window, cx| cx.new(|cx| AppView::new(launch, window, cx)),
+            |window, cx| cx.new(|cx| AppView::with_session(launch, session, window, cx)),
         )
         .expect("open test window")
     });

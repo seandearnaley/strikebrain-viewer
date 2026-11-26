@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use explorer::{Explorer, NodeId, SavedFolder};
 use gpui_kit::{Context, PathPromptOptions, Result, SharedString, Task, TaskExt as _};
 
-use super::{AppState, ScanStatus};
+use super::{AppState, ScanStatus, StateEvent};
 use crate::menus::APP_NAME;
 use crate::persist::resolve;
 
@@ -144,11 +144,13 @@ impl AppState {
     /// With" or the Dock. A folder is added as a top-level folder, after
     /// those open, and scanned. One already open, or one an open folder's
     /// tree lists, is not added: its row opens and becomes the focus row.
-    /// One inside a folder whose first scan runs waits for that scan. A
-    /// file opens its folder so, then shows on the stage with its row the
-    /// focus row. Several files in one call are checked as well, so they
-    /// show as the gallery, with the files checked before. `waiting` holds
-    /// saved views, each applied when its folder's first scan lands.
+    /// Either way the state emits `StateEvent::FolderAdded`, and the window
+    /// shows the explorer. One inside a folder whose first scan runs waits
+    /// for that scan. A file opens its folder so, emitting nothing, then
+    /// shows on the stage with its row the focus row. Several files in one
+    /// call are checked as well, so they show as the gallery, with the
+    /// files checked before. `waiting` holds saved views, each applied when
+    /// its folder's first scan lands.
     pub fn open_paths(
         &mut self,
         paths: Vec<PathBuf>,
@@ -158,7 +160,8 @@ impl AppState {
         let together = paths.iter().filter(|path| path.is_file()).count() > 1;
         for path in paths {
             let mut path = resolve(&path);
-            if path.is_file() {
+            let file = path.is_file();
+            if file {
                 let folder = path.parent().map(Path::to_path_buf);
                 self.asked_files.push((path.clone(), together));
                 path = folder.unwrap_or(path);
@@ -171,6 +174,10 @@ impl AppState {
             let open = self.folders.iter().any(|folder| folder.path == path);
             if let Some(id) = self.listed(&path).or_else(|| self.folder_node(&path)) {
                 self.reveal(id, cx);
+                // A file shows on the stage; a folder, as its row.
+                if !file {
+                    cx.emit(StateEvent::FolderAdded);
+                }
                 continue;
             }
             if open {
@@ -189,6 +196,9 @@ impl AppState {
             self.folders.push(Folder::new(key, path, saved));
             self.follow(key, cx);
             self.start_scan(key, cx);
+            if !file {
+                cx.emit(StateEvent::FolderAdded);
+            }
         }
         self.settle_asked_files(cx);
         cx.notify();

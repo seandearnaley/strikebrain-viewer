@@ -4,8 +4,10 @@
 //!
 //! Its part over the explorer is exactly as wide as the explorer, so the
 //! rule beside it continues the split's divider: the traffic lights'
-//! room, then Add Folder and More at its right end, and the scan's progress
-//! along its bottom edge. Its part over the stage holds the stage's title
+//! room and the sidebar button, then Add Folder and More at its right end,
+//! and the scan's progress along its bottom edge. While the explorer is
+//! hidden the part holds only the lights' room and the sidebar button, and
+//! no rule is drawn. Its part over the stage holds the stage's title
 //! and Present. Its buttons dispatch the window's actions, which the root
 //! view handles, so a button, a menu item and a key run the same code.
 //!
@@ -32,7 +34,7 @@ use gpui_kit::{
 
 use crate::keys::{
     AddFolder, CollapseAll, DeselectAll, ExpandAll, Refresh, SelectAllFiles, StartPresenting,
-    ToggleShowIgnored,
+    ToggleShowIgnored, ToggleSidebar,
 };
 use crate::state::{AppState, ScanStatus};
 
@@ -93,8 +95,8 @@ pub(crate) fn window_bar(
         .child(stage_part(state, explorer.is_some(), cx))
 }
 
-/// The part over the explorer: `width` wide, or only the lights' room
-/// while the explorer is hidden.
+/// The part over the explorer: `width` wide, or only the lights' room and
+/// the sidebar button while the explorer is hidden.
 fn explorer_part(
     state: &AppState,
     width: Option<Pixels>,
@@ -108,7 +110,8 @@ fn explorer_part(
         .flex_shrink_0()
         .items_center()
         .gap_1()
-        .child(div().w(lead).flex_shrink_0());
+        .child(div().w(lead).flex_shrink_0())
+        .child(sidebar_button(width.is_none()));
     let Some(width) = width else {
         return part;
     };
@@ -142,6 +145,17 @@ fn explorer_part(
                     .child(Progress::new("scan-progress").loading(true).xsmall()),
             )
         })
+}
+
+/// Hides or shows the explorer: the Kit's panel icons. A Kit `Button`, not
+/// the Kit's `SidebarToggleButton`, which in 0.10.0 takes no tooltip.
+fn sidebar_button(hidden: bool) -> Button {
+    let (icon, label) = if hidden {
+        (Icons::PanelLeftOpen, "Show Sidebar")
+    } else {
+        (Icons::PanelLeftClose, "Hide Sidebar")
+    };
+    command("sidebar", icon, label, ToggleSidebar)
 }
 
 /// Refresh in the warning colour, while a folder's changes are not
