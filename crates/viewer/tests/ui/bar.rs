@@ -232,6 +232,35 @@ fn the_title_names_what_the_stage_shows(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn a_long_title_truncates_and_present_stays_in_the_window(cx: &mut TestAppContext) {
+    // Some 1,400 px of name over a stage part 700 px wide.
+    let name = format!("{}.txt", "a-very-long-name-for-a-file-".repeat(8));
+    let (handle, view) = open_app(cx, tree(&[name.as_str(), "short.txt"]));
+    let file = node(cx, &view, &name);
+    click(cx, handle, row(file));
+    assert_eq!(bar_title(cx, handle).as_deref(), Some(name.as_str()));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        let width = window.viewport_size().width;
+        let title = window.find("stage-title").bounds();
+        let present = window.find("present").bounds();
+        assert!(
+            present.right() <= width,
+            "Present ends at {:?}, past the window's {width:?}",
+            present.right()
+        );
+        assert!(
+            title.right() <= present.left(),
+            "the title ends at {:?}, past Present at {:?}",
+            title.right(),
+            present.left()
+        );
+        assert!(title.left() < title.right(), "the title keeps some room");
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
 fn present_starts_the_presentation_of_the_file_on_the_stage(cx: &mut TestAppContext) {
     let (handle, view) = open_app(cx, tree(PROJECT));
     let readme = node(cx, &view, "README.md");
