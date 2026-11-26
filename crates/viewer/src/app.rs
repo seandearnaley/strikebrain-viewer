@@ -25,15 +25,16 @@ use gpui_kit::component::{
 };
 use gpui_kit::{
     App, AppContext as _, Bounds, ClipboardItem, Context, Entity, ExternalPaths, Focusable as _,
-    IntoElement, ParentElement as _, Pixels, Render, SharedString, StyleRefinement, Styled as _,
-    Subscription, Task, TestSupportExt as _, Window, WindowBounds, div, prelude::*, px,
+    IntoElement, MouseButton, NavigationDirection, ParentElement as _, Pixels, Render,
+    SharedString, StyleRefinement, Styled as _, Subscription, Task, TestSupportExt as _, Window,
+    WindowBounds, div, prelude::*, px,
 };
 
 use crate::explorer_panel::{ExplorerFocus, ExplorerPanel};
 use crate::keys::{
     AddFolder, CloseWindow, CollapseAll, CopyPath, DeselectAll, ExpandAll, FocusExplorer,
-    FocusFilter, Minimize, NextPane, PreviousPane, Refresh, Reveal, SelectAllFiles,
-    StartPresenting, ToggleFullScreen, ToggleShowIgnored, ToggleSidebar, Zoom,
+    FocusFilter, GoBack, GoForward, Minimize, NextPane, PreviousPane, Refresh, Reveal,
+    SelectAllFiles, StartPresenting, ToggleFullScreen, ToggleShowIgnored, ToggleSidebar, Zoom,
 };
 use crate::menus;
 use crate::persist::{SavedView, SavedWindow, Snapshot, StateStore};
@@ -505,6 +506,14 @@ impl AppView {
         self.state.update(cx, AppState::clear_selection);
     }
 
+    fn go_back(&mut self, _: &GoBack, _: &mut Window, cx: &mut Context<Self>) {
+        self.state.update(cx, AppState::go_back);
+    }
+
+    fn go_forward(&mut self, _: &GoForward, _: &mut Window, cx: &mut Context<Self>) {
+        self.state.update(cx, AppState::go_forward);
+    }
+
     fn add_folder_picker(&mut self, _: &AddFolder, _: &mut Window, cx: &mut Context<Self>) {
         self.state
             .update(cx, |_, cx| AppState::prompt_for_folders(cx));
@@ -752,6 +761,17 @@ impl Render for AppView {
         .on_action(cx.listener(Self::select_all_files))
         .on_action(cx.listener(Self::deselect_all))
         .on_action(cx.listener(Self::toggle_sidebar))
+        .on_action(cx.listener(Self::go_back))
+        .on_action(cx.listener(Self::go_forward))
+        // The mouse's back and forward buttons, anywhere over the window.
+        .on_mouse_down(
+            MouseButton::Navigate(NavigationDirection::Back),
+            cx.listener(|this, _, _, cx| this.state.update(cx, AppState::go_back)),
+        )
+        .on_mouse_down(
+            MouseButton::Navigate(NavigationDirection::Forward),
+            cx.listener(|this, _, _, cx| this.state.update(cx, AppState::go_forward)),
+        )
         // A press on the bar hides the tree's focus ring, as one in the
         // explorer does: the bar holds the explorer's commands.
         .child(

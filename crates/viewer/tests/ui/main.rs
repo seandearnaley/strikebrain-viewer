@@ -12,6 +12,7 @@ mod flick;
 mod folders;
 mod gallery;
 mod header;
+mod history;
 mod keyboard;
 mod launch;
 mod layout;

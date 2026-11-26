@@ -7,9 +7,10 @@
 //! room and the sidebar button, then Add Folder and More at its right end,
 //! and the scan's progress along its bottom edge. While the explorer is
 //! hidden the part holds only the lights' room and the sidebar button, and
-//! no rule is drawn. Its part over the stage holds the stage's title
-//! and Present. Its buttons dispatch the window's actions, which the root
-//! view handles, so a button, a menu item and a key run the same code.
+//! no rule is drawn. Its part over the stage holds Back and Forward, the
+//! stage's title and Present. Its buttons dispatch the window's actions,
+//! which the root view handles, so a button, a menu item and a key run the
+//! same code.
 //!
 //! The Kit pads its bar 80 px on macOS (12 px elsewhere) for the traffic
 //! lights; this bar zeroes that padding and keeps the room inside its
@@ -33,8 +34,8 @@ use gpui_kit::{
 };
 
 use crate::keys::{
-    AddFolder, CollapseAll, DeselectAll, ExpandAll, Refresh, SelectAllFiles, StartPresenting,
-    ToggleShowIgnored, ToggleSidebar,
+    AddFolder, CollapseAll, DeselectAll, ExpandAll, GoBack, GoForward, Refresh, SelectAllFiles,
+    StartPresenting, ToggleShowIgnored, ToggleSidebar,
 };
 use crate::state::{AppState, ScanStatus};
 
@@ -196,8 +197,9 @@ fn more(state: &AppState) -> impl IntoElement {
         })
 }
 
-/// The part over the stage: its title and Present. Beside the explorer
-/// its left border is the rule that continues the split's divider.
+/// The part over the stage: Back and Forward, its title and Present.
+/// Beside the explorer its left border is the rule that continues the
+/// split's divider.
 fn stage_part(state: &AppState, beside_explorer: bool, cx: &App) -> impl IntoElement {
     h_flex()
         .id("bar-stage")
@@ -211,6 +213,11 @@ fn stage_part(state: &AppState, beside_explorer: bool, cx: &App) -> impl IntoEle
         .when(beside_explorer, |part| {
             part.border_l_1().border_color(cx.theme().border)
         })
+        .child(command("back", Icons::ChevronLeft, "Back", GoBack).disabled(!state.can_go_back()))
+        .child(
+            command("forward", Icons::ChevronRight, "Forward", GoForward)
+                .disabled(!state.can_go_forward()),
+        )
         .when_some(state.stage_title(), |part, title| {
             part.child(
                 div()
