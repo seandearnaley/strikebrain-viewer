@@ -204,7 +204,13 @@ fn stage_part(state: &AppState, beside_explorer: bool, cx: &App) -> impl IntoEle
     h_flex()
         .id("bar-stage")
         .test_support()
+        // The rest of the row, whatever the title's length. The Kit's row
+        // holding both parts does not shrink and sets no minimum width, so
+        // it is at least as wide as its content's narrowest layout, which
+        // counts the whole title unless this part's own width is zero; the
+        // title then truncates and Present stays at the right end.
         .flex_1()
+        .w_0()
         .min_w_0()
         .h_full()
         .items_center()
