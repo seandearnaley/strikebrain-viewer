@@ -1,122 +1,170 @@
-# Builds what a release ships: a macOS disk image, Linux packages and
-# Windows packages.
+# Releases Strikebrain Viewer: a signed and notarized macOS disk image,
+# Linux packages and signed Windows packages, published on GitHub with
+# SHA256SUMS and a build attestation.
 #
-# A tag `v<version>` builds them, attests where they were built and puts
-# them on a draft GitHub release, which a person publishes. A pull request
-# that touches the packaging builds them too, as a rehearsal: nothing is
-# signed with a certificate or released, and the files are kept as the
-# run's artifacts.
+# To release, merge the new version in Cargo.toml, then run
+#   gh workflow run release.yml --ref main
+# It builds, signs and checks every package, then tags the commit
+# v<version> and publishes the release. `-f dry_run=true` does all of that
+# but the tag and the release. A failure anywhere publishes nothing.
 #
-# macOS signs with a Developer ID certificate and notarizes when these
-# repository secrets exist, and otherwise signs ad hoc, for local use only:
-#   APPLE_CERTIFICATE           the Developer ID Application certificate
+# A pull request that touches the packaging runs it as a rehearsal: nothing
+# is signed or published, and the files are kept as the run's artifacts.
+#
+# Signing runs in the `release` environment, which only main may use.
+# Its secrets, for macOS:
+#   MACOS_APPLICATION_P12       the Developer ID Application certificate
 #                               and its key, a .p12 file, base64
-#   APPLE_CERTIFICATE_PASSWORD  that file's password
-#   APPLE_API_KEY               an App Store Connect API key, a .p8 file,
+#   MACOS_P12_PASSWORD          that file's password
+#   MACOS_APPLICATION_IDENTITY  the certificate's name,
+#                               "Developer ID Application: ..."
+#   NOTARY_API_KEY              an App Store Connect API key, a .p8 file,
 #                               base64
-#   APPLE_API_KEY_ID            the key's id
-#   APPLE_API_ISSUER            the key's issuer id
-#
-# Windows signs with Azure Artifact Signing when these exist, and otherwise
-# not at all, so SmartScreen warns about the installer. Secrets, of an Entra
-# application that trusts this repository's tags (a federated credential,
-# so no password is stored) and holds the Artifact Signing Certificate
-# Profile Signer role:
+#   NOTARY_API_KEY_ID           the key's id
+#   NOTARY_API_ISSUER_ID        the key's issuer id
+# Its variables, for Windows: Azure Artifact Signing, which trusts this
+# repository's release environment through GitHub's OIDC token, so no
+# password is stored:
 #   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
-# Variables:
-#   AZURE_SIGNING_ENDPOINT  the signing account's region, such as
-#                           https://eus.codesigning.azure.net
-#   AZURE_SIGNING_ACCOUNT   the Artifact Signing account's name
-#   AZURE_SIGNING_PROFILE   the certificate profile's name
+#   AZURE_SIGNING_ENDPOINT, AZURE_SIGNING_ACCOUNT, AZURE_SIGNING_PROFILE
 name: Release
 
 on:
-  push:
-    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build, sign and check, but publish nothing
+        type: boolean
+        default: false
   pull_request:
     paths:
       - .github/workflows/release.yml
       - justfile
       - crates/viewer/bundle/**
       - crates/viewer/build.rs
-  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: true
+  # A release in progress is never cancelled; a rehearsal makes way for the
+  # next push.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
+  # Only a dispatched run signs; a pull request cannot reach the secrets.
+  SIGN: ${{ github.event_name == 'workflow_dispatch' }}
 
 jobs:
-  macos:
-    name: macOS disk image
-    runs-on: macos-latest
-    timeout-minutes: 60
-    env:
-      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+  prepare:
+    name: Version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - id: version
+        run: |
+          version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Check the branch and the version
+        if: env.SIGN == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ steps.version.outputs.version }}
+        run: |
+          if [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "::error::Release from main."; exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" > /dev/null; then
+            echo "::error::$TAG is already tagged. Bump the version in Cargo.toml first."; exit 1
+          fi
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "::error::A release named $TAG already exists."; exit 1
+          fi
+
+  macos:
+    name: macOS disk image
+    needs: prepare
+    runs-on: macos-latest
+    environment: ${{ github.event_name == 'workflow_dispatch' && 'release' || '' }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: Swatinem/rust-cache@v2
         with:
           key: release
       - uses: taiki-e/install-action@v2
         with:
           tool: just@1.59.0
-      # Apple's steps for a runner: the certificate goes into a keychain
-      # made for this job.
+      # The certificate goes into a keychain made for this job, as Apple's
+      # steps for a runner describe:
       # https://docs.github.com/en/actions/how-tos/deploy/deploy-to-third-party-platforms/sign-xcode-applications
       - name: Import the signing certificate
-        if: github.event_name != 'pull_request' && env.APPLE_CERTIFICATE != ''
+        if: env.SIGN == 'true'
         env:
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          MACOS_APPLICATION_P12: ${{ secrets.MACOS_APPLICATION_P12 }}
+          MACOS_P12_PASSWORD: ${{ secrets.MACOS_P12_PASSWORD }}
+          MACOS_APPLICATION_IDENTITY: ${{ secrets.MACOS_APPLICATION_IDENTITY }}
         run: |
           keychain="$RUNNER_TEMP/signing.keychain-db"
-          password=$(openssl rand -hex 24)
-          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          password=$(openssl rand -hex 32)
           security create-keychain -p "$password" "$keychain"
           security set-keychain-settings -lut 21600 "$keychain"
           security unlock-keychain -p "$password" "$keychain"
-          security import "$RUNNER_TEMP/certificate.p12" -P "$APPLE_CERTIFICATE_PASSWORD" \
-            -A -t cert -f pkcs12 -k "$keychain"
-          security set-key-partition-list -S apple-tool:,apple: -k "$password" "$keychain" > /dev/null
-          security list-keychain -d user -s "$keychain"
-          rm "$RUNNER_TEMP/certificate.p12"
-          identity=$(security find-identity -v -p codesigning "$keychain" \
-            | sed -n 's/.*"\(Developer ID Application: .*\)"/\1/p' | head -1)
-          test -n "$identity"
-          echo "CODESIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+          printf '%s' "$MACOS_APPLICATION_P12" | base64 --decode > "$RUNNER_TEMP/id.p12"
+          security import "$RUNNER_TEMP/id.p12" -k "$keychain" -P "$MACOS_P12_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/id.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" "$HOME/Library/Keychains/login.keychain-db"
+          security find-identity -v -p codesigning "$keychain" | grep -Fq "\"$MACOS_APPLICATION_IDENTITY\""
+          echo "CODESIGN_IDENTITY=$MACOS_APPLICATION_IDENTITY" >> "$GITHUB_ENV"
       - run: just dmg
       - name: Notarize and staple
-        if: env.CODESIGN_IDENTITY != '' && env.APPLE_API_KEY != ''
+        if: env.SIGN == 'true'
         env:
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          NOTARY_API_KEY: ${{ secrets.NOTARY_API_KEY }}
+          NOTARY_API_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
+          NOTARY_API_ISSUER_ID: ${{ secrets.NOTARY_API_ISSUER_ID }}
         run: |
-          echo "$APPLE_API_KEY" | base64 --decode > "$RUNNER_TEMP/key.p8"
+          key="$RUNNER_TEMP/notary.p8"
+          printf '%s' "$NOTARY_API_KEY" | base64 --decode > "$key"
+          notary() { xcrun notarytool "$@" --key "$key" --key-id "$NOTARY_API_KEY_ID" --issuer "$NOTARY_API_ISSUER_ID"; }
           dmg=$(ls target/release/bundle/*.dmg)
           # `--wait` returns once Apple has an answer, whatever it is.
-          xcrun notarytool submit "$dmg" --key "$RUNNER_TEMP/key.p8" \
-            --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER" \
-            --wait --output-format json | tee "$RUNNER_TEMP/notary.json"
-          rm "$RUNNER_TEMP/key.p8"
-          grep -Eq '"status" *: *"Accepted"' "$RUNNER_TEMP/notary.json"
+          notary submit "$dmg" --wait --output-format json > "$RUNNER_TEMP/notary.json"
+          cat "$RUNNER_TEMP/notary.json"
+          if ! jq -e '.status == "Accepted"' "$RUNNER_TEMP/notary.json" > /dev/null; then
+            notary log "$(jq -r .id "$RUNNER_TEMP/notary.json")"
+            rm "$key"; exit 1
+          fi
+          rm "$key"
           xcrun stapler staple "$dmg"
           xcrun stapler validate "$dmg"
       # The image as a person gets it: mounted, its app's signature
-      # checked, and the binary inside run.
+      # checked, and the binary inside run. A signed build must pass
+      # Gatekeeper.
       - name: Check the disk image
         run: |
           dmg=$(ls target/release/bundle/*.dmg)
           volume=$(hdiutil attach -nobrowse -readonly "$dmg" | tail -1 | cut -f3)
           app="$volume/Strikebrain Viewer.app"
           codesign --verify --deep --strict --verbose=2 "$app"
-          codesign -dv --verbose=2 "$app" 2>&1 | grep -E "Authority|Signature|flags"
+          codesign -dv --verbose=2 "$app" 2>&1 | grep -E "Authority|Signature|flags|Timestamp"
           "$app/Contents/MacOS/strikebrain-viewer" --version
+          if [ "$SIGN" = true ]; then
+            codesign -dvv "$app" 2>&1 | grep -Fx "Authority=$CODESIGN_IDENTITY"
+            spctl --assess --type execute --verbose=2 "$app"
+            spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
+          fi
           hdiutil detach "$volume" -quiet
       - uses: actions/upload-artifact@v7
         with:
@@ -126,12 +174,15 @@ jobs:
 
   linux:
     name: Linux packages
+    needs: prepare
     # The oldest Ubuntu the runners offer, so the binary asks for the
     # oldest C library.
     runs-on: ubuntu-22.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       # The libraries the app links, as in ci.yml.
       - run: |
           sudo apt-get update
@@ -160,16 +211,18 @@ jobs:
 
   windows:
     name: Windows packages
+    needs: prepare
     runs-on: windows-2025
+    environment: ${{ github.event_name == 'workflow_dispatch' && 'release' || '' }}
     timeout-minutes: 60
     permissions:
       contents: read
       # Azure takes GitHub's token for this run in place of a password.
       id-token: write
-    env:
-      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: Swatinem/rust-cache@v2
         with:
           key: release
@@ -178,76 +231,85 @@ jobs:
           tool: just@1.59.0
       # Built before the login, whose token does not last a cold build.
       - run: cargo build --release --locked -p viewer
-      - uses: azure/login@v3
-        if: github.event_name != 'pull_request' && env.AZURE_CLIENT_ID != ''
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        if: env.SIGN == 'true'
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      # Microsoft's steps for SignTool: its plugin for Artifact Signing, and
-      # a file that names the account. The plugin signs in as the login
-      # above did.
-      # https://learn.microsoft.com/azure/artifact-signing/how-to-signing-integrations
-      - name: Set up signing
-        if: github.event_name != 'pull_request' && env.AZURE_CLIENT_ID != ''
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      # Also installs the ArtifactSigning module that windows-sign.ps1 uses.
+      - name: Sign the executable
+        if: env.SIGN == 'true'
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          files: ${{ github.workspace }}\target\release\strikebrain-viewer.exe
+      # Inno Setup signs the uninstaller and the installer with
+      # windows-sign.ps1 as it builds them.
+      - name: Build the packages
         env:
-          ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
-          ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
-          PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          nuget install Microsoft.ArtifactSigning.Client -x -OutputDirectory $env:RUNNER_TEMP
-          $dlib = "$env:RUNNER_TEMP\Microsoft.ArtifactSigning.Client\bin\x64\Azure.CodeSigning.Dlib.dll"
-          if (-not (Test-Path $dlib)) { throw "no signing plugin at $dlib" }
-          $metadata = "$env:RUNNER_TEMP\metadata.json"
-          @{
-            Endpoint = $env:ENDPOINT
-            CodeSigningAccountName = $env:ACCOUNT
-            CertificateProfileName = $env:PROFILE
-            ExcludeCredentials = @(
-              'EnvironmentCredential', 'ManagedIdentityCredential', 'WorkloadIdentityCredential',
-              'SharedTokenCacheCredential', 'VisualStudioCredential', 'VisualStudioCodeCredential',
-              'AzurePowerShellCredential', 'AzureDeveloperCliCredential', 'InteractiveBrowserCredential'
-            )
-          } | ConvertTo-Json | Set-Content $metadata
-          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" |
-            Sort-Object { [version]$_.Directory.Parent.Name } | Select-Object -Last 1
-          $command = "`"$signtool`" sign /v /fd SHA256 /tr http://timestamp.acs.microsoft.com /td SHA256 /dlib `"$dlib`" /dmdf `"$metadata`""
-          "SIGNTOOL=$command" >> $env:GITHUB_ENV
-      - run: just windows-packages
+          SIGNTOOL: ${{ env.SIGN == 'true' && format('pwsh -NoProfile -File "{0}\crates\viewer\bundle\windows-sign.ps1"', github.workspace) || '' }}
+          AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
+        run: just windows-packages
       # The packages as a person gets them: the installer run without its
-      # pages, the installed binary run, then uninstalled; and the .zip
-      # unpacked and its binary run. A signed build must be signed
-      # throughout.
+      # pages, the installed app opened until it shows its window, then
+      # uninstalled; and the .zip unpacked and its binary run. A signed
+      # build must be signed and timestamped throughout, by one publisher.
       - name: Check the packages
         shell: pwsh
+        env:
+          STRIKEBRAIN_VIEWER_STATE: ${{ runner.temp }}\state.json
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
+          function Invoke-Quietly($file) {
+            $process = Start-Process $file -Wait -PassThru -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
+            if ($process.ExitCode) { throw "$file returned $($process.ExitCode)" }
+          }
           $out = 'target\release\bundle'
           $setup = Get-Item "$out\*-setup.exe"
-          Start-Process $setup -Wait -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
+          Invoke-Quietly $setup
           $app = "$env:LOCALAPPDATA\Programs\Strikebrain Viewer"
+          $exe = Get-Item "$app\strikebrain-viewer.exe"
           Get-ChildItem $app | ForEach-Object Name
           # A windowed program's output reaches a pipe, not the console.
-          $version = & "$app\strikebrain-viewer.exe" --version | Out-String
+          $version = & $exe --version | Out-String
           $version
           if ($version -notmatch '^strikebrain-viewer \d') { throw 'the installed binary did not name its version' }
-          (Get-Item "$app\strikebrain-viewer.exe").VersionInfo | Format-List ProductName, ProductVersion, FileDescription
-          $signed = @($setup, (Get-Item "$app\strikebrain-viewer.exe"), (Get-Item "$app\unins000.exe"))
+          $exe.VersionInfo | Format-List ProductName, ProductVersion, FileDescription
+          $viewer = Start-Process $exe -PassThru
+          try {
+            $limit = [DateTime]::UtcNow.AddSeconds(30)
+            while (!$viewer.HasExited -and !$viewer.MainWindowHandle -and [DateTime]::UtcNow -lt $limit) {
+              Start-Sleep -Milliseconds 200
+              $viewer.Refresh()
+            }
+            if ($viewer.HasExited -or !$viewer.MainWindowHandle) { throw 'the installed app did not open its window' }
+            "window: $($viewer.MainWindowTitle)"
+          } finally {
+            if (!$viewer.HasExited) { $viewer.Kill(); $viewer.WaitForExit() }
+          }
           Expand-Archive (Get-Item "$out\*.zip") "$env:RUNNER_TEMP\unzipped"
           $portable = Get-Item "$env:RUNNER_TEMP\unzipped\*\strikebrain-viewer.exe"
           & $portable --version | Out-String
-          $signed += $portable
-          $signed | ForEach-Object { Get-AuthenticodeSignature $_ } | Format-Table Status, Path
-          if ($env:SIGNTOOL) {
-            $signed | ForEach-Object {
-              if ((Get-AuthenticodeSignature $_).Status -ne 'Valid') { throw "$_ is not signed" }
+          $uninstaller = Get-Item "$app\unins000.exe"
+          $files = $setup, $exe, $uninstaller, $portable
+          $files | ForEach-Object { Get-AuthenticodeSignature $_ } |
+            Format-Table Status, @{ n = 'Signer'; e = { $_.SignerCertificate.Subject } }, Path -Wrap
+          if ($env:SIGN -eq 'true') {
+            $publishers = $files | ForEach-Object {
+              $signature = Get-AuthenticodeSignature $_
+              if ($signature.Status -ne 'Valid' -or !$signature.TimeStamperCertificate) { throw "$_ has no trusted, timestamped signature" }
+              $signature.SignerCertificate.Subject
             }
+            if (@($publishers | Sort-Object -Unique).Count -ne 1) { throw 'the files name different publishers' }
           }
-          Start-Process "$app\unins000.exe" -Wait -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
-          if (Test-Path "$app\strikebrain-viewer.exe") { throw 'the uninstaller left the binary' }
+          Invoke-Quietly $uninstaller
+          if (Test-Path $exe) { throw 'the uninstaller left the binary' }
       - uses: actions/upload-artifact@v7
         with:
           name: windows
@@ -256,33 +318,51 @@ jobs:
             target/release/bundle/*-setup.exe
           if-no-files-found: error
 
-  release:
-    name: Draft release
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [macos, linux, windows]
+  publish:
+    name: Publish
+    needs: [prepare, macos, linux, windows]
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       contents: write
       id-token: write
       attestations: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      TAG: v${{ needs.prepare.outputs.version }}
     steps:
-      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
-      - name: Check the tag names the version built
-        run: |
-          version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
-          test "v$version" = "$GITHUB_REF_NAME"
-      - run: cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
-      # A signed record that these files were built here, from this
-      # commit: `gh attestation verify <file> -R <this repository>`.
-      - uses: actions/attest@v4
+      - run: cd dist && sha256sum -- * > SHA256SUMS && cat SHA256SUMS
+      # A signed record that these files were built by this workflow from
+      # this commit: `gh attestation verify <file> -R <this repository>`.
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: dist/*
-      - name: Draft the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --draft --verify-tag --generate-notes
+      - name: Verify the attestations
+        run: |
+          for file in dist/*; do
+            gh attestation verify "$file" -R "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+              --source-digest "$GITHUB_SHA" > /dev/null
+            echo "attested: $file"
+          done
+      # Creates the tag on the commit this run built.
+      - name: Publish the release
+        if: ${{ !inputs.dry_run }}
+        run: |
+          gh release create "$TAG" dist/* -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "Strikebrain Viewer $VERSION" --generate-notes --latest
+      # The files as a person downloads them from the release page.
+      - name: Check the published files
+        if: ${{ !inputs.dry_run }}
+        run: |
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D "$RUNNER_TEMP/published"
+          cd "$RUNNER_TEMP/published"
+          sha256sum -c SHA256SUMS
+          for file in *; do gh attestation verify "$file" -R "$GITHUB_REPOSITORY" > /dev/null; done
+          echo "published: https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG"
