@@ -38,6 +38,20 @@ notify = "9.0.0"
 semver = "1.0.28"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+# The digest of a downloaded update, checked against the one the release
+# gives.
+sha2 = { version = "0.11.2", default-features = false }
+# HTTP for the update check and download, blocking, run on GPUI's
+# background executor. Its default `rustls` feature is `rustls-no-provider`,
+# `_ring` and `rustls-webpki-roots`. The last vendors Mozilla's roots under
+# a licence deny.toml does not allow, so it is left out and
+# `platform-verifier` checks certificates against the system's store.
+# `_ring` is internal to ureq, but it is the only way to the default
+# crypto provider without depending on rustls directly: without it, or a
+# provider installed through rustls, the first https request panics (a
+# test in `update::download` catches that). No gzip: the feed is small and
+# a release file is already compressed.
+ureq = { version = "3.5.2", default-features = false, features = ["_ring", "platform-verifier", "rustls-no-provider"] }
 
 # `O_NONBLOCK`, so the stage's open of a file never waits on a FIFO. The
 # standard library takes the flag but does not name it; GPUI already builds

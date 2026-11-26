@@ -282,9 +282,7 @@ impl StateStore {
         if let Some(path) = std::env::var_os(STATE_FILE_VAR).filter(|path| !path.is_empty()) {
             return Some(Self::at(path));
         }
-        let (qualifier, organization, application) = split_app_id();
-        directories::ProjectDirs::from(qualifier, organization, application)
-            .map(|dirs| Self::at(dirs.config_dir().join("state.json")))
+        project_dirs().map(|dirs| Self::at(dirs.config_dir().join("state.json")))
     }
 
     /// Where the file is.
@@ -368,6 +366,13 @@ fn write_synced(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let mut file = fs::File::create(path)?;
     file.write_all(bytes)?;
     file.sync_all()
+}
+
+/// The platform's folders for the app, named for [`APP_ID`]. `None` when
+/// the platform has no home folder.
+pub(crate) fn project_dirs() -> Option<directories::ProjectDirs> {
+    let (qualifier, organization, application) = split_app_id();
+    directories::ProjectDirs::from(qualifier, organization, application)
 }
 
 /// [`APP_ID`] split into the parts `directories` joins again on macOS.

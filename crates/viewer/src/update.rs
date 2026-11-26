@@ -5,9 +5,16 @@
     not(test),
     expect(dead_code, reason = "used by the updater in the next task")
 )]
+mod download;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "used by the updater in the next task")
+)]
 mod feed;
 #[cfg_attr(
     not(test),
     expect(dead_code, reason = "used by the updater in the next task")
 )]
 mod install;
+#[cfg(test)]
+mod test_server;
