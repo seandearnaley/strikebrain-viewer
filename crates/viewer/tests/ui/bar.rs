@@ -67,6 +67,7 @@ fn every_bar_button_is_a_labelled_icon(cx: &mut TestAppContext) {
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         for (id, label) in [
+            ("sidebar", "Hide Sidebar"),
             ("add-folder", "Add Folder"),
             ("more", "More"),
             ("present", "Present"),

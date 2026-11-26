@@ -145,6 +145,9 @@ pub(crate) enum StateEvent {
         /// The focus row's index before.
         focus_before: Option<usize>,
     },
+    /// A folder was asked for while the app runs: added, or already open
+    /// and now the focus row. The window shows the explorer.
+    FolderAdded,
 }
 
 /// What the tree showed before a change of folders: see

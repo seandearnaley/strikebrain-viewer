@@ -21,7 +21,8 @@
 //! While presenting, the stage declares `PRESENTATION` instead (and
 //! `PRESENTATION_EDITOR` over its editor). Keys the presentation leaves
 //! out are bound there to `NoAction`, which hides every binding they have
-//! elsewhere: ⌘O, ⌘F, Tab and Enter do nothing until Esc. ⌘Q still quits.
+//! elsewhere: ⌘O, ⌘F, the sidebar's key, Tab and Enter do nothing until
+//! Esc. ⌘Q still quits.
 
 use gpui_kit::{KeyBinding, NoAction, actions};
 
@@ -150,6 +151,8 @@ actions!(
         SelectAllFiles,
         /// Unchecks every file, hidden ones included.
         DeselectAll,
+        /// Hides the explorer, or shows it again.
+        ToggleSidebar,
     ]
 );
 
@@ -216,6 +219,14 @@ const FULL_SCREEN: &str = if cfg!(target_os = "macos") {
     "f11"
 };
 
+/// The key that hides and shows the sidebar: Finder's and Notes' on macOS,
+/// the usual Ctrl+B elsewhere.
+pub(crate) const SIDEBAR: &str = if cfg!(target_os = "macos") {
+    "ctrl-cmd-s"
+} else {
+    "ctrl-b"
+};
+
 /// Every key binding of the application.
 ///
 /// Learning exercise: Sean may rewrite this body; the tests below define it.
@@ -254,6 +265,7 @@ pub(crate) fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new(secondary!("shift-r"), Reveal, None),
         KeyBinding::new(secondary!("alt-c"), CopyPath, None),
         KeyBinding::new(FULL_SCREEN, ToggleFullScreen, None),
+        KeyBinding::new(SIDEBAR, ToggleSidebar, None),
     ];
     // Keys only macOS has a convention for.
     if cfg!(target_os = "macos") {
@@ -318,6 +330,7 @@ pub(crate) fn bindings() -> Vec<KeyBinding> {
             KeyBinding::new(secondary!("o"), NoAction, presentation),
             KeyBinding::new("tab", NoAction, presentation),
             KeyBinding::new("shift-tab", NoAction, presentation),
+            KeyBinding::new(SIDEBAR, NoAction, presentation),
         ]);
     }
     bindings
@@ -442,6 +455,7 @@ mod tests {
                 secondary!("o"),
                 "tab",
                 "shift-tab",
+                SIDEBAR,
             ] {
                 assert_bound(key, Some(context), &NoAction);
             }
@@ -480,6 +494,7 @@ mod tests {
         assert_bound(secondary!("shift-r"), None, &Reveal);
         assert_bound(secondary!("alt-c"), None, &CopyPath);
         assert_bound(FULL_SCREEN, None, &ToggleFullScreen);
+        assert_bound(SIDEBAR, None, &ToggleSidebar);
     }
 
     #[test]
