@@ -1,6 +1,13 @@
 # cargo-deny 0.22: https://embarkstudios.github.io/cargo-deny/
 # Run with `cargo deny check`. Advisories fetch the RustSec database.
 
+[graph]
+# Deny checks what can ship: the three targets the release workflow builds.
+# Crates used only on other targets are left out, such as the wasm32-only
+# root bundle (webpki-root-certs, CDLA-Permissive-2.0) under
+# rustls-platform-verifier. The licence allowlist below is unchanged.
+targets = ["aarch64-apple-darwin", "x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]
+
 [advisories]
 # Defaults kept: any vulnerability fails; unmaintained or unsound fails for direct dependencies.
 yanked = "deny"
