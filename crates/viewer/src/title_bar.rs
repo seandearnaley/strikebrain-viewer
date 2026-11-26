@@ -241,7 +241,9 @@ fn stage_part(state: &AppState, beside_explorer: bool, cx: &App) -> impl IntoEle
         // Empty, so the window moves from here.
         .child(div().flex_1())
         .child(
+            // Disabled while the stage is blank, which is when it has no
+            // title.
             command("present", Icons::Play, "Present", StartPresenting)
-                .disabled(state.current().is_none()),
+                .disabled(state.stage_title().is_none()),
         )
 }

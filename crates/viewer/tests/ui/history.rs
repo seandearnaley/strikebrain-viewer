@@ -9,7 +9,7 @@ use gpui_kit::{
     NavigationDirection, TestAppContext, point, px,
 };
 use viewer::keys::{DeselectAll, GoBack, GoForward, Refresh, SelectAllFiles};
-use viewer::{AppState, Launch, SavedView, Session};
+use viewer::{AppState, Launch, SavedView, Session, StageView};
 
 use crate::stage::code_view;
 use crate::{
@@ -353,4 +353,52 @@ fn a_folder_bringing_its_checks_to_a_blank_stage_is_a_step(cx: &mut TestAppConte
     click(cx, handle, row(b));
     dispatch(cx, handle, GoBack);
     assert_eq!(current(cx, &view), Some(a));
+}
+
+/// A launch of `dir` with a saved view of the gallery: a.txt and c.txt
+/// checked, a.txt on the stage.
+fn saved_gallery(dir: &std::path::Path) -> Session {
+    let folder = explorer::canonical(dir).expect("the folder exists");
+    Session {
+        view: Some(SavedView {
+            folders: vec![SavedFolder {
+                path: folder.clone(),
+                open: vec![String::new()],
+                selection: SavedSelection {
+                    files: vec!["a.txt".into(), "c.txt".into()],
+                    ..SavedSelection::default()
+                },
+            }],
+            current: Some(folder.join("a.txt")),
+            view: StageView::Gallery,
+            ..SavedView::default()
+        }),
+        ..Session::default()
+    }
+}
+
+#[gpui_kit::test]
+fn a_saved_gallery_is_the_first_step(cx: &mut TestAppContext) {
+    let dir = folder(&[("a.txt", "a"), ("b.txt", "b"), ("c.txt", "c")]);
+    let launch = Launch::Folders(vec![dir.path().to_owned()]);
+    let (handle, view) = open_app_with_session(cx, launch, saved_gallery(dir.path()));
+    assert!(read(cx, &view, AppState::shows_gallery));
+    assert!(!read(cx, &view, AppState::can_go_back));
+
+    let b = node(cx, &view, "b.txt");
+    click(cx, handle, row(b));
+    dispatch(cx, handle, GoBack);
+    assert!(read(cx, &view, AppState::shows_gallery));
+    assert!(!read(cx, &view, AppState::can_go_back));
+}
+
+#[gpui_kit::test]
+fn a_saved_gallery_a_file_opened_at_launch_replaces_is_no_step(cx: &mut TestAppContext) {
+    let dir = folder(&[("a.txt", "a"), ("b.txt", "b"), ("c.txt", "c")]);
+    let b = dir.path().join("b.txt");
+    let launch = Launch::Folders(vec![dir.path().to_owned(), b.clone()]);
+    let (_, view) = open_app_with_session(cx, launch, saved_gallery(dir.path()));
+    assert_eq!(current(cx, &view), Some(node_at(cx, &view, &b)));
+    assert!(!read(cx, &view, AppState::shows_gallery));
+    assert!(!read(cx, &view, AppState::can_go_back));
 }

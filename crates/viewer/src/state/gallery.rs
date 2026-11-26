@@ -167,15 +167,24 @@ impl AppState {
 
     /// Esc in the file view, and its grid button: back to the gallery when
     /// two or more files are checked, its focus on the tile of the file
-    /// that was showing (or the nearest checked file) and scrolled to it.
-    /// Returns false, changing nothing, with fewer than two.
+    /// that was showing (or the nearest checked file) and scrolled to it,
+    /// a new step. Returns false, changing nothing, with fewer than two.
     pub fn show_gallery(&mut self, cx: &mut Context<Self>) -> bool {
+        let shown = self.open_gallery(cx);
+        if shown {
+            self.record(Record::Add);
+        }
+        shown
+    }
+
+    /// Shows the gallery as [`AppState::show_gallery`] does, recording no
+    /// step.
+    fn open_gallery(&mut self, cx: &mut Context<Self>) -> bool {
         if self.gallery_len() < 2 || self.presenting {
             return false;
         }
         self.view = StageView::Gallery;
         self.set_tile(self.nearest_tile(self.current));
-        self.record(Record::Add);
         cx.emit(StateEvent::RevealTile);
         cx.notify();
         true
@@ -300,10 +309,12 @@ impl AppState {
     }
 
     /// Restores the saved view once the folders are on screen: the gallery
-    /// only while two or more files are checked.
+    /// only while two or more files are checked. Records no step: the
+    /// launch records what then shows, unless a file opened with it
+    /// takes the stage first.
     pub(super) fn restore_view(&mut self, view: StageView, cx: &mut Context<Self>) {
         if view == StageView::Gallery {
-            self.show_gallery(cx);
+            self.open_gallery(cx);
         }
     }
 }
