@@ -144,23 +144,40 @@ impl AppState {
     /// With" or the Dock. A folder is added as a top-level folder, after
     /// those open, and scanned. One already open, or one an open folder's
     /// tree lists, is not added: its row opens and becomes the focus row.
-    /// Either way the state emits `StateEvent::FolderAdded`, and the window
-    /// shows the explorer. One inside a folder whose first scan runs waits
-    /// for that scan. A file opens its folder so, emitting nothing, then
-    /// shows on the stage with its row the focus row. Several files in one
-    /// call are checked as well, so they show as the gallery, with the
-    /// files checked before. `waiting` holds saved views, each applied when
-    /// its folder's first scan lands.
+    /// One inside a folder whose first scan runs waits for that scan. Each
+    /// folder asked for emits `StateEvent::FolderAdded`, and the window
+    /// shows the explorer; a launch's folders emit before the window
+    /// listens. A file opens its folder so, emitting nothing, then shows on
+    /// the stage with its row the focus row. Several files in one call are
+    /// checked as well, so they show as the gallery, with the files checked
+    /// before. `waiting` holds saved views, each applied when its folder's
+    /// first scan lands.
     pub fn open_paths(
         &mut self,
         paths: Vec<PathBuf>,
+        waiting: Vec<SavedFolder>,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_asked(paths, waiting, true, cx);
+    }
+
+    /// Opens `paths` as [`AppState::open_paths`] does, each folder among
+    /// them emitting `StateEvent::FolderAdded` only with `announce`.
+    fn open_asked(
+        &mut self,
+        paths: Vec<PathBuf>,
         mut waiting: Vec<SavedFolder>,
+        announce: bool,
         cx: &mut Context<Self>,
     ) {
         let together = paths.iter().filter(|path| path.is_file()).count() > 1;
         for path in paths {
             let mut path = resolve(&path);
             let file = path.is_file();
+            // A file shows on the stage; a folder, as its row.
+            if announce && !file {
+                cx.emit(StateEvent::FolderAdded);
+            }
             if file {
                 let folder = path.parent().map(Path::to_path_buf);
                 self.asked_files.push((path.clone(), together));
@@ -174,10 +191,6 @@ impl AppState {
             let open = self.folders.iter().any(|folder| folder.path == path);
             if let Some(id) = self.listed(&path).or_else(|| self.folder_node(&path)) {
                 self.reveal(id, cx);
-                // A file shows on the stage; a folder, as its row.
-                if !file {
-                    cx.emit(StateEvent::FolderAdded);
-                }
                 continue;
             }
             if open {
@@ -196,9 +209,6 @@ impl AppState {
             self.folders.push(Folder::new(key, path, saved));
             self.follow(key, cx);
             self.start_scan(key, cx);
-            if !file {
-                cx.emit(StateEvent::FolderAdded);
-            }
         }
         self.settle_asked_files(cx);
         cx.notify();
@@ -279,7 +289,8 @@ impl AppState {
         cx: &mut Context<Self>,
     ) {
         for (path, saved) in asked {
-            self.open_paths(vec![path], saved.into_iter().collect(), cx);
+            // Announced when it was asked for, unless the launch asked.
+            self.open_asked(vec![path], saved.into_iter().collect(), false, cx);
         }
     }
 

@@ -110,7 +110,8 @@ fn explorer_part(
         .flex_shrink_0()
         .items_center()
         .gap_1()
-        .child(div().w(lead).flex_shrink_0())
+        // The lights' room, before the sidebar button.
+        .pl(lead)
         .child(sidebar_button(width.is_none()));
     let Some(width) = width else {
         return part;
