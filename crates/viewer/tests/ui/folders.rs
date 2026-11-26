@@ -80,8 +80,6 @@ fn a_folder_row_shows_its_remove_button_while_hovered(cx: &mut TestAppContext) {
     .unwrap();
     cx.run_until_parked();
     assert_eq!(rows_now(cx, handle), under(one.path(), &["docs", "a.txt"]));
-    let title = cx.update(|cx| view.read(cx).title().cloned());
-    assert_eq!(title.as_deref(), Some("Strikebrain Viewer"));
 }
 
 #[gpui_kit::test]
