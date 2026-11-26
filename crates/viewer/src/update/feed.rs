@@ -36,8 +36,13 @@ pub(crate) enum FeedError {
     /// The release is a draft. GitHub's latest is never one; a feed pointed
     /// elsewhere might be.
     Draft,
-    /// The release is a pre-release, likewise.
+    /// The release is a pre-release, by GitHub's flag or by its tag: the
+    /// spec offers none. GitHub's latest is never one; a feed pointed
+    /// elsewhere might be.
     Prerelease,
+    /// The tag carries build metadata (`+...`): it would not name the
+    /// release's files and compares oddly with the running version.
+    BuildMetadata,
 }
 
 impl fmt::Display for FeedError {
@@ -47,6 +52,7 @@ impl fmt::Display for FeedError {
             Self::Version(error) => write!(f, "the release's tag is not a version: {error}"),
             Self::Draft => f.write_str("the release is a draft"),
             Self::Prerelease => f.write_str("the release is a pre-release"),
+            Self::BuildMetadata => f.write_str("the release's tag carries build metadata"),
         }
     }
 }
@@ -98,6 +104,12 @@ pub(crate) fn parse(json: &[u8]) -> Result<Release, FeedError> {
     }
     let tag = raw.tag_name.strip_prefix('v').unwrap_or(&raw.tag_name);
     let version = semver::Version::parse(tag).map_err(FeedError::Version)?;
+    if !version.pre.is_empty() {
+        return Err(FeedError::Prerelease);
+    }
+    if !version.build.is_empty() {
+        return Err(FeedError::BuildMetadata);
+    }
     Ok(Release {
         version,
         page: raw.html_url,
@@ -236,6 +248,24 @@ mod tests {
         assert!(matches!(parse(pre), Err(FeedError::Prerelease)));
         assert!(matches!(parse(b"not json"), Err(FeedError::Json(_))));
         assert_eq!(FeedError::Draft.to_string(), "the release is a draft");
+    }
+
+    #[test]
+    fn a_tag_that_names_a_pre_release_is_refused_whatever_the_flag_says() {
+        let tag = br#"{"tag_name":"v1.0.0-rc.1","html_url":"x","prerelease":false,"assets":[]}"#;
+        assert!(matches!(parse(tag), Err(FeedError::Prerelease)));
+        let untagged = br#"{"tag_name":"1.0.0-beta","html_url":"x","assets":[]}"#;
+        assert!(matches!(parse(untagged), Err(FeedError::Prerelease)));
+    }
+
+    #[test]
+    fn a_tag_with_build_metadata_is_refused() {
+        let build = br#"{"tag_name":"v1.0.0+build.5","html_url":"x","assets":[]}"#;
+        assert!(matches!(parse(build), Err(FeedError::BuildMetadata)));
+        assert_eq!(
+            FeedError::BuildMetadata.to_string(),
+            "the release's tag carries build metadata"
+        );
     }
 
     #[test]
