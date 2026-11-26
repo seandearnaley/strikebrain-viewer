@@ -66,8 +66,8 @@ pub(super) struct Folder {
     /// their saved views: shown in its tree when it lands if it lists
     /// them, else added as folders of their own.
     pub(super) asked_inside: Vec<(PathBuf, Option<SavedFolder>)>,
-    /// A file opened on its own: its tree is the file alone, it is watched
-    /// alone, and it is never saved.
+    /// A file opened on its own: its tree is the file alone, it is not
+    /// followed on disk (Refresh reads it again), and it is never saved.
     pub(super) file: bool,
 }
 

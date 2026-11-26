@@ -219,27 +219,39 @@ async fn a_change_rescans_only_the_folder_it_is_in(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-async fn a_file_opened_on_its_own_is_followed_alone(cx: &mut TestAppContext) {
+async fn a_file_opened_on_its_own_is_not_followed_and_refresh_reads_it_again(
+    cx: &mut TestAppContext,
+) {
     let dir = folder(&[("a.txt", "a"), ("b.txt", "b")]);
     let file = dir.path().join("b.txt");
-    let (_, view) = open_watching(cx, &file);
+    let (handle, view) = open_watching(cx, &file);
     let scans = settled(cx, &view).await;
+    // Not followed, and not for want of a watcher: Refresh is no warning.
+    assert_eq!(read(cx, &view, |state| state.watch_error().cloned()), None);
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("refresh").is_none());
+    })
+    .unwrap();
 
-    // Its folder is not followed: a change beside the file reads nothing.
-    write(dir.path(), "a.txt", "a again");
+    // The file changes: nothing reads it.
+    write(dir.path(), "b.txt", "b, longer");
     pause(cx, Duration::from_millis(600)).await;
     assert_eq!(read(cx, &view, AppState::scans), scans, "no rescan");
 
-    // The file changes: it is read again, once.
-    write(dir.path(), "b.txt", "b again");
-    until(cx, "the file is read again", |cx| {
-        read(cx, &view, AppState::scans) > scans
-    })
-    .await;
-    assert_eq!(settled(cx, &view).await, scans + 1, "one rescan");
-
-    // Deleted: its row is unreadable, with the system's message.
+    // Refresh reads it again: its new size, then, once it is gone, an
+    // unreadable row with the system's message.
+    let size = |cx: &mut TestAppContext| {
+        read(cx, &view, |state| {
+            let tree = state.explorer()?.tree();
+            tree.size(tree.folders().next()?)
+        })
+    };
+    let state = crate::state(cx, &view);
+    state.update(cx, AppState::refresh);
+    until(cx, "the new size shows", |cx| size(cx) == Some(9)).await;
     std::fs::remove_file(&file).unwrap();
+    state.update(cx, AppState::refresh);
     let tooltip = |cx: &mut TestAppContext| {
         read(cx, &view, |state| {
             let top = state.explorer()?.tree().folders().next()?;
