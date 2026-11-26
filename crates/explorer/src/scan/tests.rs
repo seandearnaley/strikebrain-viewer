@@ -307,18 +307,17 @@ fn a_missing_root_is_an_error() {
 }
 
 #[test]
-fn a_file_root_is_an_error() {
-    let dir = folder(&[("file.txt", "x")]);
-    let err = scan(
-        &dir.path().join("file.txt"),
-        ScanOptions::default(),
-        &AtomicBool::new(false),
-    )
-    .unwrap_err();
-    assert!(
-        matches!(&err, ScanError::Root(e) if e.kind() == io::ErrorKind::NotADirectory),
-        "{err:?}"
-    );
+fn a_file_scans_as_one_node_with_its_size() {
+    let dir = folder(&[("photo.png", "12345")]);
+    let path = dir.path().join("photo.png");
+
+    let tree = scan(&path, ScanOptions::default(), &AtomicBool::new(false)).unwrap();
+    assert_eq!(tree.node_count(), 1);
+    assert!(tree.is_file(NodeId::ROOT));
+    assert_eq!(tree.name(NodeId::ROOT), "photo.png");
+    assert_eq!(tree.size(NodeId::ROOT), Some(5));
+    assert!(tree.has_sizes());
+    assert_eq!(tree.root_path(), crate::canonical(&path).unwrap());
 }
 
 #[test]
@@ -454,6 +453,24 @@ mod unix {
         let tree = scan_default(&link);
         assert_eq!(paths(&tree), ["a.txt"]);
         assert_eq!(tree.name(NodeId::ROOT), "real");
+    }
+
+    #[test]
+    fn a_fifo_root_is_an_error() {
+        let dir = folder(&[]);
+        let pipe = dir.path().join("pipe");
+        let made = Command::new("mkfifo")
+            .arg(&pipe)
+            .status()
+            .is_ok_and(|status| status.success());
+        if !made {
+            return;
+        }
+        let err = scan(&pipe, ScanOptions::default(), &AtomicBool::new(false)).unwrap_err();
+        assert!(
+            matches!(&err, ScanError::Root(e) if e.kind() == std::io::ErrorKind::NotADirectory),
+            "{err:?}"
+        );
     }
 
     #[test]
