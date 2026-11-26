@@ -250,9 +250,19 @@ impl AppState {
     }
 
     /// A file asked for that no tree lists, and that no folder being read
-    /// may list: a top-level row of its own. One already a row that could
-    /// not be read is read again.
+    /// may list: a top-level row of its own. One that is a row of its own
+    /// already is read again, since it is not followed on disk: it may have
+    /// changed, or come back. A folder that lists it is followed, and is
+    /// not read again.
     fn open_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        if let Some(key) = self
+            .folders
+            .iter()
+            .find(|folder| folder.shown && folder.path == path)
+            .map(|folder| folder.key)
+        {
+            return self.refresh_folder(key, cx);
+        }
         let waits = self.listed(&path).is_some()
             || self
                 .folders
@@ -260,14 +270,6 @@ impl AppState {
                 .any(|folder| !folder.shown && folder.holds(&path));
         if waits {
             return;
-        }
-        if let Some(key) = self
-            .folders
-            .iter()
-            .find(|folder| folder.path == path)
-            .map(|folder| folder.key)
-        {
-            return self.refresh_folder(key, cx);
         }
         let key = self.next_key;
         self.next_key += 1;

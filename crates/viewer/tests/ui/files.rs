@@ -1,8 +1,9 @@
 //! Files opened on their own: a top-level row each, their folders never
 //! read; shown in an open folder that lists them; taken in by a folder
-//! added later; removed, followed and never saved.
+//! added later; read again when opened again; removed and never saved.
 
-use gpui_kit::{Entity, TestAppContext};
+use gpui_kit::test::TestWindowExt as _;
+use gpui_kit::{AnyWindowHandle, AppContext as _, Entity, TestAppContext};
 use viewer::keys::GoBack;
 use viewer::{AppState, AppView, Launch, Session, StateStore};
 
@@ -10,6 +11,18 @@ use crate::{
     checked, click, current, dispatch, focus, folder, node_at, not_found, open_app,
     open_app_with_session, read, row, rows_now, under,
 };
+
+/// The text the code view holds, once a frame is drawn.
+fn code(cx: &mut TestAppContext, handle: AnyWindowHandle) -> Option<String> {
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.try_find("stage-code").map(|_| {
+            let view = crate::stage::code_view(window);
+            view.value().unwrap_or_default().to_owned()
+        })
+    })
+    .expect("read the stage")
+}
 
 /// The first top-level row's tooltip: its path, then why it could not be
 /// read, if it could not.
@@ -43,9 +56,12 @@ fn a_file_handed_over_shows_in_the_open_folder_or_as_its_own_row(cx: &mut TestAp
     let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
 
     // A file the open folder lists: the folders above it open, and it shows.
+    // The folder is followed on disk, so it is not read again.
+    let scans = read(cx, &view, AppState::scans);
     let inside = dir.path().join("deep/down/a.txt");
     view.update(cx, |view, cx| view.open_paths(vec![inside.clone()], cx));
     cx.run_until_parked();
+    assert_eq!(read(cx, &view, AppState::scans), scans);
     assert_eq!(
         rows_now(cx, handle),
         under(dir.path(), &["deep", "down", "a.txt", "b.txt"])
@@ -229,6 +245,31 @@ fn a_file_row_that_could_not_be_read_is_read_again_when_asked_for(cx: &mut TestA
     let path = explorer::canonical(&file).unwrap();
     let tooltip = read(cx, &view, |state| state.folder_tooltip(c));
     assert_eq!(tooltip.as_deref(), path.to_str());
+}
+
+#[gpui_kit::test]
+fn a_file_row_opened_again_is_read_again(cx: &mut TestAppContext) {
+    let dir = folder(&[("a.txt", "first")]);
+    let file = dir.path().join("a.txt");
+    let (handle, view) = open_app(cx, Launch::Folders(vec![file.clone()]));
+    assert_eq!(code(cx, handle).as_deref(), Some("first"));
+    let scans = read(cx, &view, AppState::scans);
+
+    // Changed elsewhere, then opened again, as Open With sends it: it is
+    // not followed on disk, so opening it reads it again.
+    std::fs::write(&file, "second, longer").unwrap();
+    view.update(cx, |view, cx| view.open_paths(vec![file.clone()], cx));
+    cx.run_until_parked();
+    assert_eq!(read(cx, &view, AppState::scans), scans + 1);
+    assert_eq!(rows_now(cx, handle), ["a.txt"]);
+    let size = read(cx, &view, |state| {
+        let tree = state.explorer()?.tree();
+        tree.size(tree.folders().next()?)
+    });
+    assert_eq!(size, Some(14));
+    assert_eq!(code(cx, handle).as_deref(), Some("second, longer"));
+    // The file was on the stage already: no step.
+    assert!(!read(cx, &view, AppState::can_go_back));
 }
 
 #[gpui_kit::test]
