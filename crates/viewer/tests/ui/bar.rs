@@ -70,6 +70,8 @@ fn every_bar_button_is_a_labelled_icon(cx: &mut TestAppContext) {
             ("sidebar", "Hide Sidebar"),
             ("add-folder", "Add Folder"),
             ("more", "More"),
+            ("back", "Back"),
+            ("forward", "Forward"),
             ("present", "Present"),
         ] {
             let button = window.find(id);

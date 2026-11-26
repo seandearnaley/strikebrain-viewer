@@ -4,6 +4,7 @@
 use explorer::NodeId;
 use gpui_kit::Context;
 
+use super::history::Record;
 use super::{AppState, StateEvent};
 
 impl AppState {
@@ -69,6 +70,7 @@ impl AppState {
     fn checks_changed(&mut self, before: Option<NodeId>, cx: &mut Context<Self>) {
         self.selection_changed();
         self.show_for_checks(before, cx);
+        self.record(Record::Add);
         cx.notify();
     }
 
@@ -81,6 +83,7 @@ impl AppState {
         if explorer.tree().is_file(id) {
             self.current = Some(id);
             self.view = super::StageView::File;
+            self.record(Record::Add);
             cx.notify();
         }
     }
@@ -109,6 +112,7 @@ impl AppState {
         };
         if let Some(to) = to {
             self.current = Some(to);
+            self.record(Record::Replace);
             cx.emit(StateEvent::CurrentMoved);
             cx.notify();
         }

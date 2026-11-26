@@ -9,13 +9,15 @@
 //! in `state/scan.rs`, following them on disk in `state/watch.rs`, moving
 //! over the rows in `state/rows.rs`, checks and the stage in
 //! `state/checks.rs`, the gallery and which of the stage's views shows in
-//! `state/gallery.rs`, filtering in `state/filter.rs`, and restoring a
+//! `state/gallery.rs`, the stage's history for Back and Forward in
+//! `state/history.rs`, filtering in `state/filter.rs`, and restoring a
 //! saved view in `state/restore.rs`.
 
 mod checks;
 mod filter;
 mod folders;
 mod gallery;
+mod history;
 mod restore;
 mod rows;
 mod scan;
@@ -26,12 +28,14 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use explorer::{Explorer, IdMap, KindFilter, NodeId, Sort, Tree};
+use gpui_kit::component::history::History;
 use gpui_kit::{Context, EventEmitter, Result, Task};
 
 use crate::persist::SavedView;
 use folders::Folder;
 pub use gallery::StageView;
 pub(crate) use gallery::{DrawnTile, TileMotion};
+use history::{Record, Step};
 use restore::Pending;
 use watch::Watching;
 
@@ -185,6 +189,8 @@ pub struct AppState {
     /// Counts changes to the gallery other than a new tree: the checks and
     /// the order.
     gallery_changes: u64,
+    /// What the stage showed, for Back and Forward.
+    history: History<Step>,
     /// The keyboard focus row, by node so it survives row changes. Always a
     /// row on screen, or `None` when there are no rows.
     focus: Option<NodeId>,
@@ -265,6 +271,7 @@ impl AppState {
             tile: None,
             tile_at: 0,
             gallery_changes: 0,
+            history: History::new(),
             focus: None,
             focus_row: 0,
             selected: 0,
@@ -452,6 +459,7 @@ impl AppState {
             return self.landed(cx);
         }
         self.settle_focus();
+        self.record(Record::Replace);
         let top = before.top.and_then(|(from, id)| {
             let to = self.explorer.as_ref()?.row_of(map.get(id)?)?;
             Some((from, to))

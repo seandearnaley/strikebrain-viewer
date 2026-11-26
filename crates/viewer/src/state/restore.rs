@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use explorer::{Explorer, SavedFolder, SortKey};
 use gpui_kit::Context;
 
+use super::history::Record;
 use super::{AppState, StageView, StateEvent};
 use crate::persist::{FolderSnapshot, SavedView, SnapshotView};
 
@@ -64,22 +65,26 @@ impl AppState {
     /// After a folder landed or left: once every folder is on screen, what
     /// a saved view waits with applies, and a top row waiting for sizes
     /// shows once they are in. Either way the views hear that the rows
-    /// were rebuilt.
+    /// were rebuilt. Once every folder is on screen, what the stage shows
+    /// replaces the history's step: a launch's saved file or gallery is
+    /// its first.
     pub(super) fn landed(&mut self, cx: &mut Context<Self>) {
         if self.folders.iter().any(|folder| !folder.shown) {
             return self.rows_replaced(cx);
         }
         if let Some(pending) = self.restore.take() {
-            return self.finish_restore(pending, cx);
+            self.finish_restore(pending, cx);
+        } else {
+            let sized = self
+                .explorer
+                .as_ref()
+                .is_some_and(|explorer| explorer.tree().has_sizes());
+            match self.restore_top.take_if(|_| sized) {
+                Some(top) => self.show_saved_top(Some(&top), cx),
+                None => self.rows_replaced(cx),
+            }
         }
-        let sized = self
-            .explorer
-            .as_ref()
-            .is_some_and(|explorer| explorer.tree().has_sizes());
-        match self.restore_top.take_if(|_| sized) {
-            Some(top) => self.show_saved_top(Some(&top), cx),
-            None => self.rows_replaced(cx),
-        }
+        self.record(Record::Replace);
     }
 
     /// Applies the sort, the file on the stage, the stage's view and the

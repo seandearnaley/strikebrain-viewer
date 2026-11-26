@@ -16,6 +16,7 @@
 use explorer::NodeId;
 use gpui_kit::{Context, SharedString};
 
+use super::history::Record;
 use super::{AppState, StateEvent};
 use crate::menus::APP_NAME;
 
@@ -159,6 +160,7 @@ impl AppState {
         self.current = Some(id);
         self.set_tile(Some(id));
         self.view = StageView::File;
+        self.record(Record::Add);
         cx.emit(StateEvent::CurrentMoved);
         cx.notify();
     }
@@ -173,6 +175,7 @@ impl AppState {
         }
         self.view = StageView::Gallery;
         self.set_tile(self.nearest_tile(self.current));
+        self.record(Record::Add);
         cx.emit(StateEvent::RevealTile);
         cx.notify();
         true
@@ -203,7 +206,7 @@ impl AppState {
     }
 
     /// How many files are checked: the gallery's size.
-    fn gallery_len(&self) -> usize {
+    pub(super) fn gallery_len(&self) -> usize {
         self.explorer
             .as_ref()
             .map_or(0, explorer::Explorer::gallery_len)
@@ -211,7 +214,7 @@ impl AppState {
 
     /// The checked file nearest `id`: itself when checked, else the next
     /// checked file after it, else the one before, else the first.
-    fn nearest_tile(&self, id: Option<NodeId>) -> Option<NodeId> {
+    pub(super) fn nearest_tile(&self, id: Option<NodeId>) -> Option<NodeId> {
         let explorer = self.explorer.as_ref()?;
         id.and_then(|id| {
             if explorer.is_selected(id) {
@@ -227,7 +230,7 @@ impl AppState {
 
     /// Puts tile focus on `tile` and remembers where it stands in the
     /// gallery.
-    fn set_tile(&mut self, tile: Option<NodeId>) {
+    pub(super) fn set_tile(&mut self, tile: Option<NodeId>) {
         self.tile = tile;
         let at = self
             .explorer

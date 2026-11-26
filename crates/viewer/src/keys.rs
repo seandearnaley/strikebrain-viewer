@@ -21,8 +21,8 @@
 //! While presenting, the stage declares `PRESENTATION` instead (and
 //! `PRESENTATION_EDITOR` over its editor). Keys the presentation leaves
 //! out are bound there to `NoAction`, which hides every binding they have
-//! elsewhere: ⌘O, ⌘F, the sidebar's key, Tab and Enter do nothing until
-//! Esc. ⌘Q still quits.
+//! elsewhere: ⌘O, ⌘F, the sidebar's key, Back, Forward, Tab and Enter do
+//! nothing until Esc. ⌘Q still quits.
 
 use gpui_kit::{KeyBinding, NoAction, actions};
 
@@ -153,6 +153,10 @@ actions!(
         DeselectAll,
         /// Hides the explorer, or shows it again.
         ToggleSidebar,
+        /// Shows what the stage showed before.
+        GoBack,
+        /// Shows again what Back left.
+        GoForward,
     ]
 );
 
@@ -227,13 +231,30 @@ pub(crate) const SIDEBAR: &str = if cfg!(target_os = "macos") {
     "ctrl-b"
 };
 
+/// Back, as Finder and Safari have it on macOS, and as browsers have it
+/// elsewhere. The Kit's text input binds `cmd-[` to Outdent but passes it
+/// on when it is one line or read-only, as the filter and the code view
+/// are, and GPUI then tries the next binding.
+pub(crate) const BACK: &str = if cfg!(target_os = "macos") {
+    "cmd-["
+} else {
+    "alt-left"
+};
+
+/// Forward: see `BACK`.
+pub(crate) const FORWARD: &str = if cfg!(target_os = "macos") {
+    "cmd-]"
+} else {
+    "alt-right"
+};
+
 /// Every key binding of the application.
 ///
 /// Learning exercise: Sean may rewrite this body; the tests below define it.
 #[must_use]
 pub(crate) fn bindings() -> Vec<KeyBinding> {
     let (explorer, filter, stage) = (Some(EXPLORER), Some(FILTER), Some(STAGE));
-    let body = Some(EXPLORER_BODY);
+    let (body, gallery) = (Some(EXPLORER_BODY), Some(GALLERY));
     let mut bindings = vec![
         KeyBinding::new("up", FocusPrevious, explorer),
         KeyBinding::new("down", FocusNext, explorer),
@@ -266,6 +287,8 @@ pub(crate) fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new(secondary!("alt-c"), CopyPath, None),
         KeyBinding::new(FULL_SCREEN, ToggleFullScreen, None),
         KeyBinding::new(SIDEBAR, ToggleSidebar, None),
+        KeyBinding::new(BACK, GoBack, None),
+        KeyBinding::new(FORWARD, GoForward, None),
     ];
     // Keys only macOS has a convention for.
     if cfg!(target_os = "macos") {
@@ -295,7 +318,6 @@ pub(crate) fn bindings() -> Vec<KeyBinding> {
         ]);
     }
     // The gallery's keys: focus moves over the tiles.
-    let gallery = Some(GALLERY);
     bindings.extend([
         KeyBinding::new("left", FocusPreviousTile, gallery),
         KeyBinding::new("right", FocusNextTile, gallery),
@@ -331,6 +353,8 @@ pub(crate) fn bindings() -> Vec<KeyBinding> {
             KeyBinding::new("tab", NoAction, presentation),
             KeyBinding::new("shift-tab", NoAction, presentation),
             KeyBinding::new(SIDEBAR, NoAction, presentation),
+            KeyBinding::new(BACK, NoAction, presentation),
+            KeyBinding::new(FORWARD, NoAction, presentation),
         ]);
     }
     bindings
@@ -456,6 +480,8 @@ mod tests {
                 "tab",
                 "shift-tab",
                 SIDEBAR,
+                BACK,
+                FORWARD,
             ] {
                 assert_bound(key, Some(context), &NoAction);
             }
@@ -495,6 +521,8 @@ mod tests {
         assert_bound(secondary!("alt-c"), None, &CopyPath);
         assert_bound(FULL_SCREEN, None, &ToggleFullScreen);
         assert_bound(SIDEBAR, None, &ToggleSidebar);
+        assert_bound(BACK, None, &GoBack);
+        assert_bound(FORWARD, None, &GoForward);
     }
 
     #[test]

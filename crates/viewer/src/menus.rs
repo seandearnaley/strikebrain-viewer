@@ -1,4 +1,4 @@
-//! The menu bar: the application menu, File, Edit, View and Window, each
+//! The menu bar: the application menu, File, Edit, View, Go and Window, each
 //! item an action the app handles, and the handlers of those that need no
 //! window's state: About, Hide, Hide Others and Show All. Items whose action nothing on
 //! the focused path handles show disabled, as macOS asks GPUI before it
@@ -15,8 +15,8 @@ use gpui_kit::component::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
 use gpui_kit::{App, Menu, MenuItem, OsAction, PromptLevel, SystemMenuType};
 
 use crate::keys::{
-    About, AddFolder, CloseWindow, CopyPath, Hide, HideOthers, Minimize, Quit, Refresh, Reveal,
-    ShowAll, StartPresenting, ToggleShowIgnored, ToggleSidebar, Zoom,
+    About, AddFolder, CloseWindow, CopyPath, GoBack, GoForward, Hide, HideOthers, Minimize, Quit,
+    Refresh, Reveal, ShowAll, StartPresenting, ToggleShowIgnored, ToggleSidebar, Zoom,
 };
 
 /// The name the menus show.
@@ -78,6 +78,10 @@ pub(crate) fn install(shows_ignored: bool, explorer_hidden: bool, cx: &App) {
             MenuItem::action("Show Ignored", ToggleShowIgnored).checked(shows_ignored),
             MenuItem::action("Refresh", Refresh),
         ]),
+        Menu::new("Go").items([
+            MenuItem::action("Back", GoBack),
+            MenuItem::action("Forward", GoForward),
+        ]),
         Menu::new("Window").items([
             MenuItem::action("Minimize", Minimize),
             MenuItem::action("Zoom", Zoom),
@@ -133,13 +137,13 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn the_menu_bar_holds_the_app_file_edit_view_and_window_menus(cx: &mut TestAppContext) {
+    fn the_menu_bar_holds_the_app_file_edit_view_go_and_window_menus(cx: &mut TestAppContext) {
         cx.update(|cx| install(false, false, cx));
         let bar = menus(cx);
         let names: Vec<&str> = bar.iter().map(|(name, _)| name.as_str()).collect();
         assert_eq!(
             names,
-            ["Strikebrain Viewer", "File", "Edit", "View", "Window"]
+            ["Strikebrain Viewer", "File", "Edit", "View", "Go", "Window"]
         );
         let items =
             |ix: usize| -> Vec<&str> { bar[ix].1.iter().map(|(name, _)| name.as_str()).collect() };
@@ -183,7 +187,8 @@ mod tests {
                 "Refresh"
             ]
         );
-        assert_eq!(items(4), ["Minimize", "Zoom"]);
+        assert_eq!(items(4), ["Back", "Forward"]);
+        assert_eq!(items(5), ["Minimize", "Zoom"]);
         assert!(!bar[3].1[4].1);
 
         cx.update(|cx| install(true, false, cx));
