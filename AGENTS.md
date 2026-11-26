@@ -92,8 +92,6 @@ Pinned like the toolchain; upgrading one is its own change. `just setup` install
 | cargo-deny | 0.22.0 | `deny.toml` |
 | bacon | 3.26.0 | `bacon.toml` |
 
-To see what macOS's privacy system asked or decided while the app ran: `/usr/bin/log show --info --debug --last 5m --predicate 'subsystem == "com.apple.TCC"'` (zsh's `log` is a builtin, so give the path). `tccutil reset SystemPolicyDownloadsFolder ai.brainstrike.viewer` forgets the app's answer for Downloads, so the request shows again.
-
 ## Build times
 
 Measured on 2026-11-23, Apple M4 Max (16 cores), Rust 1.100.0.
@@ -132,7 +130,8 @@ Neither was added. Rebuild and restart instead.
 - Folders are told apart by their canonical paths, and `realpath` does not join macOS firmlinks: `/System/Volumes/Data/Users/x` and `/Users/x` stay different, so the same folder added under both is listed twice. The picker and Finder give `/Users/...`.
 - A saved folder that no longer exists at launch is dropped from the saved state, as the design asks, even when it is only on a volume not mounted that day.
 - A change to `.git/info/exclude` or the global git excludes does not trigger a rescan; a `.gitignore` change does.
-- A file opened on its own is not followed on disk; Refresh reads it again. On macOS, watching even one file with FSEvents asks for access to its folder, which opening the file does not.
+- A file opened on its own is not followed on disk; Refresh, or opening it again, reads it again. On macOS, watching even one file with FSEvents asks for access to its folder, which opening the file does not.
+- To see what macOS's privacy system asked or decided while the app ran: `/usr/bin/log show --info --debug --last 5m --predicate 'subsystem == "com.apple.TCC"'` (zsh's `log` is a builtin, so give the path). `tccutil reset SystemPolicyDownloadsFolder ai.brainstrike.viewer` forgets the app's answer for Downloads, so the request shows again.
 - "Open With" lists the app only for the types `crates/viewer/bundle/Info.plist` names: macOS ignores a catch-all claim there. A source format macOS has no text type for needs its extension in the Source Code entry. To see what macOS offers after a change, `just bundle`, then ask `NSWorkspace.shared.urlsForApplications(toOpen:)` for a sample file. Windows and Linux hand the file over as an argument, which works; the Linux desktop entry registers the app, and the Windows installer registers nothing, so there it is Open With > Choose another app.
 - `just shot` draws offscreen. To see the real window, `just bundle`, launch the app, find its window id with `CGWindowListCopyWindowInfo` and run `screencapture -x -o -l <id> out.png`. While the screen is locked `screencapture` captures nothing.
 - Run the bundled binary with `STRIKEBRAIN_VIEWER_STATE=<temp file>` when trying it; without it the run writes your own saved state.
