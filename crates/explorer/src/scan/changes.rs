@@ -136,6 +136,20 @@ mod tests {
 
     use crate::{NodeId, ScanOptions, Tree, scan};
 
+    #[test]
+    fn a_change_to_a_file_opened_on_its_own_matters() {
+        let path = Path::new("/work/notes/b.txt");
+        let mut explorer = crate::Explorer::empty();
+        explorer.add_folder(&Tree::file(path, 3), 0, None).unwrap();
+        let top = explorer.tree().folders().next().unwrap();
+        assert!(super::changes_matter(
+            explorer.tree(),
+            top,
+            ScanOptions::default(),
+            &[path.to_path_buf()]
+        ));
+    }
+
     /// Whether the changes matter to the scan `tree`, whose root is the folder.
     fn changes_matter(tree: &Tree, options: ScanOptions, changed: &[PathBuf]) -> bool {
         super::changes_matter(tree, NodeId::ROOT, options, changed)

@@ -588,3 +588,23 @@ proptest::proptest! {
         }
     }
 }
+
+#[test]
+fn a_folder_added_takes_in_a_file_opened_on_its_own_with_its_check() {
+    let root = PathBuf::from(abs("/work"));
+    let file = Tree::file(&root.join("notes/b.txt"), 3);
+    let mut explorer = Explorer::empty();
+    explorer.add_folder(&file, 0, None).unwrap();
+    let top = explorer.tree().folders().next().unwrap();
+    assert!(explorer.tree().is_file(top));
+    explorer.toggle_check(top);
+
+    let folder = Tree::from_paths_at(&root, &[("notes/a.txt", 1), ("notes/b.txt", 3)]).unwrap();
+    let (map, _) = explorer.add_folder(&folder, 1, None).unwrap();
+
+    // The folder alone is left at the top, holding the file, still checked.
+    assert_eq!(explorer.tree().folders().count(), 1);
+    let b = explorer.tree().find_abs(&root.join("notes/b.txt")).unwrap();
+    assert!(explorer.is_selected(b));
+    assert_eq!(map.get(top), Some(b));
+}

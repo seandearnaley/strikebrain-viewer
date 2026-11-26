@@ -58,8 +58,8 @@ pub struct ScanOptions {
 /// Why a scan produced no tree.
 #[derive(Debug)]
 pub enum ScanError {
-    /// The root is missing, is not a folder, or cannot be read. Holds the
-    /// operating system's error.
+    /// The root is missing, is neither a folder nor a regular file, or
+    /// cannot be read. Holds the operating system's error.
     Root(io::Error),
     /// The cancel flag was set before the scan finished.
     Cancelled,
@@ -95,7 +95,8 @@ impl From<TreeError> for ScanError {
 
 /// Scans the folder at `root` into a tree of names and kinds, walking on up
 /// to six threads. Call it off the UI thread. The tree has no sizes; run
-/// [`read_sizes`] on it next.
+/// [`read_sizes`] on it next. A file is a tree of one node, with its size,
+/// which [`read_sizes`] leaves as it is.
 ///
 /// The rules: `.gitignore`, `.ignore`, `.git/info/exclude` and the global
 /// git excludes apply unless [`ScanOptions::show_ignored`] is set, inside a
@@ -125,11 +126,15 @@ impl From<TreeError> for ScanError {
 ///
 /// # Errors
 ///
-/// [`ScanError::Root`] if the root is missing, not a folder or unreadable;
+/// [`ScanError::Root`] if the root is missing, neither a folder nor a
+/// regular file, or unreadable;
 /// [`ScanError::Cancelled`] if `cancel` was set; [`ScanError::Tree`] past
 /// the tree's id limits.
 pub fn scan(root: &Path, options: ScanOptions, cancel: &AtomicBool) -> Result<Tree, ScanError> {
-    let root = resolve_root(root)?;
+    let (root, file) = resolve_root(root)?;
+    if let Some(size) = file {
+        return Ok(Tree::file(&root, size));
+    }
     let shared = Shared {
         cancel,
         folders: Mutex::new(HashMap::from([(root.clone(), ROOT_KEY)])),
@@ -148,19 +153,23 @@ pub fn scan(root: &Path, options: ScanOptions, cancel: &AtomicBool) -> Result<Tr
     Ok(tree)
 }
 
-/// The folder to walk: `root` made absolute and canonical, so the tree's
-/// root is named after the real folder (not `.` or `..`) and a root that is
-/// a symlink is its target.
-fn resolve_root(root: &Path) -> Result<PathBuf, ScanError> {
+/// What to scan: `root` made absolute and canonical, so the tree's root is
+/// named after the real folder or file (not `.` or `..`) and a root that is
+/// a symlink is its target; with its size when it is a regular file.
+fn resolve_root(root: &Path) -> Result<(PathBuf, Option<u64>), ScanError> {
     let followed = fs::metadata(root).map_err(ScanError::Root)?;
-    if !followed.is_dir() {
-        let message = format!("{} is not a folder", root.display());
+    let file = if followed.is_dir() {
+        None
+    } else if followed.is_file() {
+        Some(followed.len())
+    } else {
+        let message = format!("{} is not a folder or a file", root.display());
         return Err(ScanError::Root(io::Error::new(
             io::ErrorKind::NotADirectory,
             message,
         )));
-    }
-    canonical(root).map_err(ScanError::Root)
+    };
+    Ok((canonical(root).map_err(ScanError::Root)?, file))
 }
 
 /// `path` made absolute and canonical, as a scan names its root: links

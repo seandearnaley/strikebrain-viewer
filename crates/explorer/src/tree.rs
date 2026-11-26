@@ -218,7 +218,19 @@ impl Tree {
             .file_name()
             .unwrap_or(path.as_os_str())
             .to_string_lossy();
-        one_node(&name, Kind::Unreadable, path)
+        one_node(&name, Kind::Unreadable, 0, path)
+    }
+
+    /// A file on its own, as a tree of one node: a [`Kind::File`] root
+    /// named after the file, at `path`, with its size. Joined with folders,
+    /// it is a top-level file: a file opened without its folder.
+    #[must_use]
+    pub fn file(path: &Path, size: u64) -> Self {
+        let name = path
+            .file_name()
+            .unwrap_or(path.as_os_str())
+            .to_string_lossy();
+        one_node(&name, Kind::File, size, path)
     }
 
     /// Absolute path of the root folder. Empty for a tree built from paths,
@@ -615,10 +627,11 @@ static COLLATOR: LazyLock<CollatorBorrowed<'static>> = LazyLock::new(|| {
         .expect("the root collation data is compiled into icu_collator")
 });
 
-/// A tree of one node, its root, with size 0.
-fn one_node(name: &str, kind: Kind, path: &Path) -> Tree {
+/// A tree of one node, its root, with `size`.
+fn one_node(name: &str, kind: Kind, size: u64, path: &Path) -> Tree {
     let mut raw = RawTree::new(name, true).expect("one node fits in a tree");
     raw.set_kind(0, kind);
+    raw.set_size(0, size);
     raw.build(path.to_path_buf())
         .expect("one node fits in a tree")
 }

@@ -43,9 +43,9 @@ impl Explorer {
     /// Adds `folder`, a scan, as a top-level folder, open, before the
     /// top-level folder at index `at` (or last). The tree becomes a joined
     /// tree; one that was not counts as a single folder. Each top-level
-    /// folder the new scan lists, as a folder, leaves, its checks and open
-    /// folders carried into the new one by path, so no file is in the tree
-    /// twice; one inside it that its scan does not list (its ignore rules
+    /// entry the new scan lists (a folder, or a file opened on its own,
+    /// [`Tree::file`]) leaves, its checks and open folders carried into the
+    /// new one by path, so no file is in the tree twice; one inside it that its scan does not list (its ignore rules
     /// hide it) stays as it is. A folder that could not be read
     /// ([`Tree::unreadable`]) lists nothing and takes nothing in.
     ///
@@ -74,7 +74,7 @@ impl Explorer {
     /// Puts `folder`, a new scan of the top-level folder `top`, in its
     /// place, carrying checks, open folders and `current` by path as
     /// [`Explorer::replace_tree_carrying`] does. Like
-    /// [`Explorer::add_folder`] it takes in every other top-level folder it
+    /// [`Explorer::add_folder`] it takes in every other top-level entry it
     /// now lists: one it could not read before, or whose ignore rules hid
     /// one, may list more. `top` is one of the tree's [`Tree::folders`];
     /// for a tree that is not joined, its root, and the tree becomes a
@@ -127,11 +127,11 @@ impl Explorer {
     /// goes to `folder` with its node there.
     fn plan(&self, folder: &Tree, place: Place) -> (Vec<Source>, Vec<(NodeId, NodeId)>) {
         let takes_in = folder.root_path().is_absolute() && folder.kind(NodeId::ROOT) == Kind::Dir;
+        // Every top-level entry the scan lists leaves, whatever it is: a
+        // folder, or a file opened on its own.
         let listed = |top: NodeId| {
             let path = self.tree.abs_path(top);
-            folder
-                .find_abs(&path)
-                .filter(|&node| takes_in && folder.kind(node).is_folder())
+            folder.find_abs(&path).filter(|_| takes_in)
         };
         let tops = self.tops();
         let (mut plan, mut carried) = (Vec::new(), Vec::new());
