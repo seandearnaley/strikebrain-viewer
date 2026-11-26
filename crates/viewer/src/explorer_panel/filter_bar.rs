@@ -9,8 +9,7 @@ use gpui_kit::component::input::Input;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, v_flex};
 use gpui_kit::{
-    Context, InteractiveElement as _, IntoElement, ParentElement as _, Rems, Styled as _, Window,
-    div,
+    Context, InteractiveElement as _, IntoElement, ParentElement as _, Styled as _, Window, div,
 };
 
 use super::ExplorerPanel;
@@ -65,13 +64,12 @@ impl ExplorerPanel {
                     .children(KINDS.map(|(_, label)| Tab::new().flex_1().label(label))),
             );
 
-        // 8 px between the input, the kinds and the header; 2 px above the
-        // input, under the title bar's rule, as under the toolbar it replaced.
+        // 8 px all round and between the input, the kinds and the header:
+        // the input sits as far under the title bar's rule as from the
+        // pane's sides.
         v_flex()
             .flex_shrink_0()
-            .px_2()
-            .pt(Rems(0.125))
-            .pb_2()
+            .p_2()
             .gap_2()
             .child(input)
             .child(kinds)
