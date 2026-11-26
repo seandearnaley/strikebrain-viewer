@@ -14,9 +14,10 @@
 //! shows it is always a checked file.
 
 use explorer::NodeId;
-use gpui_kit::Context;
+use gpui_kit::{Context, SharedString};
 
 use super::{AppState, StateEvent};
+use crate::menus::APP_NAME;
 
 /// Which of the stage's two views shows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -91,6 +92,23 @@ impl AppState {
     #[must_use]
     pub fn shows_gallery(&self) -> bool {
         self.view == StageView::Gallery && !self.presenting
+    }
+
+    /// What the bar names the stage by: the file in the file view, "Gallery"
+    /// while the gallery shows, nothing while the stage is blank.
+    #[must_use]
+    pub fn stage_title(&self) -> Option<SharedString> {
+        if self.shows_gallery() {
+            return Some("Gallery".into());
+        }
+        Some(self.name(self.current?)?.to_owned().into())
+    }
+
+    /// The window's title: the stage's, or the application's name while the
+    /// stage is blank.
+    #[must_use]
+    pub fn window_title(&self) -> SharedString {
+        self.stage_title().unwrap_or_else(|| APP_NAME.into())
     }
 
     /// The tile with keyboard focus while the gallery shows.

@@ -1,13 +1,12 @@
 //! The menu bar's commands, dispatched by name as macOS does when an item
-//! is chosen, and the window title as folders open.
+//! is chosen, and the window title as folders open and files show.
 
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{Action, AnyWindowHandle, AppContext as _, OwnedMenuItem, TestAppContext};
 use viewer::{AppState, Launch};
 
 use crate::{
-    click, fixture_folder, folder, name_of, node, node_at, press, read, row, rows_now, state,
-    under, write,
+    click, fixture_folder, folder, node, node_at, press, read, row, rows_now, state, under, write,
 };
 
 /// The action a menu item named `name` sends.
@@ -105,7 +104,7 @@ fn about_shows_the_name_and_version(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn the_title_names_the_one_folder_open_and_otherwise_the_app(cx: &mut TestAppContext) {
+fn the_title_names_the_file_on_the_stage_and_otherwise_the_app(cx: &mut TestAppContext) {
     let first = folder(&[("a.txt", "a")]);
     let (handle, view) = crate::open_app(cx, Launch::Folders(vec![first.path().to_owned()]));
     // The title the window shows, as the platform holds it, and the one
@@ -116,7 +115,8 @@ fn the_title_names_the_one_folder_open_and_otherwise_the_app(cx: &mut TestAppCon
         assert_eq!(shown, given, "the window shows the title the view gave it");
         shown.unwrap_or_default()
     };
-    assert_eq!(title(cx), name_of(first.path()));
+    // Nothing on the stage: the app's name, however many folders are open.
+    assert_eq!(title(cx), "Strikebrain Viewer");
 
     // File > Add Folder… adds one: two folders, the app's name.
     choose(cx, handle, "viewer::AddFolder");
@@ -136,13 +136,16 @@ fn the_title_names_the_one_folder_open_and_otherwise_the_app(cx: &mut TestAppCon
     assert_eq!(rows[rows.len() - 2..], under(second.path(), &["b.txt"]));
     assert_eq!(title(cx), "Strikebrain Viewer");
 
-    // Down to one folder again: its name.
+    // Down to one folder again: still the app's name, until a file shows.
     for gone in [first.path().to_owned(), fixture_folder()] {
         let top = node_at(cx, &view, &gone);
         state(cx, &view).update(cx, |state, cx| state.remove_folder(top, cx));
     }
     cx.run_until_parked();
-    assert_eq!(title(cx), name_of(second.path()));
+    assert_eq!(title(cx), "Strikebrain Viewer");
+    let b = node_at(cx, &view, &second.path().join("b.txt"));
+    click(cx, handle, row(b));
+    assert_eq!(title(cx), "b.txt");
 }
 
 /// The text on the clipboard.

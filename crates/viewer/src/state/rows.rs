@@ -117,7 +117,7 @@ impl AppState {
         }
     }
 
-    /// Opens every folder: the toolbar's Expand all.
+    /// Opens every folder: Expand All.
     pub fn expand_all(&mut self, cx: &mut Context<Self>) {
         if let Some(explorer) = self.explorer.as_mut() {
             explorer.expand_all();
@@ -125,7 +125,7 @@ impl AppState {
         }
     }
 
-    /// Closes every folder: the toolbar's Collapse all. Focus inside a
+    /// Closes every folder: Collapse All. Focus inside a
     /// folder moves to its top-level folder.
     pub fn collapse_all(&mut self, cx: &mut Context<Self>) {
         if let Some(explorer) = self.explorer.as_mut() {

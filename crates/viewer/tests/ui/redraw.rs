@@ -5,8 +5,9 @@ use gpui_kit::{
     TestAppContext,
 };
 use viewer::AppView;
+use viewer::keys::SelectAllFiles;
 
-use crate::{PROJECT, click, focus, node, open_app, press, tree};
+use crate::{PROJECT, dispatch, focus, node, open_app, press, tree};
 
 fn stage_renders(cx: &mut TestAppContext, view: &Entity<AppView>) -> usize {
     cx.update(|cx| view.read(cx).stage_probe(cx).renders())
@@ -54,7 +55,7 @@ fn moving_focus_in_the_tree_leaves_the_stage_alone(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn moving_focus_in_the_tree_leaves_the_gallery_alone(cx: &mut TestAppContext) {
     let (handle, view) = open_app(cx, tree(PROJECT));
-    click(cx, handle, "select-all");
+    dispatch(cx, handle, SelectAllFiles);
     press(cx, handle, "down");
     let gallery_renders =
         |cx: &mut TestAppContext| cx.update(|cx| view.read(cx).gallery_probe(cx).renders());

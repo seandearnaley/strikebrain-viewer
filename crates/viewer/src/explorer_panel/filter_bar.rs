@@ -47,7 +47,7 @@ impl ExplorerPanel {
             );
 
         // A segment takes no keyboard focus on a click: focus stays in the
-        // tree or the filter, as with the toolbar's buttons.
+        // tree or the filter, as with the title bar's buttons.
         let kinds = div()
             .id("kind")
             .capture_any_mouse_down(|_, window, _| window.prevent_default())
@@ -65,8 +65,8 @@ impl ExplorerPanel {
                     .children(KINDS.map(|(_, label)| Tab::new().flex_1().label(label))),
             );
 
-        // 8 px between the toolbar's buttons, the input, the kinds and the
-        // header: the 36 px toolbar leaves 6 px under its 24 px buttons.
+        // 8 px between the input, the kinds and the header; 2 px above the
+        // input, under the title bar's rule, as under the toolbar it replaced.
         v_flex()
             .flex_shrink_0()
             .px_2()

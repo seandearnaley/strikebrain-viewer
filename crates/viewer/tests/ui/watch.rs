@@ -11,6 +11,7 @@ use gpui_kit::{
     AnyWindowHandle, AppContext as _, Bounds, Entity, Point, TestAppContext, WindowBounds,
     WindowOptions, px, size,
 };
+use viewer::keys::SelectAllFiles;
 use viewer::{AppState, AppView, Launch, ScanStatus, Session};
 
 use crate::races::click_when_the_tree_swaps;
@@ -149,8 +150,11 @@ async fn files_created_deleted_renamed_and_changed_on_disk_show(cx: &mut TestApp
     let (handle, view) = open_watching(cx, dir.path());
     settled(cx, &view).await;
     // Every file checked, b.txt on the stage.
-    cx.update_window(handle, |_, window, cx| window.click("select-all", cx))
-        .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.dispatch_action(Box::new(SelectAllFiles), cx);
+    })
+    .unwrap();
     let b = node(cx, &view, "b.txt");
     cx.update_window(handle, |_, window, cx| window.click(row(b), cx))
         .unwrap();
@@ -335,9 +339,10 @@ fn a_watcher_that_cannot_start_shows_on_the_refresh_button(cx: &mut TestAppConte
     cx.run_until_parked();
     assert_eq!(read(cx, &view, |state| state.watch_error().cloned()), None);
     assert!(has(cx, &view, "here.txt"));
+    // Followed again, the warning Refresh goes.
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
-        assert_eq!(window.find("refresh").description(), Some("Refresh"));
+        assert!(window.try_find("refresh").is_none());
     })
     .unwrap();
 }

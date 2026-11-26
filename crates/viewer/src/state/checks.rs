@@ -41,7 +41,7 @@ impl AppState {
         self.checks_changed(before, cx);
     }
 
-    /// Checks every file the filter shows: the toolbar's Select all.
+    /// Checks every file the filter shows: Select All.
     pub fn select_all(&mut self, cx: &mut Context<Self>) {
         let before = self.current;
         let Some(explorer) = self.explorer.as_mut() else {

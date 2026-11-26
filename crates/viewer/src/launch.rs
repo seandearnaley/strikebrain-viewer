@@ -5,17 +5,17 @@
 
 use std::path::PathBuf;
 
+use gpui_kit::component::TitleBar;
 use gpui_kit::{
-    AnyWindowHandle, App, AppContext as _, Bounds, Entity, Result, TitlebarOptions, WindowBounds,
-    WindowOptions, px, size,
+    AnyWindowHandle, App, AppContext as _, Bounds, Entity, Result, WindowBounds, WindowOptions, px,
+    size,
 };
 
 use crate::app::{AppView, EXPLORER_MIN_WIDTH, STAGE_MIN_WIDTH, Session};
-use crate::menus::APP_NAME;
 use crate::persist::{APP_ID, SavedWindow, StateStore, fit, plan_launch};
 
-/// The shortest the window can be made, in pixels: the toolbar, the filter
-/// and a few rows.
+/// The shortest the window can be made, in pixels: the bar, the filter and
+/// a few rows.
 const MIN_HEIGHT: f32 = 240.0;
 
 /// Opens the main window. `folders` are the command line's paths, folders
@@ -52,10 +52,6 @@ pub fn open_main_window(
     let launch = plan.launch;
     let opened = gpui_kit::open_window(
         WindowOptions {
-            titlebar: Some(TitlebarOptions {
-                title: Some(APP_NAME.into()),
-                ..Default::default()
-            }),
             window_bounds,
             display_id,
             // Room for both panes at their narrowest.
@@ -65,7 +61,10 @@ pub fn open_main_window(
             )),
             // What Linux matches a window to its desktop entry by.
             app_id: Some(APP_ID.to_owned()),
-            ..Default::default()
+            // The Kit's title bar draws the window's top row: the system's
+            // is transparent with its title hidden, and the app moves the
+            // window.
+            ..TitleBar::window_options()
         },
         cx,
         |window, cx| {

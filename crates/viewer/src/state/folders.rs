@@ -332,7 +332,7 @@ impl AppState {
             .is_some_and(|explorer| folder_row(explorer, id))
     }
 
-    /// What the window title says: the folder's name with one folder open,
+    /// The tree's accessible name: the folder's name with one folder open,
     /// the application's name otherwise.
     #[must_use]
     pub fn title(&self) -> SharedString {

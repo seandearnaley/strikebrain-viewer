@@ -1,8 +1,9 @@
 //! Several folders: each a top-level row, its remove button and ⌘⌫, the
-//! filter over them, and the toolbar's Add Folder.
+//! filter over them, and the bar's Add Folder.
 
 use gpui_kit::test::{TestQueryExt as _, TestWindowExt as _};
 use gpui_kit::{AnyWindowHandle, AppContext as _, Entity, TestAppContext};
+use viewer::keys::{Refresh, ToggleShowIgnored};
 use viewer::{AppState, AppView, Launch};
 
 use crate::{
@@ -80,7 +81,7 @@ fn a_folder_row_shows_its_remove_button_while_hovered(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(rows_now(cx, handle), under(one.path(), &["docs", "a.txt"]));
     let title = cx.update(|cx| view.read(cx).title().cloned());
-    assert_eq!(title.as_deref(), Some(name_of(one.path()).as_str()));
+    assert_eq!(title.as_deref(), Some("Strikebrain Viewer"));
 }
 
 #[gpui_kit::test]
@@ -171,14 +172,14 @@ fn a_folder_with_no_match_hides_and_its_rows_sit_a_level_down(cx: &mut TestAppCo
 }
 
 #[gpui_kit::test]
-fn the_toolbar_adds_a_folder_left_of_show_ignored(cx: &mut TestAppContext) {
+fn the_bar_adds_a_folder_left_of_more(cx: &mut TestAppContext) {
     let (_one, _two, handle, _view) = two_folders(cx);
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         let add = window.find("add-folder");
-        let show = window.find("show-ignored");
+        let more = window.find("more");
         assert_eq!(add.label(), Some("Add Folder"));
-        assert!(add.bounds().right() <= show.bounds().left());
+        assert!(add.bounds().right() <= more.bounds().left());
         assert_eq!(labels(window).len(), 5);
         window.click("add-folder", cx);
     })
@@ -216,7 +217,7 @@ fn the_row_at_the_top_stays_there_as_a_folder_above_it_changes(cx: &mut TestAppC
 
     // A file appears in the first folder, above the top row.
     crate::write(one.path(), "a-new.txt", "n");
-    crate::click(cx, handle, "refresh");
+    crate::dispatch(cx, handle, Refresh);
     let rows = |cx: &mut TestAppContext| read(cx, &view, |s| s.explorer().unwrap().rows().len());
     assert_eq!(rows(cx), 83);
     assert_eq!(top(cx), before);
@@ -277,7 +278,7 @@ fn an_outer_folder_unreadable_then_readable_holds_the_inner_once(cx: &mut TestAp
     assert_eq!(rows_now(cx, handle), ["sub", "x.txt", "d"]);
 
     drop(lock);
-    crate::click(cx, handle, "refresh");
+    crate::dispatch(cx, handle, Refresh);
     // Readable now, it takes the inner folder in: one copy of each file.
     assert_eq!(rows_now(cx, handle), ["d", "sub", "x.txt", "top.txt"]);
     assert_eq!(count(cx, &view, "x.txt"), 1);
@@ -293,7 +294,7 @@ fn an_inner_folder_rescanned_beside_an_unreadable_outer_stays_its_own(cx: &mut T
         return;
     };
     add(cx, &view, &[&d]);
-    crate::click(cx, handle, "refresh");
+    crate::dispatch(cx, handle, Refresh);
     // Both rescanned: the inner one is still a folder of its own, with its
     // rows, its title share and its watcher.
     assert_eq!(rows_now(cx, handle), ["sub", "x.txt", "d"]);
@@ -325,7 +326,7 @@ fn a_folder_an_open_folder_ignores_is_added_as_its_own_and_taken_in_once_shown(
     assert_eq!(title(cx, &view), "Strikebrain Viewer");
 
     // Show ignored: the outer folder lists it now, and takes it in.
-    crate::click(cx, handle, "show-ignored");
+    crate::dispatch(cx, handle, ToggleShowIgnored);
     assert_eq!(
         rows_now(cx, handle),
         under(dir.path(), &["src", "target", "out.o", ".gitignore"])
@@ -415,7 +416,7 @@ fn a_rescan_leaves_the_scroll_where_it_was_to_the_pixel(cx: &mut TestAppContext)
     .unwrap();
     let before = first_row_offset(cx, handle);
     assert_eq!(before, gpui_kit::px(-10.));
-    crate::click(cx, handle, "refresh");
+    crate::dispatch(cx, handle, Refresh);
     assert_eq!(read(cx, &view, AppState::scans), 2);
     assert_eq!(first_row_offset(cx, handle), before);
 }
@@ -506,7 +507,7 @@ fn a_folder_readable_again_shows_before_its_sizes_are_read(cx: &mut TestAppConte
             }
         })
     });
-    crate::click(cx, handle, "refresh");
+    crate::dispatch(cx, handle, Refresh);
     assert_eq!(sized_when_shown.get(), Some(false));
     // And they come.
     let top = node_at(cx, &view, &late);

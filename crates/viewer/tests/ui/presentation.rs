@@ -7,11 +7,13 @@ use gpui_kit::test::{TestQueryExt as _, TestWindowExt as _};
 use gpui_kit::{
     AnyWindowHandle, AppContext as _, ElementId, Entity, Pixels, Point, TestAppContext, px, size,
 };
+use viewer::keys::SelectAllFiles;
 use viewer::{AppState, AppView, Launch};
 
 use crate::stage::{Shown, numbered, open_checked, png, position, probe, show, shown};
 use crate::{
-    click, current, drag_divider, is_focused, node, open_app, press, read, row, state, write,
+    click, current, dispatch, drag_divider, is_focused, node, open_app, press, read, row, state,
+    write,
 };
 
 /// How the window is laid out.
@@ -92,7 +94,7 @@ fn space_on_the_stage_presents_and_escape_restores_the_split(cx: &mut TestAppCon
     let dir = tempfile::tempdir().unwrap();
     three(dir.path());
     let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
-    click(cx, handle, "select-all");
+    dispatch(cx, handle, SelectAllFiles);
     drag_divider(cx, handle, 400.);
     press(cx, handle, "tab");
     assert!(is_focused(cx, handle, "stage"));
@@ -315,7 +317,7 @@ fn the_split_comes_back_at_its_width_after_the_window_grows_and_shrinks(cx: &mut
     let dir = tempfile::tempdir().unwrap();
     three(dir.path());
     let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
-    click(cx, handle, "select-all");
+    dispatch(cx, handle, SelectAllFiles);
     drag_divider(cx, handle, 400.);
     press(cx, handle, "tab");
     press(cx, handle, "space");
