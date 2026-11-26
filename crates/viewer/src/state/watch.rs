@@ -1,5 +1,8 @@
-//! Live refresh: a recursive file watcher on each open folder, and one on
-//! each file opened on its own, alone.
+//! Live refresh: a recursive file watcher on each open folder.
+//!
+//! A file opened on its own is not followed: on macOS, watching even one
+//! file with `FSEvents` asks for access to the folder it is in, which opening
+//! the file never does. Refresh reads it again.
 //!
 //! Each watcher runs on its own thread and sends what it sees into a
 //! channel. A task on the UI thread waits for the first change, lets more
@@ -116,7 +119,9 @@ impl AppState {
     }
 
     /// Starts following the folder `key` if this state follows its
-    /// folders, replacing the watcher it had.
+    /// folders, replacing the watcher it had. A file opened on its own is
+    /// never followed, so it never asks for its folder's access, and never
+    /// turns Refresh the warning colour.
     pub(super) fn follow(&mut self, key: u64, cx: &mut Context<Self>) {
         let quiet = self
             .watching
@@ -128,11 +133,11 @@ impl AppState {
         folder.watch_task = None;
         folder.rescan_pending = false;
         let had_error = folder.watch_error.take().is_some();
-        if let Some(quiet) = quiet {
-            let (root, file) = (folder.path.clone(), folder.file);
-            folder.watch_task = Some(cx.spawn(async move |this, cx| {
-                follow_folder(this, key, root, file, quiet, cx).await
-            }));
+        if let Some(quiet) = quiet.filter(|_| !folder.file) {
+            let root = folder.path.clone();
+            folder.watch_task = Some(
+                cx.spawn(async move |this, cx| follow_folder(this, key, root, quiet, cx).await),
+            );
         }
         if had_error {
             cx.notify();
@@ -167,20 +172,19 @@ impl AppState {
     }
 }
 
-/// Follows the folder `key` at `root`, or the `file` opened on its own
-/// there, until the task is dropped: starts the watcher off the UI thread,
-/// then turns each window of changes into at most one rescan.
+/// Follows the folder `key` at `root` until the task is dropped: starts
+/// the watcher off the UI thread, then turns each window of changes into at
+/// most one rescan.
 async fn follow_folder(
     this: WeakEntity<AppState>,
     key: u64,
     root: PathBuf,
-    file: bool,
     quiet: Vec<PathBuf>,
     cx: &mut AsyncApp,
 ) -> Result<()> {
     let (sender, changes) = unbounded();
     let started = cx
-        .background_spawn(async move { watch(&root, file, &quiet, sender) })
+        .background_spawn(async move { watch(&root, &quiet, sender) })
         .await;
     // Held for as long as the task runs; dropping it stops the events.
     let _watcher = match started {
@@ -236,12 +240,10 @@ async fn follow_changes(
 }
 
 /// A watcher on `root`, made canonical so the paths it reports start with
-/// the scanned tree's root, sending what it sees to `sender`: recursive on
-/// a folder, alone on a `file` opened on its own. Changes to the `quiet`
-/// files are dropped.
+/// the scanned tree's root, sending what it sees to `sender`. Changes to
+/// the `quiet` files are dropped.
 fn watch(
     root: &Path,
-    file: bool,
     quiet: &[PathBuf],
     sender: UnboundedSender<Change>,
 ) -> notify::Result<RecommendedWatcher> {
@@ -273,13 +275,7 @@ fn watch(
     // some platforms the scan's own reads would report them.
     let config = Config::default().with_event_kinds(EventKindMask::CORE);
     let mut watcher = RecommendedWatcher::new(handler, config)?;
-    // A file opened on its own is watched alone: its folder is never read.
-    let mode = if file {
-        RecursiveMode::NonRecursive
-    } else {
-        RecursiveMode::Recursive
-    };
-    watcher.watch(&root, mode)?;
+    watcher.watch(&root, RecursiveMode::Recursive)?;
     Ok(watcher)
 }
 
@@ -421,6 +417,42 @@ mod tests {
             assert_eq!(state.watch_error(), None);
             assert!(state.folders[0].watch_task.is_some(), "followed again");
         });
+    }
+
+    #[gpui_kit::test]
+    fn a_file_opened_on_its_own_starts_no_watcher(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.txt");
+        std::fs::write(&file, "a").unwrap();
+        let options = StateOptions {
+            watch: true,
+            ..StateOptions::default()
+        };
+        let launch = Launch::Folders(vec![file]);
+        let state = cx.new(|cx| AppState::with_options(launch, options, cx));
+        cx.run_until_parked();
+        let unwatched = |cx: &mut TestAppContext| {
+            state.read_with(cx, |state, _| {
+                let row = &state.folders[0];
+                row.file && row.shown && row.watch_task.is_none() && state.watch_error().is_none()
+            })
+        };
+        assert!(unwatched(cx));
+
+        // Nothing that rescans it starts one: Refresh, Show ignored, a
+        // change on disk, nor Refresh restarting a watcher that failed.
+        state.update(cx, AppState::refresh);
+        state.update(cx, AppState::toggle_show_ignored);
+        state.update(cx, AppState::disk_changed);
+        cx.run_until_parked();
+        assert!(unwatched(cx));
+        state.update(cx, |state, cx| {
+            state.folders[0].watch_error = Some("Too many open files".into());
+            state.refresh(cx);
+        });
+        cx.run_until_parked();
+        assert!(unwatched(cx));
     }
 
     #[cfg(windows)]
