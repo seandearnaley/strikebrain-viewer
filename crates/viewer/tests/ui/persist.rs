@@ -785,3 +785,26 @@ fn a_folder_and_a_file_in_it_take_the_saved_view_and_the_stage(cx: &mut TestAppC
     assert_eq!(read(&mut cx, &view, AppState::focus), Some(b));
     assert!(!read(&mut cx, &view, AppState::shows_gallery));
 }
+
+#[gpui_kit::test]
+fn a_file_alone_reopens_the_saved_folders_and_shows_the_file(cx: &mut TestAppContext) {
+    let dir = folder(&[("a.txt", "a"), ("b.txt", "b"), ("c.txt", "c")]);
+    let state_dir = tempfile::tempdir().unwrap();
+    let store = StateStore::at(state_dir.path().join("state.json"));
+    save_three_checked(cx, dir.path(), &store);
+
+    // Launched on a file alone, inside a saved folder: the saved folder
+    // comes back with its checks, and the file asked for replaces the saved
+    // one on the stage.
+    let mut cx = cx.new_app();
+    let file = dir.path().join("b.txt");
+    let (handle, view) = launch(&mut cx, &[&file], &StateStore::at(store.path()));
+    assert_eq!(
+        rows_now(&mut cx, handle),
+        under(dir.path(), &["a.txt", "b.txt", "c.txt"])
+    );
+    assert_eq!(checked(&mut cx, &view), ["a.txt", "b.txt", "c.txt"]);
+    let b = node_at(&mut cx, &view, &file);
+    assert_eq!(read(&mut cx, &view, AppState::current), Some(b));
+    assert!(!read(&mut cx, &view, AppState::shows_gallery));
+}

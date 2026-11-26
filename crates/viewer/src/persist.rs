@@ -97,32 +97,33 @@ pub struct Plan {
     pub window: Option<SavedWindow>,
 }
 
-/// Decides what a launch opens. Folders from the command line open,
-/// exactly those, each taking its saved view if it was saved; a file there
-/// stands for its folder. With none,
-/// the saved folders reopen with their views; one that no longer exists is
-/// dropped. The filter, the sort, Show ignored, the file on the stage and
-/// the top row come back with any saved folder that opens. The window, the
-/// explorer's width and whether it was hidden are restored either way.
-/// Touches the disk: canonicalizing paths and asking whether folders exist.
+/// Decides what a launch opens. Folders from the command line open, or
+/// with none the saved folders that still exist; files named open after
+/// them. Each folder opening takes its saved view; one saved but gone is
+/// dropped when none is named. The filter, the sort, Show ignored, the file
+/// on the stage and the top row come back with any saved folder that opens.
+/// The window, the explorer's width and whether it was hidden are restored
+/// either way. A file opens no folder: it shows in an open folder that
+/// lists it, or as a row of its own, so it is passed on as it is.
+/// Touches the disk: canonicalizing paths and asking what they are.
 #[must_use]
-pub fn plan_launch(folders: Vec<PathBuf>, saved: Option<Saved>) -> Plan {
+pub fn plan_launch(paths: Vec<PathBuf>, saved: Option<Saved>) -> Plan {
     let saved = saved.unwrap_or_default();
     let mut view = saved.view;
-    let open = if folders.is_empty() {
+    let (files, folders): (Vec<PathBuf>, Vec<PathBuf>) =
+        paths.into_iter().partition(|path| resolve(path).is_file());
+    let mut open: Vec<PathBuf> = if folders.is_empty() {
         view.folders.retain(|folder| folder.path.is_dir());
         view.folders
             .iter()
             .map(|folder| folder.path.clone())
             .collect()
     } else {
-        let asked: Vec<PathBuf> = folders
-            .iter()
-            .map(|path| folder_of(resolve(path)))
-            .collect();
+        let asked: Vec<PathBuf> = folders.iter().map(|path| resolve(path)).collect();
         view.folders.retain(|folder| asked.contains(&folder.path));
         folders
     };
+    open.extend(files);
     Plan {
         launch: if open.is_empty() {
             Launch::Empty
@@ -133,14 +134,6 @@ pub fn plan_launch(folders: Vec<PathBuf>, saved: Option<Saved>) -> Plan {
         explorer_width: saved.explorer_width,
         explorer_hidden: saved.explorer_hidden,
         window: saved.window,
-    }
-}
-
-/// The folder `path` opens: its own, or the one a file is in.
-fn folder_of(path: PathBuf) -> PathBuf {
-    match path.parent() {
-        Some(folder) if path.is_file() => folder.to_path_buf(),
-        _ => path,
     }
 }
 

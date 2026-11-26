@@ -20,7 +20,8 @@ use crate::persist::{APP_ID, SavedWindow, StateStore, fit, plan_launch};
 const MIN_HEIGHT: f32 = 240.0;
 
 /// Opens the main window. `folders` are the command line's paths, folders
-/// or files; the saved state
+/// or files: the folders open as they would without the files, and each
+/// file shows where a folder lists it or as a row of its own. The saved state
 /// comes from `store`, which then also receives the window's state as it
 /// changes. With `watch` the folders are followed on disk, as the app does;
 /// tests that need determinism leave it off. Closing the window quits, so

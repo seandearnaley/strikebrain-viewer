@@ -324,6 +324,47 @@ fn folder_arguments_open_exactly_those_each_with_its_own_saved_view() {
 }
 
 #[test]
+fn a_file_argument_reopens_the_saved_folders_and_opens_the_file() {
+    let saved_dir = tempfile::tempdir().unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let file = elsewhere.path().join("photo.png");
+    fs::write(&file, b"png").unwrap();
+    let folder = explorer::canonical(saved_dir.path()).unwrap();
+    let saved = Saved {
+        view: SavedView {
+            folders: vec![SavedFolder {
+                path: folder.clone(),
+                ..SavedFolder::default()
+            }],
+            ..SavedView::default()
+        },
+        ..Saved::default()
+    };
+
+    let plan = plan_launch(vec![file.clone()], Some(saved));
+    assert_eq!(opened(&plan.launch), [folder.clone(), file]);
+    // The saved folder keeps its saved view.
+    assert_eq!(restored(plan.view.as_ref()), [folder]);
+}
+
+#[test]
+fn files_after_folder_arguments_open_after_them_without_changing_which_folders() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = explorer::canonical(dir.path()).unwrap();
+    fs::create_dir_all(root.join("a")).unwrap();
+    fs::create_dir_all(root.join("b")).unwrap();
+    fs::write(root.join("a/one.txt"), "1").unwrap();
+    let mut saved = full(&root.join("a"));
+    saved.view.folders[1].path = root.join("b");
+
+    // The file is named first, yet opens after the folder.
+    let file = root.join("a/one.txt");
+    let plan = plan_launch(vec![file.clone(), root.join("b")], Some(saved));
+    assert_eq!(opened(&plan.launch), [root.join("b"), file]);
+    assert_eq!(restored(plan.view.as_ref()), [root.join("b")]);
+}
+
+#[test]
 fn a_path_resolves_as_far_as_it_exists() {
     let dir = tempfile::tempdir().unwrap();
     let real = explorer::canonical(dir.path()).unwrap();

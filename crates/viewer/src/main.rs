@@ -11,8 +11,8 @@ use viewer::{AppAssets, StateStore, open_main_window, path_from_url};
 const USAGE: &str = "\
 Usage: strikebrain-viewer [FOLDER or FILE]...
 
-Opens the folders, and each file's folder with the file showing. With none,
-reopens the folders open last time.
+Opens the folders, or with none the folders open last time, and shows each
+file: in an open folder that holds it, or on its own.
 
   -h, --help     Print this and exit
   -V, --version  Print the version and exit";
@@ -30,9 +30,9 @@ fn main() {
     if flag("-h", "--help") {
         return println!("{USAGE}");
     }
-    // `strikebrain-viewer <folder or file>...` opens those folders, and a
-    // file's folder with the file on the stage; with none the folders open
-    // last time reopen, as they were seen.
+    // `strikebrain-viewer <folder or file>...` opens those folders, or with
+    // none the folders open last time, as they were seen, and shows each
+    // file in an open folder that lists it or as a row of its own.
     let asked: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
     let store = StateStore::in_config_dir();
 
