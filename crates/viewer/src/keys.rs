@@ -94,7 +94,8 @@ actions!(
         /// Esc in the filter input: clears a query, or with none moves focus
         /// to the tree.
         CancelFilter,
-        /// Removes the focused top-level folder.
+        /// Removes the focused top-level row: a folder, or a file opened on
+        /// its own.
         RemoveFolder,
     ]
 );

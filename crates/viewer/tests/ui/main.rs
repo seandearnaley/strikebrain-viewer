@@ -7,6 +7,7 @@
 mod bar;
 mod checks;
 mod commands;
+mod files;
 mod filter;
 mod flick;
 mod folders;
@@ -210,7 +211,8 @@ fn node_at(cx: &mut TestAppContext, view: &Entity<AppView>, path: &Path) -> Node
     })
 }
 
-/// The checked files, each by its path inside its folder.
+/// The checked files, each by its path inside its folder; a file opened on
+/// its own, a top-level row, by its name.
 fn checked(cx: &mut TestAppContext, view: &Entity<AppView>) -> Vec<String> {
     read(cx, view, |state| {
         let explorer = state.explorer().expect("a tree is on screen");
@@ -218,7 +220,14 @@ fn checked(cx: &mut TestAppContext, view: &Entity<AppView>) -> Vec<String> {
         explorer
             .selection()
             .iter()
-            .map(|id| tree.path_from(tree.folder_of(id).expect("a file is in a folder"), id))
+            .map(|id| {
+                let top = tree.folder_of(id).expect("a file is a top-level entry's");
+                if top == id {
+                    tree.name(id).to_owned()
+                } else {
+                    tree.path_from(top, id)
+                }
+            })
             .collect()
     })
 }

@@ -764,17 +764,17 @@ fn a_folder_never_read_saves_as_open(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn a_file_argument_takes_its_folders_saved_view_and_the_stage(cx: &mut TestAppContext) {
+fn a_folder_and_a_file_in_it_take_the_saved_view_and_the_stage(cx: &mut TestAppContext) {
     let dir = folder(&[("a.txt", "a"), ("b.txt", "b"), ("c.txt", "c")]);
     let state_dir = tempfile::tempdir().unwrap();
     let store = StateStore::at(state_dir.path().join("state.json"));
     save_three_checked(cx, dir.path(), &store);
 
-    // Launched on a file of the saved folder: the folder comes back with
-    // its checks, and the file asked for is on the stage, alone.
+    // Launched on the saved folder and a file in it: the folder comes back
+    // with its checks, and the file asked for is on the stage, alone.
     let mut cx = cx.new_app();
     let file = dir.path().join("b.txt");
-    let (handle, view) = launch(&mut cx, &[&file], &StateStore::at(store.path()));
+    let (handle, view) = launch(&mut cx, &[dir.path(), &file], &StateStore::at(store.path()));
     assert_eq!(
         rows_now(&mut cx, handle),
         under(dir.path(), &["a.txt", "b.txt", "c.txt"])

@@ -234,7 +234,8 @@ impl ExplorerPanel {
         self.after_key(row, cx);
     }
 
-    /// ⌘⌫ in the tree: removes the focused top-level folder.
+    /// ⌘⌫ in the tree: removes the focused top-level row, a folder or a
+    /// file opened on its own.
     fn remove_folder(&mut self, _: &RemoveFolder, _: &mut Window, cx: &mut Context<Self>) {
         self.state.update(cx, AppState::remove_focus_folder);
         let row = self.state.read(cx).focus_index();

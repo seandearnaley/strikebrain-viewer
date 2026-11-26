@@ -219,6 +219,42 @@ async fn a_change_rescans_only_the_folder_it_is_in(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+async fn a_file_opened_on_its_own_is_followed_alone(cx: &mut TestAppContext) {
+    let dir = folder(&[("a.txt", "a"), ("b.txt", "b")]);
+    let file = dir.path().join("b.txt");
+    let (_, view) = open_watching(cx, &file);
+    let scans = settled(cx, &view).await;
+
+    // Its folder is not followed: a change beside the file reads nothing.
+    write(dir.path(), "a.txt", "a again");
+    pause(cx, Duration::from_millis(600)).await;
+    assert_eq!(read(cx, &view, AppState::scans), scans, "no rescan");
+
+    // The file changes: it is read again, once.
+    write(dir.path(), "b.txt", "b again");
+    until(cx, "the file is read again", |cx| {
+        read(cx, &view, AppState::scans) > scans
+    })
+    .await;
+    assert_eq!(settled(cx, &view).await, scans + 1, "one rescan");
+
+    // Deleted: its row is unreadable, with the system's message.
+    std::fs::remove_file(&file).unwrap();
+    let tooltip = |cx: &mut TestAppContext| {
+        read(cx, &view, |state| {
+            let top = state.explorer()?.tree().folders().next()?;
+            state.folder_tooltip(top)
+        })
+    };
+    until(cx, "the row is unreadable", |cx| {
+        tooltip(cx).is_some_and(|text| text.contains('\n'))
+    })
+    .await;
+    let tooltip = tooltip(cx).unwrap();
+    assert_eq!(tooltip.lines().nth(1), Some(not_found().as_str()));
+}
+
+#[gpui_kit::test]
 async fn a_busy_folder_the_ignore_rules_hide_never_rescans(cx: &mut TestAppContext) {
     let dir = folder(&[
         (".gitignore", "target/\n*.log\n"),

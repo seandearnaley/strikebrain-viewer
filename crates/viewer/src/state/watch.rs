@@ -1,4 +1,5 @@
-//! Live refresh: a recursive file watcher on each open folder.
+//! Live refresh: a recursive file watcher on each open folder, and one on
+//! each file opened on its own, alone.
 //!
 //! Each watcher runs on its own thread and sends what it sees into a
 //! channel. A task on the UI thread waits for the first change, lets more
@@ -269,7 +270,13 @@ fn watch(
     // some platforms the scan's own reads would report them.
     let config = Config::default().with_event_kinds(EventKindMask::CORE);
     let mut watcher = RecommendedWatcher::new(handler, config)?;
-    watcher.watch(&root, RecursiveMode::Recursive)?;
+    // A file opened on its own is watched alone: its folder is never read.
+    let mode = if root.is_dir() {
+        RecursiveMode::Recursive
+    } else {
+        RecursiveMode::NonRecursive
+    };
+    watcher.watch(&root, mode)?;
     Ok(watcher)
 }
 

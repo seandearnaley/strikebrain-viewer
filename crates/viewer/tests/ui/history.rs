@@ -283,7 +283,9 @@ fn back_to_the_gallery_from_the_code_view_keeps_the_gallerys_keys(cx: &mut TestA
 fn files_opened_together_at_launch_are_one_step(cx: &mut TestAppContext) {
     let dir = folder(&[("a.txt", "a"), ("b.txt", "b"), ("c.txt", "c")]);
     let (b, c) = (dir.path().join("b.txt"), dir.path().join("c.txt"));
-    let (handle, view) = open_app(cx, Launch::Folders(vec![b, c]));
+    // Their folder with them, so a.txt is in the tree too.
+    let launch = Launch::Folders(vec![dir.path().to_owned(), b, c]);
+    let (handle, view) = open_app(cx, launch);
     assert!(read(cx, &view, AppState::shows_gallery));
     assert!(!read(cx, &view, AppState::can_go_back));
 

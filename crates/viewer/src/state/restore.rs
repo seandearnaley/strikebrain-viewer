@@ -149,7 +149,8 @@ impl AppState {
     /// copied as bit sets and named later, off the UI thread. A folder not
     /// on screen as it was seen saves the view waiting for it; one still
     /// scanning for the first time, or never read, saves as open, as it
-    /// will show. A tree built in memory has no folder to save.
+    /// will show. A tree built in memory has no folder to save, and a file
+    /// opened on its own is not saved.
     pub(crate) fn take_snapshot(&self) -> SnapshotView {
         let explorer = self.explorer.as_ref();
         let on_disk = |path: PathBuf| path.is_absolute().then_some(path);
@@ -168,6 +169,8 @@ impl AppState {
         let folders: Vec<FolderSnapshot> = self
             .folders
             .iter()
+            // Files opened on their own last for the session.
+            .filter(|folder| !folder.file)
             .map(|folder| match &folder.waiting {
                 Some(waiting) => FolderSnapshot::Waiting(waiting.clone()),
                 None if folder.shown && folder.error.is_none() => {
