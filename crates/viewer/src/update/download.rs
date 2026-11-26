@@ -2,13 +2,16 @@
 //! cache folder, checked against the size and digest the release gives.
 //! Blocking; the updater runs these on GPUI's background executor.
 //!
-//! Every request goes to an address [`allowed`] passes: `https`, or `http`
-//! to this machine for tests and a local feed. ureq follows up to ten
-//! redirects and does not hold them to that rule: an `https` address that
-//! redirects to `http` is followed (ureq drops only the `Authorization` and
-//! `Cookie` headers). A file is trusted for its size and digest, which come
-//! from the feed, not for the way it travelled.
+//! Every request starts at an address [`allowed`] passes: `https`, or
+//! `http` to this machine for tests and a local feed. ureq follows up to
+//! ten redirects to any `Location`, whatever its scheme, so a request that
+//! starts at `https` is held to `https` on every redirect: ureq checks each
+//! hop before connecting and fails with `RequireHttpsOnly`. Otherwise a
+//! redirect to `http` would carry the feed, whose digests are the only
+//! check of a `.deb`, in plain text. A request that starts at `http` to
+//! this machine follows redirects as ureq does.
 
+use std::ffi::OsStr;
 use std::fmt;
 use std::fs;
 use std::io::{self, Read as _, Write as _};
@@ -18,9 +21,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use sha2::{Digest as _, Sha256};
-use ureq::Agent;
+use ureq::config::ConfigBuilder;
 use ureq::http::Uri;
 use ureq::tls::{RootCerts, TlsConfig};
+use ureq::typestate::{AgentScope, WithoutBody};
+use ureq::{Agent, RequestBuilder};
 
 use super::feed::Asset;
 
@@ -42,6 +47,10 @@ const GITHUB_API_VERSION: &str = "2022-11-28";
 /// The folder under the cache folder that holds each version's files.
 const UPDATES: &str = "updates";
 
+/// The feed is a few kilobytes: its whole request, redirects included,
+/// gets this long.
+const FEED_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// How much of a file one read takes.
 const CHUNK: usize = 64 * 1024;
 
@@ -62,6 +71,9 @@ pub(crate) enum Error {
     Digest,
     /// The download was cancelled.
     Cancelled,
+    /// The asset's name is not a bare file name, so it could land outside
+    /// the folder.
+    NotAFileName(String),
 }
 
 impl fmt::Display for Error {
@@ -74,6 +86,7 @@ impl fmt::Display for Error {
             Self::Size => f.write_str("the file is not the size the release gives"),
             Self::Digest => f.write_str("the file's digest is not the release's"),
             Self::Cancelled => f.write_str("the download was cancelled"),
+            Self::NotAFileName(name) => write!(f, "not a file name: {name}"),
         }
     }
 }
@@ -83,8 +96,20 @@ impl std::error::Error for Error {}
 /// The agent for the feed and the downloads: certificates checked by the
 /// platform's verifier against the system's store, the app's user agent,
 /// and a 30 s limit on each step. A 4xx or 5xx reply is an error
-/// (`ureq::Error::StatusCode`), as ureq does by default.
+/// (`ureq::Error::StatusCode`), as ureq does by default. A proxy comes from
+/// the environment (`HTTPS_PROXY` and the like), as ureq does by default.
 pub(crate) fn agent() -> Agent {
+    config().build().new_agent()
+}
+
+/// The agent tests use: [`agent`] without the environment's proxy, so a
+/// machine with one set still reaches the test server on `127.0.0.1`.
+#[cfg(test)]
+fn local_agent() -> Agent {
+    config().proxy(None).build().new_agent()
+}
+
+fn config() -> ConfigBuilder<AgentScope> {
     Agent::config_builder()
         .tls_config(
             TlsConfig::builder()
@@ -96,8 +121,6 @@ pub(crate) fn agent() -> Agent {
         .timeout_connect(Some(TIMEOUT))
         .timeout_per_read(Some(TIMEOUT))
         .timeout_per_write(Some(TIMEOUT))
-        .build()
-        .new_agent()
 }
 
 /// Whether `url` may be requested: `https`, or `http` to this machine
@@ -129,21 +152,33 @@ fn is_loopback(host: &str) -> bool {
     })
 }
 
-/// Fails, before any request, on an address [`allowed`] refuses.
-fn check(url: &str) -> Result<(), Error> {
-    if allowed(url) {
-        Ok(())
-    } else {
-        Err(Error::NotHttps(url.to_owned()))
+/// Whether `url` starts at `https`, and so must stay on it.
+fn starts_https(url: &str) -> bool {
+    url.parse::<Uri>()
+        .is_ok_and(|uri| uri.scheme_str() == Some("https"))
+}
+
+/// A GET of `url`, refused before any request unless [`allowed`] passes
+/// it, and held to `https` on every redirect when it starts there.
+fn get(agent: &Agent, url: &str) -> Result<RequestBuilder<WithoutBody>, Error> {
+    if !allowed(url) {
+        return Err(Error::NotHttps(url.to_owned()));
     }
+    Ok(agent
+        .get(url)
+        .config()
+        .https_only(starts_https(url))
+        .build())
 }
 
 /// The feed's reply, as bytes for `feed::parse`, with GitHub's JSON media
-/// type and API version. ureq caps the reply at 10 MB.
+/// type and API version, within [`FEED_TIMEOUT`]. ureq caps the reply at
+/// 10 MB.
 pub(crate) fn fetch_json(agent: &Agent, url: &str) -> Result<Vec<u8>, Error> {
-    check(url)?;
-    let mut response = agent
-        .get(url)
+    let mut response = get(agent, url)?
+        .config()
+        .timeout_global(Some(FEED_TIMEOUT))
+        .build()
         .header("Accept", GITHUB_JSON)
         .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
         .call()
@@ -155,14 +190,17 @@ pub(crate) fn fetch_json(agent: &Agent, url: &str) -> Result<Vec<u8>, Error> {
 /// and stopping past the release's size or when `cancel` is set, then
 /// renames it to `<name>` once its size and digest are the release's. On
 /// any failure the partial file is removed, so nothing partly downloaded is
-/// ever left to open. The name comes from `feed::file_for`, which builds it
-/// from the version.
+/// ever left to open. A name that is not a bare file name is refused
+/// before any request.
 pub(crate) fn file(
     agent: &Agent,
     asset: &Asset,
     into: &Path,
     cancel: &AtomicBool,
 ) -> Result<PathBuf, Error> {
+    if Path::new(&asset.name).file_name() != Some(OsStr::new(&asset.name)) {
+        return Err(Error::NotAFileName(asset.name.clone()));
+    }
     let part = into.join(format!("{}.part", asset.name));
     let path = into.join(&asset.name);
     let done = fetch_into(agent, asset, &part, cancel)
@@ -176,8 +214,7 @@ pub(crate) fn file(
 
 /// Streams `asset` into `part`, checked; leaves `part` to the caller.
 fn fetch_into(agent: &Agent, asset: &Asset, part: &Path, cancel: &AtomicBool) -> Result<(), Error> {
-    check(&asset.url)?;
-    let mut response = agent.get(&asset.url).call().map_err(Error::Http)?;
+    let mut response = get(agent, &asset.url)?.call().map_err(Error::Http)?;
     // ureq's limit hands over at most the size and fails on one byte more.
     let mut body = response.body_mut().with_config().limit(asset.size).reader();
     let mut out = fs::File::create(part).map_err(Error::Io)?;
@@ -251,7 +288,7 @@ mod tests {
     use std::net::TcpListener;
     use std::sync::atomic::Ordering;
 
-    use super::super::test_server::{Reply, Server};
+    use super::super::test_server::{Reply, Server, plain_as_tls};
     use super::*;
 
     const NAME: &str = "Strikebrain-Viewer-9.9.9-macos-arm64.dmg";
@@ -281,7 +318,7 @@ mod tests {
     }
 
     fn download(asset: &Asset, into: &Path) -> Result<PathBuf, Error> {
-        file(&agent(), asset, into, &AtomicBool::new(false))
+        file(&local_agent(), asset, into, &AtomicBool::new(false))
     }
 
     #[test]
@@ -352,7 +389,7 @@ mod tests {
         let refused = download(&asset(b"x", format!("http://{closed}/dmg")), tmp.path());
         assert!(matches!(refused, Err(Error::Http(_))), "{refused:?}");
         assert!(matches!(
-            fetch_json(&agent(), &format!("http://{closed}/latest")),
+            fetch_json(&local_agent(), &format!("http://{closed}/latest")),
             Err(Error::Http(_))
         ));
         assert_eq!(listing(tmp.path()), NOTHING);
@@ -367,7 +404,7 @@ mod tests {
         let cancel = AtomicBool::new(false);
         cancel.store(true, Ordering::Relaxed);
         let result = file(
-            &agent(),
+            &local_agent(),
             &asset(&body, server.url("/dmg")),
             tmp.path(),
             &cancel,
@@ -380,7 +417,7 @@ mod tests {
     fn the_feed_request_names_the_app_and_asks_for_githubs_json() {
         let server = Server::start();
         server.route("/latest", Reply::ok(br#"{"tag_name":"v9.9.9"}"#.to_vec()));
-        let json = fetch_json(&agent(), &server.url("/latest")).unwrap();
+        let json = fetch_json(&local_agent(), &server.url("/latest")).unwrap();
         assert_eq!(json, br#"{"tag_name":"v9.9.9"}"#);
         let requests = server.requests();
         assert_eq!(requests.len(), 1);
@@ -429,9 +466,12 @@ mod tests {
     #[test]
     fn an_address_that_is_not_allowed_is_refused_before_any_request() {
         let tmp = tempfile::tempdir().unwrap();
-        let result = download(
+        // The shipped agent, with the environment's proxy: no request is made.
+        let result = file(
+            &agent(),
             &asset(b"x", "http://example.com/dmg".to_owned()),
             tmp.path(),
+            &AtomicBool::new(false),
         );
         assert!(matches!(result, Err(Error::NotHttps(_))), "{result:?}");
         assert_eq!(listing(tmp.path()), NOTHING);
@@ -446,7 +486,7 @@ mod tests {
         // and the platform verifier loads.
         let server = Server::start();
         let url = server.url("/latest").replacen("http://", "https://", 1);
-        let result = fetch_json(&agent(), &url);
+        let result = fetch_json(&local_agent(), &url);
         assert!(matches!(result, Err(Error::Http(_))), "{result:?}");
         assert_eq!(server.requests().len(), 0);
     }
@@ -481,5 +521,99 @@ mod tests {
             "{}",
             updates.display()
         );
+    }
+
+    #[test]
+    fn a_body_far_longer_than_the_size_is_cut_off() {
+        let server = Server::start();
+        // Far more than a socket's buffers hold, so the server can write it
+        // all only if the client reads it all.
+        let body = vec![b'x'; 32 << 20];
+        server.route("/dmg", Reply::ok(body.clone()));
+        let tmp = tempfile::tempdir().unwrap();
+        let result = download(&asset(&body[..10], server.url("/dmg")), tmp.path());
+        assert!(matches!(result, Err(Error::Size)), "{result:?}");
+        assert_eq!(listing(tmp.path()), NOTHING);
+        let requests = server.stop();
+        assert_eq!(requests.len(), 1);
+        assert!(!requests[0].whole, "the client read the whole body");
+    }
+
+    #[test]
+    fn a_request_that_starts_at_https_is_held_to_https() {
+        assert!(starts_https(
+            "https://api.github.com/repos/x/y/releases/latest"
+        ));
+        assert!(starts_https("HTTPS://objects.githubusercontent.com/x"));
+        assert!(!starts_https("http://127.0.0.1:8080/latest"));
+        assert!(!starts_https("http://localhost/latest"));
+        assert!(!starts_https("not a url"));
+    }
+
+    #[test]
+    fn a_request_that_starts_at_https_is_not_redirected_to_http() {
+        let server = Server::start();
+        let agent = plain_as_tls(config().proxy(None).build());
+        server.route("/json", Reply::ok(b"{}".to_vec()));
+        server.route("/dmg", Reply::ok(b"x".to_vec()));
+        server.route("/latest", Reply::redirect(&server.url("/json")));
+        server.route("/release", Reply::redirect(&server.url("/dmg")));
+        let feed = fetch_json(&agent, &server.https_url("/latest"));
+        assert!(
+            matches!(feed, Err(Error::Http(ureq::Error::RequireHttpsOnly(_)))),
+            "{feed:?}"
+        );
+        let tmp = tempfile::tempdir().unwrap();
+        let dmg = asset(b"x", server.https_url("/release"));
+        let result = file(&agent, &dmg, tmp.path(), &AtomicBool::new(false));
+        assert!(
+            matches!(result, Err(Error::Http(ureq::Error::RequireHttpsOnly(_)))),
+            "{result:?}"
+        );
+        assert_eq!(listing(tmp.path()), NOTHING);
+        // A redirect that stays on https is followed.
+        server.route("/secure", Reply::redirect(&server.https_url("/json")));
+        assert_eq!(
+            fetch_json(&agent, &server.https_url("/secure")).unwrap(),
+            b"{}"
+        );
+        let lines: Vec<_> = server.stop().into_iter().map(|r| r.line).collect();
+        assert_eq!(
+            lines,
+            [
+                "GET /latest HTTP/1.1",
+                "GET /release HTTP/1.1",
+                "GET /secure HTTP/1.1",
+                "GET /json HTTP/1.1",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_name_that_is_not_a_bare_file_name_is_refused_before_any_request() {
+        let server = Server::start();
+        server.route("/dmg", Reply::ok(b"x".to_vec()));
+        let tmp = tempfile::tempdir().unwrap();
+        let into = tmp.path().join("into");
+        fs::create_dir(&into).unwrap();
+        for name in [
+            "../evil.dmg",
+            "sub/evil.dmg",
+            "/tmp/evil.dmg",
+            "..",
+            ".",
+            "",
+        ] {
+            let mut bad = asset(b"x", server.url("/dmg"));
+            bad.name = name.to_owned();
+            let result = download(&bad, &into);
+            assert!(
+                matches!(result, Err(Error::NotAFileName(_))),
+                "{name:?}: {result:?}"
+            );
+        }
+        assert_eq!(listing(tmp.path()), ["into"]);
+        assert_eq!(listing(&into), NOTHING);
+        assert_eq!(server.stop().len(), 0);
     }
 }
