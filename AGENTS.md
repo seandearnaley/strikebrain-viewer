@@ -46,7 +46,7 @@ CI (`.github/workflows/ci.yml`) runs `just check` on macOS for every pull reques
 `.github/workflows/release.yml` builds the macOS disk image, the Linux packages and the Windows packages with the recipes above, signs them, checks them as a person would install them, and publishes them. To release:
 
 1. Set `version` in the root `Cargo.toml`, run `cargo check` so `Cargo.lock` follows, and merge that.
-2. Run `gh workflow run release.yml --ref main` (or Actions > Release > Run workflow). Add `-f dry_run=true` to do everything but publish. Follow it with `gh run watch`.
+2. Run `gh workflow run release.yml --ref main` (or Actions > Release > Run workflow). Add `-f dry_run=true` to do everything but publish, for any version, released or not. Follow it with `gh run watch`.
 3. When every package passes, the workflow tags the commit `v<version>`, publishes the release with `SHA256SUMS` and a build attestation, then downloads and verifies the published files. A failure anywhere publishes nothing; a version already tagged or released stops the run before it builds.
 
 A pull request that touches the workflow, the `justfile`, `crates/viewer/bundle` or `crates/viewer/build.rs` runs it as a rehearsal: unsigned, unpublished, its files kept as artifacts.

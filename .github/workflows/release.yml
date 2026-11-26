@@ -6,7 +6,8 @@
 #   gh workflow run release.yml --ref main
 # It builds, signs and checks every package, then tags the commit
 # v<version> and publishes the release. `-f dry_run=true` does all of that
-# but the tag and the release. A failure anywhere publishes nothing.
+# but the tag and the release, for any version. A failure anywhere
+# publishes nothing.
 #
 # A pull request that touches the packaging runs it as a rehearsal: nothing
 # is signed or published, and the files are kept as the run's artifacts.
@@ -73,15 +74,18 @@ jobs:
           version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
           test -n "$version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+      # A dry run publishes nothing, so it may rebuild a released version.
       - name: Check the branch and the version
         if: env.SIGN == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: v${{ steps.version.outputs.version }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           if [ "$GITHUB_REF" != refs/heads/main ]; then
             echo "::error::Release from main."; exit 1
           fi
+          if [ "$DRY_RUN" = true ]; then exit 0; fi
           if git ls-remote --exit-code --tags origin "refs/tags/$TAG" > /dev/null; then
             echo "::error::$TAG is already tagged. Bump the version in Cargo.toml first."; exit 1
           fi
