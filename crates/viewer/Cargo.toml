@@ -61,13 +61,5 @@ path = "tests/shots.rs"
 harness = false
 test = false
 
-# `just icon`: draws bundle/icon.png, the source of the bundle's icon. Not a
-# test suite either.
-[[test]]
-name = "icon"
-path = "tests/icon.rs"
-harness = false
-test = false
-
 [lints]
 workspace = true

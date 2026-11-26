@@ -51,13 +51,18 @@ run:
 shot:
     cargo test -p viewer --test shots
 
-# Draw the app icon into crates/viewer/bundle/icon.png, the source the
-# bundle's icon is made from. Run after changing tests/icon.rs.
-icon:
-    cargo test -p viewer --test icon
+# The builds take their icons from the pack: macOS its Assets.car and
+# .icns, Windows its .ico, Linux its hicolor icons. Needs macOS 26 and
+# Xcode 26 or later, resvg, ImageMagick and the Geist font.
+# Rebuild brand/Strikebrain-Production-Pack, the icons and identity, from brand/build.sh.
+[macos]
+brand:
+    brand/build.sh
 
-# The Info.plist template and the icon live in crates/viewer/bundle; the
-# version comes from Cargo. Signed ad hoc, for this Mac only, unless
+# The Info.plist template lives in crates/viewer/bundle and the icon in the
+# brand pack: Assets.car, which macOS 26 and later show with Liquid Glass
+# and macOS 11 to 15 flattened, and an .icns beside it. The version comes
+# from Cargo. Signed ad hoc, for this Mac only, unless
 # CODESIGN_IDENTITY names a Developer ID Application certificate in the
 # keychain; either way with the hardened runtime, which notarization
 # requires.
@@ -74,14 +79,7 @@ bundle:
     cp target/release/strikebrain-viewer "$app/Contents/MacOS/"
     sed "s/@VERSION@/$version/g" crates/viewer/bundle/Info.plist > "$app/Contents/Info.plist"
     plutil -lint -s "$app/Contents/Info.plist"
-    iconset="$(mktemp -d)/AppIcon.iconset"
-    mkdir "$iconset"
-    for side in 16 32 128 256 512; do
-        sips -z "$side" "$side" crates/viewer/bundle/icon.png --out "$iconset/icon_${side}x${side}.png" > /dev/null
-        sips -z "$((side * 2))" "$((side * 2))" crates/viewer/bundle/icon.png --out "$iconset/icon_${side}x${side}@2x.png" > /dev/null
-    done
-    iconutil -c icns "$iconset" -o "$app/Contents/Resources/AppIcon.icns"
-    rm -r "$iconset"
+    cp brand/Strikebrain-Production-Pack/platform/apple/{Assets.car,AppIcon.icns} "$app/Contents/Resources/"
     identity="${CODESIGN_IDENTITY:--}"
     # A secure timestamp needs Apple's server and a real certificate.
     timestamp=$([ "$identity" = "-" ] && echo --timestamp=none || echo --timestamp)
@@ -139,7 +137,7 @@ dmg: bundle
 
 # The .tar.gz is laid out as a prefix (bin/, share/), to unpack into
 # ~/.local or /usr/local; the .deb's dependencies are read from the binary.
-# Needs dpkg-dev and ImageMagick.
+# The icons are the brand pack's hicolor set. Needs dpkg-dev.
 # Build the Linux packages, a .tar.gz and a .deb, in target/release/bundle.
 [linux]
 linux-packages:
@@ -152,8 +150,8 @@ linux-packages:
     stage() {
         install -Dm755 target/release/strikebrain-viewer "$1/bin/strikebrain-viewer"
         install -Dm644 "crates/viewer/bundle/$id.desktop" "$1/share/applications/$id.desktop"
-        mkdir -p "$1/share/icons/hicolor/512x512/apps"
-        convert crates/viewer/bundle/icon.png -resize 512x512 "$1/share/icons/hicolor/512x512/apps/$id.png"
+        mkdir -p "$1/share/icons"
+        cp -R brand/Strikebrain-Production-Pack/platform/linux/hicolor "$1/share/icons/"
         install -Dm644 LICENSE-MIT LICENSE-APACHE -t "$1/share/doc/strikebrain-viewer"
     }
     name="strikebrain-viewer-$version-linux-$(uname -m)"

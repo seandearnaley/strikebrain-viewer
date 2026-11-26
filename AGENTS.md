@@ -32,7 +32,7 @@ Design: `docs/superpowers/specs/2026-11-22-strikebrain-viewer-design.md`.
 | That app in a disk image, `target/release/bundle/*.dmg` | `just dmg` |
 | On Linux, a `.tar.gz` and a `.deb` in `target/release/bundle` | `just linux-packages` |
 | On Windows, a `.zip` and an Inno Setup installer in `target\release\bundle` (needs Inno Setup 6) | `just windows-packages` |
-| Redraw the icon source `crates/viewer/bundle/icon.png`, and the Windows `icon.ico` beside it, from `tests/icon.rs` | `just icon` |
+| Rebuild the icons and identity in `brand/Strikebrain-Production-Pack` from `brand/build.sh` (macOS 26+, Xcode 26+, resvg, ImageMagick, Geist) | `just brand` |
 | Engine tests | `cargo nextest run -p explorer` |
 | All tests | `cargo nextest run --workspace` |
 | One UI test | `cargo nextest run -p viewer --test ui <name>` |
@@ -54,6 +54,8 @@ A pull request that touches the workflow, the `justfile`, `crates/viewer/bundle`
 Signing runs in the repository's `release` environment, which only `main` can use; its secrets and variables are named in the workflow's header. macOS imports the Developer ID Application certificate into a keychain made for the job, signs with the hardened runtime, and `just dmg` notarizes the app with an App Store Connect API key (`strikebrain-viewer-notarize`) and staples its ticket to it, then builds, notarizes and staples the disk image. The app needs its own stapled ticket: the image's ticket stays with the image, so without it Gatekeeper fetches the app's ticket online on its first launch, and refuses an offline one. The workflow checks both tickets and Gatekeeper. Locally, `just bundle` and `just dmg` sign ad hoc, or with `CODESIGN_IDENTITY` when it is set, and notarize when `NOTARY_KEY`, `NOTARY_KEY_ID` and `NOTARY_ISSUER_ID` are set.
 
 Windows signs with Azure Artifact Signing (account `seandsigning`, profile `public-trust`). The Entra app `strikebrain-viewer-release` trusts only this repository's `release` environment through GitHub's OIDC token, so no Azure password is stored. The workflow signs the executable with Microsoft's action, then sets `SIGNTOOL` to run `crates/viewer/bundle/windows-sign.ps1`, which `just windows-packages` hands to Inno Setup to sign the uninstaller and the installer. The check requires every file to carry a valid, timestamped signature from one publisher. `crates/viewer/build.rs` compiles `bundle/windows.rc` into the executable: icon 1, which GPUI loads for the window, and the version details.
+
+The icons come from `brand/Strikebrain-Production-Pack` (its README describes each file): macOS's `Assets.car` and `AppIcon.icns`, compiled by `actool` from the Icon Composer icon `AppIcon.icon`, which the bundle names with `CFBundleIconName`; Windows's `Strikebrain.ico`; Linux's `hicolor` tree. `actool` needs macOS 26 and Xcode 26, which the runners lack, so `just brand` runs on a Mac and its output is committed; the builds only copy it.
 
 To renew: a new Developer ID certificate means a new `MACOS_APPLICATION_P12`, `MACOS_P12_PASSWORD` and `MACOS_APPLICATION_IDENTITY` (`gh secret set <name> --env release`); a revoked notary key means new `NOTARY_API_*` secrets. Azure rotates its short-lived certificates itself; keep the identity validation current.
 

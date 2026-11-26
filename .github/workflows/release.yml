@@ -43,6 +43,7 @@ on:
       - justfile
       - crates/viewer/bundle/**
       - crates/viewer/build.rs
+      - brand/**
 
 permissions:
   contents: read

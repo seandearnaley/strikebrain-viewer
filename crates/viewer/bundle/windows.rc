@@ -1,8 +1,9 @@
 // What the build script compiles into the Windows executable. The version
-// comes from Cargo, as macros. `just icon` draws icon.ico.
+// comes from Cargo, as macros; the icon from the brand pack, whose folder
+// the build script puts on the include path.
 
 // GPUI loads icon 1 for the window; Explorer shows an executable's first icon.
-1 ICON "icon.ico"
+1 ICON "Strikebrain.ico"
 
 1 VERSIONINFO
 FILEVERSION VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH, 0
