@@ -1,13 +1,21 @@
 //! A local HTTP/1.1 server for tests: it answers each path with a canned
 //! reply, closes every connection after one, and records each request, so
-//! tests never reach the network.
+//! tests never reach the network. [`plain_as_tls`] makes an agent that
+//! reaches it at `https` addresses too.
 
 use std::collections::HashMap;
-use std::io::{BufRead as _, BufReader, Write as _};
+use std::io::{self, BufRead as _, BufReader, Write as _};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
+
+use ureq::Agent;
+use ureq::config::Config;
+use ureq::unversioned::resolver::DefaultResolver;
+use ureq::unversioned::transport::{
+    Buffers, ConnectionDetails, Connector, NextTimeout, TcpConnector, Transport,
+};
 
 /// A reply: its status, where it redirects, and its body.
 /// `Content-Length` and `Connection: close` are added.
@@ -47,11 +55,14 @@ impl Reply {
 }
 
 /// A request as the server read it: its first line and its headers, names
-/// in lower case.
+/// in lower case, and whether the whole reply was written. The client may
+/// hang up first, as on a body longer than it takes; `whole` is settled
+/// once the server has [stopped](Server::stop).
 #[derive(Clone, Debug)]
 pub(crate) struct Request {
     pub(crate) line: String,
     pub(crate) headers: Vec<(String, String)>,
+    pub(crate) whole: bool,
 }
 
 impl Request {
@@ -65,13 +76,14 @@ impl Request {
 }
 
 type Routes = Arc<Mutex<HashMap<String, Reply>>>;
+type Requests = Arc<Mutex<Vec<Request>>>;
 
-/// The server, on `127.0.0.1` at a free port, until dropped.
+/// The server, on `127.0.0.1` at a free port, until stopped or dropped.
 #[derive(Debug)]
 pub(crate) struct Server {
     address: SocketAddr,
     routes: Routes,
-    requests: Arc<Mutex<Vec<Request>>>,
+    requests: Requests,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
@@ -81,7 +93,7 @@ impl Server {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let routes = Routes::default();
-        let requests = Arc::<Mutex<Vec<Request>>>::default();
+        let requests = Requests::default();
         let stop = Arc::new(AtomicBool::new(false));
         let thread = thread::spawn({
             let (routes, requests, stop) = (routes.clone(), requests.clone(), stop.clone());
@@ -91,7 +103,9 @@ impl Server {
                         break;
                     }
                     if let Ok(stream) = stream {
-                        answer(&stream, &routes, &requests);
+                        // A client that hangs up mid-request is its test's
+                        // to notice; the server goes on.
+                        let _answered = answer(&stream, &routes, &requests);
                     }
                 }
             }
@@ -107,7 +121,7 @@ impl Server {
 
     /// Answers `path` with `reply` from now on.
     pub(crate) fn route(&self, path: &str, reply: Reply) {
-        self.routes.lock().unwrap().insert(path.to_owned(), reply);
+        lock(&self.routes).insert(path.to_owned(), reply);
     }
 
     /// The `http` URL of `path` on this server.
@@ -115,51 +129,83 @@ impl Server {
         format!("http://{}{path}", self.address)
     }
 
+    /// The `https` URL of `path` on this server, which only an agent from
+    /// [`plain_as_tls`] reaches.
+    pub(crate) fn https_url(&self, path: &str) -> String {
+        format!("https://{}{path}", self.address)
+    }
+
     /// The requests read so far, in order.
     pub(crate) fn requests(&self) -> Vec<Request> {
-        self.requests.lock().unwrap().clone()
+        lock(&self.requests).clone()
+    }
+
+    /// Stops the server once it has finished every reply, and returns the
+    /// requests it read.
+    pub(crate) fn stop(mut self) -> Vec<Request> {
+        self.shut_down();
+        self.requests()
+    }
+
+    fn shut_down(&mut self) {
+        let Some(thread) = self.thread.take() else {
+            return;
+        };
+        self.stop.store(true, Ordering::SeqCst);
+        // Wakes the accept loop, which then sees the flag.
+        let _woken = TcpStream::connect(self.address);
+        // The thread does not panic; if it did, a test already failing
+        // should not panic again here.
+        let _joined = thread.join();
     }
 }
 
 impl Drop for Server {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::SeqCst);
-        // Wakes the accept loop, which then sees the flag.
-        let _woken = TcpStream::connect(self.address);
-        if let Some(thread) = self.thread.take() {
-            thread.join().unwrap();
-        }
+        self.shut_down();
     }
+}
+
+/// The value behind `mutex`, even if a panicking test left it poisoned.
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Reads one request and writes its route's reply. A connection that does
 /// not start like an HTTP request, such as a TLS handshake, is closed
 /// unanswered and not recorded.
-fn answer(stream: &TcpStream, routes: &Routes, requests: &Mutex<Vec<Request>>) {
+fn answer(stream: &TcpStream, routes: &Routes, requests: &Requests) -> io::Result<()> {
     let mut first = [0_u8];
-    if stream.peek(&mut first).unwrap_or(0) == 0 || !first[0].is_ascii_uppercase() {
-        return;
+    if stream.peek(&mut first)? == 0 || !first[0].is_ascii_uppercase() {
+        return Ok(());
     }
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
-    reader.read_line(&mut line).unwrap();
+    reader.read_line(&mut line)?;
     let mut headers = Vec::new();
     loop {
         let mut header = String::new();
-        reader.read_line(&mut header).unwrap();
+        reader.read_line(&mut header)?;
         let header = header.trim_end();
         if header.is_empty() {
             break;
         }
-        let (name, value) = header.split_once(':').unwrap();
-        headers.push((name.trim().to_ascii_lowercase(), value.trim().to_owned()));
+        if let Some((name, value)) = header.split_once(':') {
+            headers.push((name.trim().to_ascii_lowercase(), value.trim().to_owned()));
+        }
     }
     let line = line.trim_end().to_owned();
     let path = line.split(' ').nth(1).unwrap_or_default().to_owned();
-    requests.lock().unwrap().push(Request { line, headers });
-    let reply = routes
-        .lock()
-        .unwrap()
+    let index = {
+        let mut requests = lock(requests);
+        requests.push(Request {
+            line,
+            headers,
+            whole: false,
+        });
+        requests.len() - 1
+    };
+    let reply = lock(routes)
         .get(&path)
         .cloned()
         .unwrap_or_else(Reply::not_found);
@@ -172,8 +218,60 @@ fn answer(stream: &TcpStream, routes: &Routes, requests: &Mutex<Vec<Request>>) {
         reply.body.len()
     );
     let mut stream = stream;
-    // The client may hang up first, as on a body longer than it takes.
-    let _written = stream
-        .write_all(head.as_bytes())
-        .and_then(|()| stream.write_all(&reply.body));
+    stream.write_all(head.as_bytes())?;
+    stream.write_all(&reply.body)?;
+    if let Some(request) = lock(requests).get_mut(index) {
+        request.whole = true;
+    }
+    Ok(())
+}
+
+/// An agent with `config` that speaks plain HTTP over TCP to `https`
+/// addresses, telling ureq the connection is TLS. ureq refuses `https` over
+/// a connection that is not TLS (`Error::TlsRequired`); this lets a test
+/// start at `https` on the local server and watch where its redirects go.
+pub(crate) fn plain_as_tls(config: Config) -> Agent {
+    Agent::with_parts(config, PlainAsTls::default(), DefaultResolver::default())
+}
+
+#[derive(Debug, Default)]
+struct PlainAsTls(TcpConnector);
+
+impl Connector for PlainAsTls {
+    type Out = ClaimsTls;
+
+    fn connect(
+        &self,
+        details: &ConnectionDetails,
+        chained: Option<()>,
+    ) -> Result<Option<ClaimsTls>, ureq::Error> {
+        let tcp = self.0.connect(details, chained)?;
+        Ok(tcp.map(|tcp| ClaimsTls(Box::new(tcp))))
+    }
+}
+
+/// A plain TCP transport that says it is TLS.
+#[derive(Debug)]
+struct ClaimsTls(Box<dyn Transport>);
+
+impl Transport for ClaimsTls {
+    fn buffers(&mut self) -> &mut dyn Buffers {
+        self.0.buffers()
+    }
+
+    fn transmit_output(&mut self, amount: usize, timeout: NextTimeout) -> Result<(), ureq::Error> {
+        self.0.transmit_output(amount, timeout)
+    }
+
+    fn await_input(&mut self, timeout: NextTimeout) -> Result<bool, ureq::Error> {
+        self.0.await_input(timeout)
+    }
+
+    fn is_open(&mut self) -> bool {
+        self.0.is_open()
+    }
+
+    fn is_tls(&self) -> bool {
+        true
+    }
 }
