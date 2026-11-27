@@ -1,9 +1,10 @@
 //! The last step of an update on macOS. The downloaded disk image is
 //! attached read-only and hidden. Its one app must pass `codesign`'s strict
 //! check of its whole signature against a requirement naming the running
-//! app's Team ID and bundle identifier, and Gatekeeper's assessment. Where
-//! the running bundle can be replaced, that app is copied beside it, onto
-//! the same volume, and the copy is checked the same way. **Restart to
+//! app's Team ID and bundle identifier, and Gatekeeper's assessment, and its
+//! own version must be the release's. Where the running bundle can be
+//! replaced, that app is copied beside it, onto the same volume, and the
+//! copy is checked the same way. **Restart to
 //! Update** checks the copy's signature once more, swaps the two bundles
 //! with two renames and relaunches. Where the bundle cannot be replaced,
 //! the checked disk image opens in Finder instead. Blocking; the updater
@@ -32,6 +33,8 @@ const CODESIGN: &str = "/usr/bin/codesign";
 const SPCTL: &str = "/usr/sbin/spctl";
 /// Copies a bundle whole: its links, modes and extended attributes.
 const DITTO: &str = "/usr/bin/ditto";
+/// Reads a value from a property list.
+const PLUTIL: &str = "/usr/bin/plutil";
 
 /// The folder beside the installed app that holds the new one until the
 /// swap: on the same volume, so the swap is two renames.
@@ -68,6 +71,12 @@ pub(crate) enum Error {
     /// The app is validly signed, but not with the running app's Team ID as
     /// the same bundle identifier.
     NotThisApp,
+    /// The app is the release's, but its own version, `found`, is not the
+    /// release's version, `release`: an older build in a newer release.
+    Version {
+        found: String,
+        release: semver::Version,
+    },
     /// The staging folder could not be made, or a bundle could not move.
     Io(io::Error),
     /// The new app could not move into place (`error`), and the old one
@@ -88,6 +97,9 @@ impl fmt::Display for Error {
             Self::Failed(tool, said) => write!(f, "{} failed: {said}", name(tool)),
             Self::NoApp => f.write_str("the disk image does not hold one app"),
             Self::NotThisApp => f.write_str("the update is not signed as this app"),
+            Self::Version { found, release } => {
+                write!(f, "the update's app is version {found}, not {release}")
+            }
             Self::Io(error) => write!(f, "{error}"),
             Self::Stranded {
                 old,
@@ -131,6 +143,18 @@ impl Signer {
             r#"=anchor apple generic and identifier "{}" and certificate leaf[subject.OU] = "{}""#,
             self.id, self.team
         )
+    }
+}
+
+#[cfg(test)]
+impl Signer {
+    /// The release's signer, with a Team ID made up, for tests elsewhere in
+    /// the updater.
+    pub(crate) fn made_up() -> Self {
+        Self {
+            team: "ABCDE12345".to_owned(),
+            id: "ai.brainstrike.viewer".to_owned(),
+        }
     }
 }
 
@@ -179,30 +203,40 @@ fn bundle_at(exe: &Path) -> Option<PathBuf> {
     bundle_of(&exe).map(Path::to_path_buf)
 }
 
-/// Checks the downloaded disk image `image` against the running app and,
-/// when `replace`, stages its app beside the running one. An image that
-/// fails is removed: nothing that failed its check is ever opened. Runs
-/// the tools.
-pub(crate) fn prepare(image: &Path, replace: bool) -> Result<Prepared, Error> {
-    let prepared = prepare_for_running(image, replace);
+/// Checks the downloaded disk image `image` of the release `version`
+/// against the running app and, when `replace`, stages its app beside the
+/// running one. An image that fails is removed: nothing that failed its
+/// check is ever opened. Runs the tools.
+pub(crate) fn prepare(
+    image: &Path,
+    version: &semver::Version,
+    replace: bool,
+) -> Result<Prepared, Error> {
+    let prepared = prepare_for_running(image, version, replace);
     if prepared.is_err() {
         let _removed = fs::remove_file(image);
     }
     prepared
 }
 
-fn prepare_for_running(image: &Path, replace: bool) -> Result<Prepared, Error> {
+fn prepare_for_running(
+    image: &Path,
+    version: &semver::Version,
+    replace: bool,
+) -> Result<Prepared, Error> {
     let installed = running().ok_or(Error::NotReleased)?;
     let signer = signed_by(&installed).ok_or(Error::NotReleased)?;
     if replace {
-        let staged = stage(image, &installed, &signer)?;
+        let staged = stage(image, version, &installed, &signer)?;
         Ok(Prepared::Swap {
             installed,
             staged,
             signer,
         })
     } else {
-        mounted(image, |app| check(app, &signer))?;
+        mounted(image, |app| {
+            check(app, &signer).and_then(|()| check_version(app, version))
+        })?;
         Ok(Prepared::Open)
     }
 }
@@ -271,18 +305,26 @@ fn writable(dir: &Path) -> bool {
     made
 }
 
-/// Stages the app in the disk image `image` beside the bundle `installed`:
-/// checked as [`check`] says, then copied by `ditto` into
-/// `<installed's folder>/.Strikebrain Viewer.update/`, made afresh, and the
-/// copy checked the same way, so what moves into place is what passed.
-/// The image is always detached, and on any failure the staging folder is
-/// removed. Runs the tools.
-pub(crate) fn stage(image: &Path, installed: &Path, signer: &Signer) -> Result<PathBuf, Error> {
+/// Stages the app in the disk image `image`, the release `version`'s,
+/// beside the bundle `installed`: checked as [`check`] says, then copied by
+/// `ditto` into `<installed's folder>/.Strikebrain Viewer.update/`, made
+/// afresh, and the copy checked the same way, its own version too
+/// ([`check_version`]), so what moves into place is what passed. The image
+/// is always detached, and on any failure the staging folder is removed.
+/// Runs the tools.
+pub(crate) fn stage(
+    image: &Path,
+    version: &semver::Version,
+    installed: &Path,
+    signer: &Signer,
+) -> Result<PathBuf, Error> {
     let staging = installed.with_file_name(STAGING);
     mounted(image, |app| {
         check(app, signer)?;
         let staged = staging.join(app.file_name().ok_or(Error::NoApp)?);
-        let copied = copy(app, &staging, &staged).and_then(|()| check(&staged, signer));
+        let copied = copy(app, &staging, &staged)
+            .and_then(|()| check(&staged, signer))
+            .and_then(|()| check_version(&staged, version));
         if copied.is_err() {
             let _removed = fs::remove_dir_all(&staging);
         }
@@ -435,6 +477,49 @@ fn satisfies(app: &Path, signer: &Signer) -> Result<(), Error> {
         Some(FAILED_REQUIREMENT) => Err(Error::NotThisApp),
         _ => Err(Error::Failed(CODESIGN, said(&output))),
     }
+}
+
+/// Checks that `app`'s own version, as its `Info.plist` gives it, is
+/// `release`'s: a release re-uploaded with an older build inside, validly
+/// signed, would otherwise downgrade the app. Runs `plutil`.
+fn check_version(app: &Path, release: &semver::Version) -> Result<(), Error> {
+    let found = version_of(app)?;
+    if same_version(&found, release) {
+        Ok(())
+    } else {
+        Err(Error::Version {
+            found,
+            release: release.clone(),
+        })
+    }
+}
+
+/// The version `app` gives as its `CFBundleShortVersionString`, as the
+/// bundle's template sets it from Cargo's: `plutil -extract
+/// CFBundleShortVersionString raw -expect string -n -o -`, which writes the
+/// string itself, unescaped, with no line ending. Runs `plutil`.
+fn version_of(app: &Path) -> Result<String, Error> {
+    let mut extract = Command::new(PLUTIL);
+    extract
+        .args([
+            "-extract",
+            "CFBundleShortVersionString",
+            "raw",
+            "-expect",
+            "string",
+            "-n",
+            "-o",
+            "-",
+        ])
+        .arg(app.join("Contents/Info.plist"));
+    let output = run(PLUTIL, &mut extract)?;
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Whether `found`, a bundle's version, is `release`, to the letter: a
+/// version with nothing around it, equal to the release's.
+fn same_version(found: &str, release: &semver::Version) -> bool {
+    semver::Version::parse(found).is_ok_and(|version| version == *release)
 }
 
 /// Runs `command`, the tool `tool`, with its standard input closed, and
@@ -620,10 +705,7 @@ Chosen signature=1
 
     /// The release's signer, as the recorded report names it.
     fn ours() -> Signer {
-        Signer {
-            team: "ABCDE12345".to_owned(),
-            id: "ai.brainstrike.viewer".to_owned(),
-        }
+        Signer::made_up()
     }
 
     /// An installed app holding "old" in `apps` and a staged one holding
@@ -961,7 +1043,7 @@ Chosen signature=1
         let image = tmp.path().join("update.dmg");
         for replace in [true, false] {
             fs::write(&image, "a disk image").unwrap();
-            let result = prepare(&image, replace);
+            let result = prepare(&image, &semver::Version::new(9, 9, 9), replace);
             assert!(matches!(result, Err(Error::NotReleased)), "{result:?}");
             assert_eq!(listing(tmp.path()), Vec::<OsString>::new());
         }
@@ -995,6 +1077,70 @@ Chosen signature=1
         assert_eq!(said(&silent), "exit status: 1");
     }
 
+    /// A bundle at `app` whose `Info.plist` gives `version` as its version,
+    /// as the bundle's template writes it.
+    fn bundle_of_version(app: &Path, version: &str) {
+        bundle(app, "app");
+        let plist = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>ai.brainstrike.viewer</string>
+	<key>CFBundleShortVersionString</key>
+	<string>{version}</string>
+</dict>
+</plist>
+"#
+        );
+        fs::write(app.join("Contents/Info.plist"), plist).unwrap();
+    }
+
+    #[test]
+    fn only_the_releases_own_version_is_the_release() {
+        let release = semver::Version::new(0, 1, 3);
+        assert!(same_version("0.1.3", &release));
+        for other in [
+            "0.1.2",
+            "0.1.4",
+            "1.0.0",
+            "0.1.3-rc.1",
+            "v0.1.3",
+            "0.1.3 ",
+            "0.1",
+            "",
+        ] {
+            assert!(!same_version(other, &release), "{other:?}");
+        }
+    }
+
+    #[test]
+    fn an_apps_version_is_read_from_its_info_plist() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = tmp.path().join("Strikebrain Viewer.app");
+        bundle_of_version(&app, "9.9.9");
+        assert_eq!(version_of(&app).unwrap(), "9.9.9");
+        check_version(&app, &semver::Version::new(9, 9, 9)).unwrap();
+        // A release whose app is an older build: a downgrade.
+        let older = check_version(&app, &semver::Version::new(10, 0, 0));
+        let Err(error @ Error::Version { .. }) = &older else {
+            panic!("{older:?}");
+        };
+        assert_eq!(
+            error.to_string(),
+            "the update's app is version 9.9.9, not 10.0.0"
+        );
+        // No Info.plist: plutil says why.
+        let bare = tmp.path().join("Bare.app");
+        bundle(&bare, "bare");
+        let missing = check_version(&bare, &semver::Version::new(9, 9, 9));
+        assert!(
+            matches!(missing, Err(Error::Failed(PLUTIL, _))),
+            "{missing:?}"
+        );
+    }
+
     #[test]
     fn a_file_that_is_not_a_disk_image_stages_nothing() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1007,7 +1153,7 @@ Chosen signature=1
             team: "ABCDE12345".to_owned(),
             id: "ai.brainstrike.viewer".to_owned(),
         };
-        let result = stage(&image, &installed, &signer);
+        let result = stage(&image, &semver::Version::new(9, 9, 9), &installed, &signer);
         assert!(matches!(result, Err(Error::Failed(..))), "{result:?}");
         assert_eq!(listing(&apps), ["Strikebrain Viewer.app"]);
     }
