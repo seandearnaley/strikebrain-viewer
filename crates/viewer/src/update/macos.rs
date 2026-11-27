@@ -71,10 +71,11 @@ pub(crate) enum Error {
     /// The app is validly signed, but not with the running app's Team ID as
     /// the same bundle identifier.
     NotThisApp,
-    /// The app is the release's, but its own version, `found`, is not the
-    /// release's version, `release`: an older build in a newer release.
+    /// The app is the release's, but its own version, `found`, if it
+    /// gives one, is not the release's version, `release`: an older build
+    /// in a newer release.
     Version {
-        found: String,
+        found: Option<String>,
         release: semver::Version,
     },
     /// The staging folder could not be made, or a bundle could not move.
@@ -97,9 +98,11 @@ impl fmt::Display for Error {
             Self::Failed(tool, said) => write!(f, "{} failed: {said}", name(tool)),
             Self::NoApp => f.write_str("the disk image does not hold one app"),
             Self::NotThisApp => f.write_str("the update is not signed as this app"),
-            Self::Version { found, release } => {
-                write!(f, "the update's app is version {found}, not {release}")
-            }
+            Self::Version {
+                found: Some(found),
+                release,
+            } => write!(f, "the update's app is version {found}, not {release}"),
+            Self::Version { found: None, .. } => f.write_str("the update's app gives no version"),
             Self::Io(error) => write!(f, "{error}"),
             Self::Stranded {
                 old,
@@ -484,7 +487,10 @@ fn satisfies(app: &Path, signer: &Signer) -> Result<(), Error> {
 /// signed, would otherwise downgrade the app. Runs `plutil`.
 fn check_version(app: &Path, release: &semver::Version) -> Result<(), Error> {
     let found = version_of(app)?;
-    if same_version(&found, release) {
+    if found
+        .as_deref()
+        .is_some_and(|found| same_version(found, release))
+    {
         Ok(())
     } else {
         Err(Error::Version {
@@ -494,26 +500,29 @@ fn check_version(app: &Path, release: &semver::Version) -> Result<(), Error> {
     }
 }
 
-/// The version `app` gives as its `CFBundleShortVersionString`, as the
-/// bundle's template sets it from Cargo's: `plutil -extract
-/// CFBundleShortVersionString raw -expect string -n -o -`, which writes the
-/// string itself, unescaped, with no line ending. Runs `plutil`.
-fn version_of(app: &Path) -> Result<String, Error> {
+/// The version `app` gives as its `CFBundleShortVersionString`, which the
+/// bundle's template sets from Cargo's; none if that is not a string.
+/// `plutil -extract CFBundleShortVersionString xml1 -o -` writes the value
+/// as a property list of its own, read by [`plist_string`]: plutil's `raw`
+/// format, which writes the bare string, came with macOS 12, and the app
+/// runs on macOS 11. Runs `plutil`.
+fn version_of(app: &Path) -> Result<Option<String>, Error> {
     let mut extract = Command::new(PLUTIL);
     extract
-        .args([
-            "-extract",
-            "CFBundleShortVersionString",
-            "raw",
-            "-expect",
-            "string",
-            "-n",
-            "-o",
-            "-",
-        ])
+        .args(["-extract", "CFBundleShortVersionString", "xml1", "-o", "-"])
         .arg(app.join("Contents/Info.plist"));
     let output = run(PLUTIL, &mut extract)?;
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    Ok(plist_string(&String::from_utf8_lossy(&output.stdout)).map(str::to_owned))
+}
+
+/// The string the property list `xml`, as `plutil -extract … xml1` wrote
+/// it, holds: the text of its one `<string>` element, as written. None if
+/// it holds another type, or more than one string. XML escapes are left as
+/// they are: a version has none, and one that held any is not a version.
+fn plist_string(xml: &str) -> Option<&str> {
+    let (_, rest) = xml.split_once("<string>")?;
+    let (value, rest) = rest.split_once("</string>")?;
+    (!rest.contains("<string>")).then_some(value)
 }
 
 /// Whether `found`, a bundle's version, is `release`, to the letter: a
@@ -1116,11 +1125,33 @@ Chosen signature=1
     }
 
     #[test]
+    fn a_string_is_read_from_what_plutil_extracts() {
+        let extracted = |value: &str| {
+            format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\">\n{value}\n</plist>\n"
+            )
+        };
+        assert_eq!(
+            plist_string(&extracted("<string>0.1.3</string>")),
+            Some("0.1.3")
+        );
+        assert_eq!(plist_string(&extracted("<string></string>")), Some(""));
+        for other in [
+            "<integer>3</integer>",
+            "<array><string>0.1.3</string><string>0.1.4</string></array>",
+            "<string>0.1.3",
+            "",
+        ] {
+            assert_eq!(plist_string(&extracted(other)), None, "{other:?}");
+        }
+    }
+
+    #[test]
     fn an_apps_version_is_read_from_its_info_plist() {
         let tmp = tempfile::tempdir().unwrap();
         let app = tmp.path().join("Strikebrain Viewer.app");
         bundle_of_version(&app, "9.9.9");
-        assert_eq!(version_of(&app).unwrap(), "9.9.9");
+        assert_eq!(version_of(&app).unwrap().as_deref(), Some("9.9.9"));
         check_version(&app, &semver::Version::new(9, 9, 9)).unwrap();
         // A release whose app is an older build: a downgrade.
         let older = check_version(&app, &semver::Version::new(10, 0, 0));
@@ -1131,6 +1162,18 @@ Chosen signature=1
             error.to_string(),
             "the update's app is version 9.9.9, not 10.0.0"
         );
+        // A version that is not a string.
+        let odd = tmp.path().join("Odd.app");
+        bundle_of_version(&odd, "9.9.9");
+        let plist = odd.join("Contents/Info.plist");
+        let text = fs::read_to_string(&plist).unwrap();
+        let text = text.replace("<string>9.9.9</string>", "<integer>9</integer>");
+        fs::write(&plist, text).unwrap();
+        let not_a_string = check_version(&odd, &semver::Version::new(9, 9, 9));
+        let Err(error @ Error::Version { found: None, .. }) = &not_a_string else {
+            panic!("{not_a_string:?}");
+        };
+        assert_eq!(error.to_string(), "the update's app gives no version");
         // No Info.plist: plutil says why.
         let bare = tmp.path().join("Bare.app");
         bundle(&bare, "bare");
