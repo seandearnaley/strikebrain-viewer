@@ -46,7 +46,7 @@ use crate::menus::{self, MenuBar};
 use crate::persist::{SavedView, SavedWindow, Snapshot, StateStore};
 use crate::stage::{GalleryProbe, Stage, StageProbe};
 use crate::state::{AppState, Launch, StateEvent, StateOptions};
-use crate::update::{UpdateEvent, UpdateOptions, Updater};
+use crate::update::{UpdateEvent, UpdateOptions, UpdateSettings, Updater};
 use crate::{theme, title_bar};
 
 /// Starting width of the explorer pane, in pixels.
@@ -80,6 +80,9 @@ pub struct Session {
     /// The bounds the window opened with, as [`SavedWindow`] holds them:
     /// what a fullscreen window is saved with until it has been windowed.
     pub opened_at: Option<Bounds<Pixels>>,
+    /// The saved update settings: what the updater starts with, and what a
+    /// save writes while no updater runs.
+    pub update_settings: UpdateSettings,
     /// Check for updates and offer them, as these options say. `None`
     /// checks nothing, and the update commands show disabled.
     pub updates: Option<UpdateOptions>,
@@ -146,9 +149,9 @@ pub struct AppView {
     menu_bar: MenuBar,
     /// Checks for updates and offers them, when this window does.
     updater: Option<Entity<Updater>>,
-    /// The updater's settings as last seen: whether it checks
-    /// automatically, and its last check. A change is saved.
-    update_settings: (bool, Option<u64>),
+    /// The update settings to save: the session's, then the updater's as
+    /// last seen. A change is saved.
+    update_settings: UpdateSettings,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -189,12 +192,10 @@ impl AppView {
         let explorer = cx.new(|cx| ExplorerPanel::new(app_state.clone(), window, cx));
         let stage = cx.new(|cx| Stage::new(app_state.clone(), window, cx));
         let split = cx.new(|_| ResizableState::default());
-        let update_settings = session.updates.as_ref().map_or((true, None), |options| {
-            (options.automatic, options.last_check)
-        });
+        let update_settings = session.update_settings;
         let updater = session
             .updates
-            .map(|options| cx.new(|cx| Updater::new(options, cx)));
+            .map(|options| cx.new(|cx| Updater::new(options, update_settings, cx)));
         let mut subscriptions = vec![
             cx.observe_in(&app_state, window, |this, _, window, cx| {
                 this.sync_title(window, cx);
@@ -297,7 +298,10 @@ impl AppView {
             cx.observe(updater, |this, updater, cx| {
                 let settings = {
                     let updater = updater.read(cx);
-                    (updater.automatic(), updater.last_check())
+                    UpdateSettings {
+                        automatic: updater.automatic(),
+                        last_check: updater.last_check(),
+                    }
                 };
                 if settings != this.update_settings {
                     this.update_settings = settings;
@@ -523,18 +527,17 @@ impl AppView {
     /// Saves now: copies the state out here and writes it on the
     /// background executor. Returns the write, or `None` without a store.
     /// A write that fails leaves the last good file in place. Without an
-    /// updater the update settings save as their defaults.
+    /// updater the update settings save as the session gave them.
     pub fn save(&mut self, cx: &mut Context<Self>) -> Option<Task<()>> {
         let store = self.store.clone()?;
         let view = self.state.read(cx).take_snapshot();
-        let (check_updates, last_update_check) = self.update_settings;
         let snapshot = Snapshot {
             view,
             explorer_width: Some(self.explorer_width(cx)),
             explorer_hidden: self.explorer_hidden,
             window: self.window.clone(),
-            check_updates,
-            last_update_check,
+            check_updates: self.update_settings.automatic,
+            last_update_check: self.update_settings.last_check,
         };
         let ticket = store.ticket();
         Some(cx.background_spawn(async move {

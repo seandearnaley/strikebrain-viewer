@@ -10,6 +10,10 @@
 //! redirect to `http` would carry the feed, whose digests are the only
 //! check of a `.deb`, in plain text. A request that starts at `http` to
 //! this machine follows redirects as ureq does.
+//!
+//! A request to this machine never goes through a proxy: the environment's
+//! proxy (`HTTPS_PROXY` and the like) could not reach a feed served here,
+//! for tests or the check by hand.
 
 use std::ffi::OsStr;
 use std::fmt;
@@ -97,16 +101,10 @@ impl std::error::Error for Error {}
 /// platform's verifier against the system's store, the app's user agent,
 /// and a 30 s limit on each step. A 4xx or 5xx reply is an error
 /// (`ureq::Error::StatusCode`), as ureq does by default. A proxy comes from
-/// the environment (`HTTPS_PROXY` and the like), as ureq does by default.
+/// the environment (`HTTPS_PROXY` and the like), as ureq does by default,
+/// for any host but this machine.
 pub(crate) fn agent() -> Agent {
     config().build().new_agent()
-}
-
-/// The agent tests use: [`agent`] without the environment's proxy, so a
-/// machine with one set still reaches the test server on `127.0.0.1`.
-#[cfg(test)]
-fn local_agent() -> Agent {
-    config().proxy(None).build().new_agent()
 }
 
 fn config() -> ConfigBuilder<AgentScope> {
@@ -152,6 +150,12 @@ fn is_loopback(host: &str) -> bool {
     })
 }
 
+/// Whether `url` is an address on this machine.
+fn on_this_machine(url: &str) -> bool {
+    url.parse::<Uri>()
+        .is_ok_and(|uri| uri.host().is_some_and(is_loopback))
+}
+
 /// Whether `url` starts at `https`, and so must stay on it.
 fn starts_https(url: &str) -> bool {
     url.parse::<Uri>()
@@ -159,16 +163,19 @@ fn starts_https(url: &str) -> bool {
 }
 
 /// A GET of `url`, refused before any request unless [`allowed`] passes
-/// it, and held to `https` on every redirect when it starts there.
+/// it, held to `https` on every redirect when it starts there, and with no
+/// proxy when it is on this machine.
 fn get(agent: &Agent, url: &str) -> Result<RequestBuilder<WithoutBody>, Error> {
     if !allowed(url) {
         return Err(Error::NotHttps(url.to_owned()));
     }
-    Ok(agent
-        .get(url)
-        .config()
-        .https_only(starts_https(url))
-        .build())
+    let request = agent.get(url).config().https_only(starts_https(url));
+    let request = if on_this_machine(url) {
+        request.proxy(None)
+    } else {
+        request
+    };
+    Ok(request.build())
 }
 
 /// The feed's reply, as bytes for `feed::parse`, with GitHub's JSON media
@@ -318,7 +325,7 @@ mod tests {
     }
 
     fn download(asset: &Asset, into: &Path) -> Result<PathBuf, Error> {
-        file(&local_agent(), asset, into, &AtomicBool::new(false))
+        file(&agent(), asset, into, &AtomicBool::new(false))
     }
 
     #[test]
@@ -389,7 +396,7 @@ mod tests {
         let refused = download(&asset(b"x", format!("http://{closed}/dmg")), tmp.path());
         assert!(matches!(refused, Err(Error::Http(_))), "{refused:?}");
         assert!(matches!(
-            fetch_json(&local_agent(), &format!("http://{closed}/latest")),
+            fetch_json(&agent(), &format!("http://{closed}/latest")),
             Err(Error::Http(_))
         ));
         assert_eq!(listing(tmp.path()), NOTHING);
@@ -404,7 +411,7 @@ mod tests {
         let cancel = AtomicBool::new(false);
         cancel.store(true, Ordering::Relaxed);
         let result = file(
-            &local_agent(),
+            &agent(),
             &asset(&body, server.url("/dmg")),
             tmp.path(),
             &cancel,
@@ -417,7 +424,7 @@ mod tests {
     fn the_feed_request_names_the_app_and_asks_for_githubs_json() {
         let server = Server::start();
         server.route("/latest", Reply::ok(br#"{"tag_name":"v9.9.9"}"#.to_vec()));
-        let json = fetch_json(&local_agent(), &server.url("/latest")).unwrap();
+        let json = fetch_json(&agent(), &server.url("/latest")).unwrap();
         assert_eq!(json, br#"{"tag_name":"v9.9.9"}"#);
         let requests = server.requests();
         assert_eq!(requests.len(), 1);
@@ -486,7 +493,7 @@ mod tests {
         // and the platform verifier loads.
         let server = Server::start();
         let url = server.url("/latest").replacen("http://", "https://", 1);
-        let result = fetch_json(&local_agent(), &url);
+        let result = fetch_json(&agent(), &url);
         assert!(matches!(result, Err(Error::Http(_))), "{result:?}");
         assert_eq!(server.requests().len(), 0);
     }
@@ -540,6 +547,26 @@ mod tests {
     }
 
     #[test]
+    fn a_request_to_this_machine_skips_the_proxy() {
+        let server = Server::start();
+        server.route("/latest", Reply::ok(b"{}".to_vec()));
+        // A proxy nothing listens on: a request through it is refused.
+        let closed = {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.local_addr().unwrap()
+        };
+        let proxy = ureq::Proxy::new(&format!("http://{closed}")).unwrap();
+        let agent = config().proxy(Some(proxy)).build().new_agent();
+        assert_eq!(fetch_json(&agent, &server.url("/latest")).unwrap(), b"{}");
+        let tmp = tempfile::tempdir().unwrap();
+        let body = b"through no proxy".to_vec();
+        server.route("/dmg", Reply::ok(body.clone()));
+        let dmg = asset(&body, server.url("/dmg"));
+        let path = file(&agent, &dmg, tmp.path(), &AtomicBool::new(false)).unwrap();
+        assert_eq!(fs::read(path).unwrap(), body);
+    }
+
+    #[test]
     fn a_request_that_starts_at_https_is_held_to_https() {
         assert!(starts_https(
             "https://api.github.com/repos/x/y/releases/latest"
@@ -553,7 +580,7 @@ mod tests {
     #[test]
     fn a_request_that_starts_at_https_is_not_redirected_to_http() {
         let server = Server::start();
-        let agent = plain_as_tls(config().proxy(None).build());
+        let agent = plain_as_tls(config().build());
         server.route("/json", Reply::ok(b"{}".to_vec()));
         server.route("/dmg", Reply::ok(b"x".to_vec()));
         server.route("/latest", Reply::redirect(&server.url("/json")));

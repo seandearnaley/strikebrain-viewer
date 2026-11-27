@@ -12,15 +12,20 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AnyWindowHandle, AppContext as _, OwnedMenuItem, Role, TestAppContext};
 use sha2::{Digest as _, Sha256};
-use viewer::keys::{CheckForUpdates, ToggleCheckAutomatically};
-use viewer::{Launch, Owner, SAVE_DELAY, Session, StateStore, UpdateOptions};
+use viewer::keys::{CheckForUpdates, StartPresenting, ToggleCheckAutomatically};
+use viewer::{
+    AppState, Launch, Owner, SAVE_DELAY, Session, StateStore, UpdateOptions, UpdateSettings,
+    open_main_window,
+};
 
-use crate::{click, dispatch, folder, open_app_with_session};
+use crate::{
+    PROJECT, click, dispatch, folder, node, open_app_with_session, press, read, row, tree,
+};
 
 /// The release's page, which the stub install opens.
 const PAGE: &str = "https://github.com/seandearnaley/strikebrain-viewer/releases/tag/v9.9.9";
@@ -179,8 +184,6 @@ fn serve_release(server: &Server, version: &str, file: &[u8]) {
 fn options(server: &Server, updates: &Path) -> UpdateOptions {
     UpdateOptions {
         feed: server.url("/latest"),
-        automatic: true,
-        last_check: None,
         running: running(),
         owner: Owner::Deb,
         updates_dir: Some(updates.to_owned()),
@@ -208,12 +211,32 @@ fn wait(cx: &mut TestAppContext, by: Duration) {
     cx.run_until_parked();
 }
 
-/// Seconds since the Unix epoch, as the saved state counts them.
-fn now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("the clock is past 1970")
-        .as_secs()
+/// The calendar's time on GPUI's clock, which the test scheduler keeps, in
+/// seconds since the Unix epoch, as the saved state counts them.
+fn now(cx: &TestAppContext) -> u64 {
+    let seconds = cx
+        .executor()
+        .scheduler_executor()
+        .scheduler()
+        .clock()
+        .utc_now()
+        .timestamp();
+    u64::try_from(seconds).expect("the test clock is past 1970")
+}
+
+/// Moves the calendar on by `asleep`, as a computer asleep that long finds
+/// it on waking: GPUI's timers do not run meanwhile.
+fn sleep(cx: &mut TestAppContext, asleep: Duration) {
+    let executor = cx.executor();
+    let mut woken = executor.scheduler_executor().scheduler().clock().utc_now();
+    woken += asleep;
+    executor
+        .dispatcher()
+        .as_test()
+        .expect("tests run on the test scheduler")
+        .scheduler()
+        .clock()
+        .set_utc_now(woken);
 }
 
 /// The bar's update button after a fresh frame: its accessible label and
@@ -274,7 +297,7 @@ fn a_newer_release_is_downloaded_and_offered_five_seconds_after_launch(cx: &mut 
     let updates = tempfile::tempdir().unwrap();
     let state = tempfile::tempdir().unwrap();
     let state_file = state.path().join("state.json");
-    let launched = now();
+    let launched = now(cx);
     let handle = open(
         cx,
         options(&server, updates.path()),
@@ -358,22 +381,171 @@ fn the_app_checks_again_every_day_it_runs(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn the_checks_keep_calendar_time_across_a_sleep(cx: &mut TestAppContext) {
+    let server = Server::start();
+    serve_release(&server, &running().to_string(), b"this version");
+    let updates = tempfile::tempdir().unwrap();
+    open(cx, options(&server, updates.path()), None);
+
+    wait(cx, Duration::from_secs(5));
+    assert_eq!(server.requests(), ["/latest"]);
+    // Two days asleep: the calendar moves on, GPUI's timers do not.
+    sleep(cx, Duration::from_hours(48));
+    wait(cx, Duration::from_hours(1));
+    assert_eq!(server.requests(), ["/latest", "/latest"]);
+}
+
+#[gpui_kit::test]
+fn a_manual_check_asked_for_during_an_automatic_one_is_answered(cx: &mut TestAppContext) {
+    let server = Server::start();
+    serve_release(&server, &running().to_string(), b"this version");
+    let updates = tempfile::tempdir().unwrap();
+    let handle = open(cx, options(&server, updates.path()), None);
+
+    // Run to the automatic check's start: its read handed to the
+    // background executor, not yet run.
+    let executor = cx.executor();
+    let dispatcher = executor
+        .dispatcher()
+        .as_test()
+        .expect("tests run on the test scheduler");
+    dispatcher
+        .scheduler()
+        .clock()
+        .advance(Duration::from_secs(5));
+    while dispatcher.tick(true) {}
+    while dispatcher.scheduler().pending_task_counts().1 == 0 && dispatcher.tick(false) {}
+    assert!(server.requests().is_empty(), "{:?}", server.requests());
+
+    cx.update_window(handle, |_, window, cx| {
+        window.dispatch_action(Box::new(CheckForUpdates), cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(server.requests(), ["/latest"]);
+    assert_eq!(
+        cx.pending_prompt().map(|(title, _)| title).as_deref(),
+        Some("Strikebrain Viewer is up to date")
+    );
+    cx.simulate_prompt_answer("OK");
+    assert!(!cx.has_pending_prompt());
+}
+
+#[gpui_kit::test]
+fn a_manual_check_asked_for_twice_checks_once_and_answers_once(cx: &mut TestAppContext) {
+    let server = Server::start();
+    serve_release(&server, &running().to_string(), b"this version");
+    let updates = tempfile::tempdir().unwrap();
+    let handle = open(cx, options(&server, updates.path()), None);
+
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.dispatch_action(Box::new(CheckForUpdates), cx);
+        window.dispatch_action(Box::new(CheckForUpdates), cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(server.requests(), ["/latest"]);
+    assert!(cx.has_pending_prompt());
+    cx.simulate_prompt_answer("OK");
+    assert!(!cx.has_pending_prompt());
+}
+
+#[gpui_kit::test]
+fn the_update_button_is_not_shown_while_presenting(cx: &mut TestAppContext) {
+    let server = Server::start();
+    serve_release(&server, "9.9.9", b"the newer release");
+    let updates = tempfile::tempdir().unwrap();
+    let session = Session {
+        updates: Some(UpdateOptions {
+            owner: Owner::ReleasePage,
+            ..options(&server, updates.path())
+        }),
+        ..Session::default()
+    };
+    let (handle, view) = open_app_with_session(cx, tree(PROJECT), session);
+    let readme = node(cx, &view, "README.md");
+    click(cx, handle, row(readme));
+    dispatch(cx, handle, CheckForUpdates);
+    assert_eq!(update_button(cx, handle), Some(install_9_9_9()));
+
+    dispatch(cx, handle, StartPresenting);
+    assert!(read(cx, &view, AppState::is_presenting));
+    assert_eq!(update_button(cx, handle), None);
+    press(cx, handle, "escape");
+    assert!(!read(cx, &view, AppState::is_presenting));
+    assert_eq!(update_button(cx, handle), Some(install_9_9_9()));
+}
+
+#[gpui_kit::test]
+fn more_is_on_the_bar_with_nothing_open_where_there_is_no_menu_bar(cx: &mut TestAppContext) {
+    let server = Server::start();
+    let updates = tempfile::tempdir().unwrap();
+    let handle = open(cx, options(&server, updates.path()), None);
+    let more = |cx: &mut TestAppContext| {
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.try_find("more").is_some()
+        })
+        .unwrap()
+    };
+    if cfg!(target_os = "macos") {
+        // The app menu has the update commands.
+        assert!(!more(cx));
+        return;
+    }
+    assert!(more(cx));
+    click(cx, handle, "more");
+    // The explorer's commands stay, disabled where there is no tree; the
+    // Kit's menu items do not expose that state to assistive technology.
+    let names = cx
+        .update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window
+                .within("popup-menu")
+                .find_all_by_role(Role::MenuItem)
+                .iter()
+                .filter_map(|item| item.label().map(ToOwned::to_owned))
+                .collect::<Vec<_>>()
+        })
+        .unwrap();
+    assert_eq!(
+        names,
+        [
+            "Expand All",
+            "Collapse All",
+            "Show Ignored",
+            "Refresh",
+            "Select All",
+            "Deselect All",
+            "Check for Updates…",
+            "Check Automatically"
+        ]
+    );
+}
+
+#[gpui_kit::test]
 fn a_launch_within_a_day_of_the_last_check_waits_for_the_daily_one(cx: &mut TestAppContext) {
     let server = Server::start();
     serve_release(&server, "9.9.9", b"the newer release");
     let updates = tempfile::tempdir().unwrap();
-    let handle = open(
-        cx,
-        UpdateOptions {
-            last_check: Some(now() - 60 * 60),
-            ..options(&server, updates.path())
+    let session = Session {
+        update_settings: UpdateSettings {
+            last_check: Some(now(cx) - 60 * 60),
+            ..UpdateSettings::default()
         },
-        None,
-    );
+        updates: Some(options(&server, updates.path())),
+        ..Session::default()
+    };
+    let handle = open_app_with_session(cx, Launch::Empty, session).0;
 
     wait(cx, Duration::from_secs(5));
     assert!(server.requests().is_empty(), "{:?}", server.requests());
-    wait(cx, DAY);
+    // The hourly look that finds the last check a day old: 23 h on.
+    let almost = Duration::from_hours(23).checked_sub(Duration::from_millis(1));
+    wait(cx, almost.unwrap());
+    assert!(server.requests().is_empty(), "{:?}", server.requests());
+    wait(cx, Duration::from_millis(1));
     assert_eq!(server.requests(), ["/latest", "/deb"]);
     assert_eq!(update_button(cx, handle), Some(install_9_9_9()));
 }
@@ -446,8 +618,6 @@ fn a_check_that_cannot_connect_is_silent_unless_asked_for(cx: &mut TestAppContex
         cx,
         UpdateOptions {
             feed: format!("http://{closed}/latest"),
-            automatic: true,
-            last_check: None,
             running: running(),
             owner: Owner::Deb,
             updates_dir: Some(updates.path().to_owned()),
@@ -573,4 +743,28 @@ fn more_ends_with_the_update_commands_where_there_is_no_menu_bar(cx: &mut TestAp
         ]
     );
     assert_eq!(items[items.len() - 1].1, Some(true));
+}
+
+#[gpui_kit::test]
+fn a_window_without_an_updater_keeps_the_saved_update_settings(cx: &mut TestAppContext) {
+    let state = tempfile::tempdir().unwrap();
+    let state_file = state.path().join("state.json");
+    std::fs::write(
+        &state_file,
+        r#"{"version": 2, "check_updates": false, "last_update_check": 7}"#,
+    )
+    .unwrap();
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        viewer::init(cx);
+    });
+    let store = StateStore::at(&state_file);
+    cx.update(|cx| open_main_window(Vec::new(), Some(store), false, false, cx))
+        .unwrap();
+    cx.run_until_parked();
+    // The quit saves the whole state.
+    cx.quit();
+    let saved = StateStore::at(&state_file).load().unwrap();
+    assert!(!saved.check_updates);
+    assert_eq!(saved.last_update_check, Some(7));
 }

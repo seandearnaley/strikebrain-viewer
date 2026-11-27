@@ -23,7 +23,7 @@ pub use persist::{
 };
 pub use stage::{GalleryProbe, StageProbe};
 pub use state::{AppState, Launch, ScanStatus, StageView, StateOptions};
-pub use update::{Owner, UpdateOptions};
+pub use update::{Owner, UpdateOptions, UpdateSettings};
 
 use gpui_kit::App;
 

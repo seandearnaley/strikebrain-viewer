@@ -13,8 +13,8 @@ use gpui_kit::{
 };
 
 use crate::app::{AppView, EXPLORER_MIN_WIDTH, STAGE_MIN_WIDTH, Session};
-use crate::persist::{APP_ID, Plan, SavedWindow, StateStore, fit, plan_launch};
-use crate::update::{self, Owner, UpdateOptions};
+use crate::persist::{APP_ID, SavedWindow, StateStore, fit, plan_launch};
+use crate::update::{self, Owner, UpdateOptions, UpdateSettings};
 
 /// The shortest the window can be made, in pixels: the bar, the filter and
 /// a few rows.
@@ -50,7 +50,6 @@ pub fn open_main_window(
     cx: &mut App,
 ) -> Result<(AnyWindowHandle, Entity<AppView>)> {
     let plan = plan_launch(folders, store.as_ref().and_then(StateStore::load));
-    let updates = updates.then(|| update_options(&plan));
     let (window_bounds, display_id) = match plan.window.as_ref() {
         Some(saved) => {
             let (bounds, display) = placement(saved, cx);
@@ -65,7 +64,13 @@ pub fn open_main_window(
         store,
         watch,
         opened_at: window_bounds.map(|bounds| bounds.get_bounds()),
-        updates,
+        // Kept with or without an updater, so a window without one saves
+        // them as they were.
+        update_settings: UpdateSettings {
+            automatic: plan.check_updates,
+            last_check: plan.last_update_check,
+        },
+        updates: updates.then(update_options),
     };
     let launch = plan.launch;
     let opened = gpui_kit::open_window(
@@ -96,14 +101,11 @@ pub fn open_main_window(
     Ok(opened)
 }
 
-/// The updater's options for this installation: the feed, the saved
-/// settings, the running version, who owns the installation, and the cache
-/// folder.
-fn update_options(plan: &Plan) -> UpdateOptions {
+/// The updater's options for this installation: the feed, the running
+/// version, who owns the installation, and the cache folder.
+fn update_options() -> UpdateOptions {
     UpdateOptions {
         feed: feed(std::env::var(FEED_VAR).ok()),
-        automatic: plan.check_updates,
-        last_check: plan.last_update_check,
         running: semver::Version::parse(env!("CARGO_PKG_VERSION"))
             .expect("Cargo's package version is SemVer"),
         owner: std::env::current_exe().map_or(Owner::ReleasePage, |exe| Owner::detect(&exe)),
