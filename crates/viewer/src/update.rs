@@ -555,10 +555,11 @@ impl Updater {
             Owner::MacUnreplaceable => false,
             _ => return self.make_offer(version, How::Install, Plan::Page, cx),
         };
+        let release = version.clone();
         self.phase = Phase::Verifying { version };
         cx.notify();
         let verifying = cx.background_spawn(async move {
-            macos::prepare(&image, replace)
+            macos::prepare(&image, &release, replace)
                 .map(|prepared| (prepared, image))
                 .map_err(|error| error.to_string())
         });
