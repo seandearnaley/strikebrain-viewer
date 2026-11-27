@@ -110,7 +110,8 @@ pub(crate) enum Phase {
     Verifying { version: semver::Version },
     /// An update is ready to install. It stays until used or the app quits.
     Ready(Offer),
-    /// The last check failed, for this reason.
+    /// The last check failed, for this reason, or the install after the
+    /// update's button was pressed did.
     Failed(String),
 }
 
@@ -197,8 +198,9 @@ pub(crate) enum UpdateEvent {
     UpToDate(semver::Version),
     /// The check failed, for this reason.
     CheckFailed(String),
-    /// The install failed, for this reason, and the release page opened,
-    /// or the file to install from did.
+    /// The install failed, for this reason. The release page opened in its
+    /// place, or the file to install from did; neither, where the page is
+    /// an address `download::allowed` refuses.
     InstallFailed(String),
 }
 

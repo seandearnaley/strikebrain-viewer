@@ -15,7 +15,7 @@ The macOS image is signed with a Developer ID and notarized by Apple; the Window
 
 ### Updates
 
-The app checks GitHub's latest release about 5 seconds after launch and then once a day, with one request that carries nothing about you: only the app's name and version. Check Automatically turns that off, and Check for Updates… checks at once: in the app menu on macOS, at the end of the bar's More menu (…) elsewhere. A new version downloads by itself, is checked against GitHub's digest (and on macOS and Windows against the running app's signature), and shows as one button in the bar:
+The app checks GitHub's latest release about 5 seconds after launch and then once a day, with one request that carries the app's name and version and nothing about you; GitHub sees the address it comes from, as it does for any request. Check Automatically turns that off, and Check for Updates… checks at once: in the app menu on macOS, at the end of the bar's More menu (…) elsewhere. A new version downloads by itself, is checked against GitHub's digest (and on macOS and Windows against the running app's signature), and shows as one button in the bar:
 
 - **The macOS app** in a folder you can write, such as Applications: Restart to Update replaces it and relaunches. Where it cannot be replaced (run from the disk image, or a folder you cannot write), Install Update opens the new disk image.
 - **The Windows installer's install:** Restart to Update runs the new installer, which replaces the app and opens it again.
