@@ -303,7 +303,6 @@ fn a_newer_release_is_downloaded_and_offered_five_seconds_after_launch(cx: &mut 
     let updates = tempfile::tempdir().unwrap();
     let state = tempfile::tempdir().unwrap();
     let state_file = state.path().join("state.json");
-    let launched = now(cx);
     let handle = open(
         cx,
         options(&server, updates.path()),
@@ -323,11 +322,53 @@ fn a_newer_release_is_downloaded_and_offered_five_seconds_after_launch(cx: &mut 
     // An automatic check says nothing.
     assert!(!cx.has_pending_prompt());
 
-    // The check is saved, with automatic checks still on.
-    wait(cx, SAVE_DELAY);
+    // Automatic checks stay on, and the check is not saved as the last
+    // one: the app is not up to date.
+    cx.quit();
     let saved = StateStore::at(&state_file).load().unwrap();
     assert!(saved.check_updates);
-    assert!(saved.last_update_check >= Some(launched));
+    assert_eq!(saved.last_update_check, None);
+}
+
+#[gpui_kit::test]
+fn an_update_not_used_is_offered_again_at_the_next_launch(cx: &mut TestAppContext) {
+    let server = Server::start();
+    serve_release(&server, "9.9.9", b"the newer release");
+    let updates = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let store = StateStore::at(state.path().join("state.json"));
+    // Up to date an hour ago; the update was released since.
+    let session = Session {
+        update_settings: UpdateSettings {
+            last_check: Some(now(cx) - 60 * 60),
+            ..UpdateSettings::default()
+        },
+        updates: Some(options(&server, updates.path())),
+        store: Some(store.clone()),
+        ..Session::default()
+    };
+    let handle = open_app_with_session(cx, Launch::Empty, session).0;
+    dispatch(cx, handle, CheckForUpdates);
+    assert_eq!(update_button(cx, handle), Some(install_9_9_9()));
+    // Quit without using it.
+    cx.quit();
+    let saved = store.load().unwrap();
+    assert_eq!(saved.last_update_check, None);
+
+    // The next launch, from what was saved, as `open_main_window` reads it.
+    let mut cx = cx.new_app();
+    let session = Session {
+        update_settings: UpdateSettings {
+            automatic: saved.check_updates,
+            last_check: saved.last_update_check,
+        },
+        updates: Some(options(&server, updates.path())),
+        ..Session::default()
+    };
+    let handle = open_app_with_session(&mut cx, Launch::Empty, session).0;
+    wait(&mut cx, Duration::from_secs(5));
+    assert_eq!(server.requests(), ["/latest", "/deb", "/latest", "/deb"]);
+    assert_eq!(update_button(&mut cx, handle), Some(install_9_9_9()));
 }
 
 #[gpui_kit::test]

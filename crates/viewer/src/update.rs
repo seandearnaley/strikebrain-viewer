@@ -58,7 +58,8 @@ pub struct UpdateSettings {
     /// Whether to check automatically: 5 seconds after launch, then a day
     /// after the last check, by the calendar.
     pub automatic: bool,
-    /// When updates were last checked for, in seconds since the Unix epoch.
+    /// When a check last found the app up to date, in seconds since the
+    /// Unix epoch. None since a check found an update.
     pub last_check: Option<u64>,
 }
 
@@ -278,8 +279,8 @@ impl Updater {
         self.settings.automatic
     }
 
-    /// When a check last read the latest release and settled, in seconds
-    /// since the Unix epoch.
+    /// When a check last found the app up to date, in seconds since the
+    /// Unix epoch.
     pub(crate) fn last_check(&self) -> Option<u64> {
         self.settings.last_check
     }
@@ -530,8 +531,8 @@ impl Updater {
     }
 
     /// The automatic check, when automatic checks are on and both the last
-    /// check that settled and the last attempt are a day old or more by the
-    /// calendar.
+    /// check that found the app up to date and the last attempt are a day
+    /// old or more by the calendar.
     fn check_if_due(&mut self, cx: &mut Context<Self>) {
         let now = now(cx);
         if self.settings.automatic
@@ -773,9 +774,12 @@ impl Updater {
     }
 
     /// Ends a check in `phase`. One asked for hears how it went when there
-    /// is nothing to install. A check that settled, up to date or with an
-    /// update ready, is the last check, which is saved; one that failed is
-    /// not, and the first look a day after its attempt tries again.
+    /// is nothing to install. A check that found the app up to date is the
+    /// last check, which is saved. One that found an update clears it: the
+    /// app is no longer known to be up to date, so if the update is not
+    /// used, the next launch checks again 5 s in and offers it again. One
+    /// that failed leaves it, and the first look a day after its attempt
+    /// tries again.
     fn end(&mut self, phase: Phase, cx: &mut Context<Self>) {
         if std::mem::take(&mut self.asked) {
             match &phase {
@@ -784,8 +788,10 @@ impl Updater {
                 _ => {}
             }
         }
-        if matches!(phase, Phase::Idle | Phase::Ready(_)) {
-            self.settings.last_check = Some(now(cx));
+        match phase {
+            Phase::Idle => self.settings.last_check = Some(now(cx)),
+            Phase::Ready(_) => self.settings.last_check = None,
+            _ => {}
         }
         self.phase = phase;
         cx.notify();
