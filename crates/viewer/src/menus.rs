@@ -128,9 +128,10 @@ pub(crate) fn about(_: &About, cx: &mut App) {
     });
 }
 
-/// Check for Updates…'s answer when there is nothing to install, in the
-/// system's alert: up to date, with the version, or the reason the check
-/// failed.
+/// What the updater says, in the system's alert: Check for Updates…'s
+/// answer when there is nothing to install, up to date with the version or
+/// the reason the check failed, and the reason an install failed after the
+/// update's button was pressed.
 pub(crate) fn update_alert(event: &UpdateEvent, window: &mut Window, cx: &mut App) {
     let (level, message, detail) = match event {
         UpdateEvent::UpToDate(version) => (
@@ -141,6 +142,11 @@ pub(crate) fn update_alert(event: &UpdateEvent, window: &mut Window, cx: &mut Ap
         UpdateEvent::CheckFailed(reason) => (
             PromptLevel::Warning,
             "Couldn't check for updates".to_owned(),
+            reason.clone(),
+        ),
+        UpdateEvent::InstallFailed(reason) => (
+            PromptLevel::Warning,
+            "Couldn't install the update".to_owned(),
             reason.clone(),
         ),
     };

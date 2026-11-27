@@ -5,14 +5,14 @@
 //! Auto Update: a foreground task coordinates each check, the background
 //! executor reads the feed, downloads the file and checks it, and their
 //! results come back to the entity, which notifies. The root view owns the
-//! updater, saves its two settings, shows its offer in the bar and its
-//! answers to a manual check as alerts.
+//! updater, saves its two settings, shows its offer in the bar, and shows
+//! as alerts its answers to a manual check and why an install failed.
 //!
 //! Each platform's last step is its own module: on macOS, `macos` checks
 //! the disk image's app against the running one and replaces the bundle;
 //! on Windows, `windows` checks the installer's signature against the
 //! running app's and runs it, and it relaunches the app; on Linux, `linux`
-//! hands the `.deb` to the software installer.
+//! opens the `.deb` with `xdg-open`.
 
 mod download;
 mod feed;
@@ -102,16 +102,10 @@ pub(crate) enum Phase {
     /// it streams.
     Downloading { version: semver::Version },
     /// Checking the downloaded file of `version` as its platform asks: its
-    /// signature against the running app's. Again as **Restart to Update**
-    /// is pressed: on macOS the staged copy's signature, on Windows the
-    /// installer's digest.
-    #[cfg_attr(
-        not(any(target_os = "macos", windows)),
-        expect(
-            dead_code,
-            reason = "macOS and Windows check a signature; elsewhere the digest checked as the file downloads is all"
-        )
-    )]
+    /// signature against the running app's. Again as the update's button is
+    /// pressed: on macOS the staged copy's signature, on Windows the
+    /// installer's digest, and the digest of a file that opens with the
+    /// system: the disk image, or the `.deb`.
     Verifying { version: semver::Version },
     /// An update is ready to install. It stays until used or the app quits.
     Ready(Offer),
@@ -140,7 +134,7 @@ pub(crate) enum How {
     )]
     Restart,
     /// Another program installs it: the disk image opens, the `.deb` opens
-    /// in the software installer, or the release page opens.
+    /// with `xdg-open`, or the release page opens.
     Install,
 }
 
@@ -151,8 +145,8 @@ enum Plan {
     Page,
     /// Opens `file` with the system once it is checked again against
     /// `asset`, the release's file: on macOS the disk image in Finder,
-    /// where the bundle cannot be replaced; on Linux the `.deb` in the
-    /// software installer.
+    /// where the bundle cannot be replaced; on Linux the `.deb`, with
+    /// `xdg-open`.
     #[cfg_attr(
         all(windows, not(test)),
         expect(dead_code, reason = "Windows runs its installer and opens no file")
@@ -193,15 +187,18 @@ struct Swap {
     asset: Asset,
 }
 
-/// How a manual check ended with nothing to install, for the root view to
-/// say. An update found shows its button instead; an automatic check says
-/// nothing.
+/// What the root view says: how a manual check ended with nothing to
+/// install, or why an install failed after its button was pressed. An
+/// update found shows its button instead; an automatic check says nothing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum UpdateEvent {
     /// The running version, this one, is the latest.
     UpToDate(semver::Version),
     /// The check failed, for this reason.
     CheckFailed(String),
+    /// The install failed, for this reason, and the release page opened,
+    /// or the file to install from did.
+    InstallFailed(String),
 }
 
 /// Checks for a newer release, on its schedule or when asked, one check at
@@ -218,7 +215,7 @@ pub(crate) struct Updater {
     /// ends.
     asked: bool,
     /// The page of the release found, which opens where the person installs
-    /// the update.
+    /// the update: only an address `download::allowed` passes.
     page: Option<String>,
     /// What installing the update offered does; set with the offer.
     plan: Option<Plan>,
@@ -325,27 +322,30 @@ impl Updater {
     }
 
     /// Installs the update offered, through whatever owns the installation,
-    /// as its plan says. The offer is then used. On macOS the disk image is
-    /// checked against the release again before it opens, and a staged copy
-    /// is checked again before it replaces the bundle ([`Self::swap_in`]);
-    /// on Windows the installer is checked against the release again before
-    /// it runs (`Self::run_installer`).
+    /// as its plan says. The offer is then used. A file that opens with the
+    /// system is checked against the release again first
+    /// ([`Self::open_checked`]); on macOS a staged copy is checked again
+    /// before it replaces the bundle ([`Self::swap_in`]); on Windows the
+    /// installer is checked against the release again before it runs
+    /// (`Self::run_installer`). An install that fails is never silent
+    /// ([`Self::install_failed`]): the root view says why, and the release
+    /// page opens, or the file to install from.
     pub(crate) fn install(&mut self, cx: &mut Context<Self>) {
-        if self.offer().is_none() {
+        let Some(version) = self.offer().map(|offer| offer.version.clone()) else {
             return;
-        }
+        };
         let Some(plan) = self.plan.take() else {
             return;
         };
-        self.phase = Phase::Idle;
-        cx.notify();
         match plan {
             Plan::Page => {
-                if let Some(page) = &self.page {
-                    cx.open_url(page);
+                self.phase = Phase::Idle;
+                cx.notify();
+                if let Err(reason) = self.open_page(cx) {
+                    self.install_failed(reason, false, cx);
                 }
             }
-            Plan::Open { file, asset } => open_checked(file, asset, cx),
+            Plan::Open { file, asset } => self.open_checked(version, file, asset, None, cx),
             #[cfg(target_os = "macos")]
             Plan::Swap(swap) => self.swap_in(swap, cx),
             #[cfg(windows)]
@@ -377,16 +377,18 @@ impl Updater {
     }
 
     /// The second check's end. Where it passed and the swap worked, the app
-    /// relaunches as the new version. Otherwise the reason ends the update,
-    /// which a manual check asked for meanwhile hears, and the disk image,
-    /// checked against the release again, opens so the person can install
-    /// it. A copy that failed its check is removed, and the old app is
-    /// still in place. A swap that failed has put the old app back, or, if
-    /// that failed too, left it in the staging folder, which the reason
+    /// relaunches as the new version. Otherwise the install failed, for a
+    /// reason the root view gives, and the disk image, checked against the
+    /// release again, opens so the person can install it; an image that is
+    /// no longer the release's is removed, and the release page opens in
+    /// its place. A copy that failed its check is removed, and the old app
+    /// is still in place. A swap that failed has put the old app back, or,
+    /// if that failed too, left it in the staging folder, which the reason
     /// names.
     #[cfg(target_os = "macos")]
     fn swapped(&mut self, checked: Result<(), macos::Error>, swap: Swap, cx: &mut Context<Self>) {
         let Swap {
+            version,
             installed,
             staged,
             image,
@@ -398,12 +400,7 @@ impl Updater {
                 cx.set_restart_path(installed);
                 cx.restart();
             }
-            Err(error) => {
-                // As for a check that failed: the next attempt waits a day.
-                self.last_attempt = Some(now(cx));
-                self.end(Phase::Failed(error.to_string()), cx);
-                open_checked(image, asset, cx);
-            }
+            Err(error) => self.open_checked(version, image, asset, Some(error.to_string()), cx),
         }
     }
 
@@ -436,22 +433,100 @@ impl Updater {
 
     /// The installer's start. Once it runs, the app quits, so none of its
     /// files is in use, and the installer relaunches it. Otherwise the
-    /// reason ends the update, which a manual check asked for meanwhile
-    /// hears, and the release page opens so the person can install it. An
-    /// installer that is no longer the release's was removed.
+    /// install failed, for a reason the root view gives, and the release
+    /// page opens so the person can install it. An installer that is no
+    /// longer the release's was removed.
     #[cfg(windows)]
     fn started(&mut self, started: Result<(), String>, cx: &mut Context<Self>) {
         match started {
             Ok(()) => cx.quit(),
-            Err(reason) => {
-                // As for a check that failed: the next attempt waits a day.
-                self.last_attempt = Some(now(cx));
-                self.end(Phase::Failed(reason), cx);
-                if let Some(page) = &self.page {
-                    cx.open_url(page);
-                }
-            }
+            Err(reason) => self.install_failed(reason, true, cx),
         }
+    }
+
+    /// Opens `file`, the release's file `asset` of `version`, with the
+    /// system: the disk image in Finder, or the `.deb` with `xdg-open`. It
+    /// is checked against `asset` again first, on the background executor:
+    /// it may have sat in the cache folder for days. Meanwhile the update
+    /// is verifying again, so the button goes and no check starts. `failed`
+    /// is why the install it stands in for failed, if one did: the macOS
+    /// swap.
+    fn open_checked(
+        &mut self,
+        version: semver::Version,
+        file: PathBuf,
+        asset: Asset,
+        failed: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        self.phase = Phase::Verifying { version };
+        cx.notify();
+        let checking = cx.background_spawn(async move {
+            download::check_again(&file, &asset)
+                .map(|()| file)
+                .map_err(|error| error.to_string())
+        });
+        self.step = Some(cx.spawn(async move |this, cx| {
+            let checked = checking.await;
+            this.update(cx, |this, cx| this.opened(checked, failed, cx))
+                .unwrap_or_default();
+        }));
+    }
+
+    /// The file's second check's end. A file still the release's opens;
+    /// one that is not was removed, and the install failed, the release
+    /// page opening in its place. Either way an install that failed before,
+    /// as `failed` says, is reported. A manual check asked for meanwhile
+    /// hears only that: what opened is its answer.
+    fn opened(
+        &mut self,
+        checked: Result<PathBuf, String>,
+        failed: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        match (checked, failed) {
+            (Ok(file), None) => {
+                cx.open_with_system(&file);
+                self.asked = false;
+                self.phase = Phase::Idle;
+                cx.notify();
+            }
+            (Ok(file), Some(reason)) => {
+                cx.open_with_system(&file);
+                self.install_failed(reason, false, cx);
+            }
+            (Err(reason), failed) => self.install_failed(failed.unwrap_or(reason), true, cx),
+        }
+    }
+
+    /// Ends an install that failed after its button was pressed, for
+    /// `reason`, which the root view gives, as the answer to a manual check
+    /// asked for meanwhile too. With `page`, the release's page opens,
+    /// where the person can install the update by hand. As for a check
+    /// that failed, the next attempt waits a day.
+    fn install_failed(&mut self, reason: String, page: bool, cx: &mut Context<Self>) {
+        self.asked = false;
+        self.last_attempt = Some(now(cx));
+        if page {
+            // The install's reason is the one to give; a page refused too
+            // adds nothing to it.
+            let _opened = self.open_page(cx);
+        }
+        cx.emit(UpdateEvent::InstallFailed(reason.clone()));
+        self.phase = Phase::Failed(reason);
+        cx.notify();
+    }
+
+    /// Opens the page of the release found, where the person installs the
+    /// update by hand, as [`download::allowed`] allows: the feed's page
+    /// could be any address, and the system would open any.
+    fn open_page(&self, cx: &mut App) -> Result<(), String> {
+        let page = self.page.as_deref().unwrap_or_default();
+        if !download::allowed(page) {
+            return Err(download::Error::NotHttps(page.to_owned()).to_string());
+        }
+        cx.open_url(page);
+        Ok(())
     }
 
     /// The automatic check, when automatic checks are on and both the last
@@ -602,7 +677,7 @@ impl Updater {
 
     /// Offers the downloaded `.deb` `package` of `version` at once: its
     /// check, against the release's size and digest, was the download's.
-    /// **Install Update** opens it in the software installer. Another
+    /// **Install Update** opens it with `xdg-open`. Another
     /// owner's file, which tests download, is installed from the release
     /// page.
     #[cfg(not(any(target_os = "macos", windows)))]
@@ -725,22 +800,6 @@ impl Drop for Updater {
     }
 }
 
-/// Opens `file` with the system, the disk image in Finder or the `.deb` in
-/// the software installer, once it is checked again, on the background
-/// executor, against `asset`, the release's file: it may have sat in the
-/// cache folder for days. One that is no longer the release's is removed
-/// and nothing opens.
-fn open_checked(file: PathBuf, asset: Asset, cx: &mut Context<Updater>) {
-    let checking =
-        cx.background_spawn(async move { download::check_again(&file, &asset).map(|()| file) });
-    cx.spawn(async move |_, cx| {
-        if let Ok(file) = checking.await {
-            cx.update(|cx| cx.open_with_system(&file));
-        }
-    })
-    .detach();
-}
-
 /// The automatic checks: a look 5 s after launch, then every hour, for a
 /// check that is due.
 fn schedule(cx: &mut Context<Updater>) -> Task<()> {
@@ -805,9 +864,10 @@ fn recent(last: Option<u64>, now: u64) -> bool {
     last.is_some_and(|last| last <= now && now - last < DAY.as_secs())
 }
 
-/// The calendar's time, in seconds since the Unix epoch; 0 on a clock set
-/// before it. GPUI's clock: the system's, or in tests the test scheduler's,
-/// which `advance_clock` moves.
+/// The calendar's time, in seconds since the Unix epoch, on GPUI's clock:
+/// the system's, or in tests the test scheduler's, which `advance_clock`
+/// moves. The system's is chrono's `Utc::now`, which panics on a clock set
+/// before 1970; only the test clock can be set there, and then this is 0.
 fn now(cx: &App) -> u64 {
     let seconds = cx
         .background_executor()
@@ -821,7 +881,212 @@ fn now(cx: &App) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{DAY, recent};
+    use gpui_kit::{AppContext as _, Entity, TestAppContext};
+    use sha2::{Digest as _, Sha256};
+
+    use super::feed::Asset;
+    use super::{
+        DAY, How, Offer, Owner, Phase, Plan, UpdateEvent, UpdateOptions, UpdateSettings, Updater,
+        recent,
+    };
+
+    /// The release's page, which opens where nothing else installs.
+    const PAGE: &str = "https://github.com/seandearnaley/strikebrain-viewer/releases/tag/v9.9.9";
+
+    /// The version offered.
+    fn offered() -> semver::Version {
+        semver::Version::new(9, 9, 9)
+    }
+
+    /// An updater offering 9.9.9, whose install does what `plan` says, and
+    /// whose release has the page `page`. It checks nothing on its own.
+    fn offering(cx: &mut TestAppContext, plan: Plan, page: &str) -> Entity<Updater> {
+        cx.new(|cx| {
+            let options = UpdateOptions {
+                feed: String::new(),
+                running: semver::Version::new(0, 0, 1),
+                owner: Owner::ReleasePage,
+                updates_dir: None,
+            };
+            let settings = UpdateSettings {
+                automatic: false,
+                last_check: None,
+            };
+            let mut updater = Updater::new(options, settings, cx);
+            updater.page = Some(page.to_owned());
+            updater.plan = Some(plan);
+            updater.phase = Phase::Ready(Offer {
+                version: offered(),
+                how: How::Install,
+            });
+            updater
+        })
+    }
+
+    /// The release's file `name`, with the size and digest of `bytes`.
+    fn asset(name: &str, bytes: &[u8]) -> Asset {
+        Asset {
+            name: name.to_owned(),
+            size: u64::try_from(bytes.len()).unwrap(),
+            sha256: Sha256::digest(bytes).into(),
+            url: String::new(),
+        }
+    }
+
+    /// What `updater` says while `act` runs on it and every task it starts
+    /// finishes.
+    fn said(
+        cx: &mut TestAppContext,
+        updater: &Entity<Updater>,
+        act: impl FnOnce(&mut Updater, &mut gpui_kit::Context<Updater>),
+    ) -> Vec<UpdateEvent> {
+        let mut events = cx.events(updater);
+        updater.update(cx, act);
+        cx.run_until_parked();
+        std::iter::from_fn(|| events.try_recv().ok()).collect()
+    }
+
+    /// Whether `updater`'s install failed and its next attempt waits a day.
+    fn failed(cx: &mut TestAppContext, updater: &Entity<Updater>) -> bool {
+        updater.read_with(cx, |updater, _| {
+            matches!(updater.phase, Phase::Failed(_)) && updater.last_attempt.is_some()
+        })
+    }
+
+    #[gpui_kit::test]
+    fn a_file_changed_since_the_offer_is_removed_and_the_release_page_opens_instead(
+        cx: &mut TestAppContext,
+    ) {
+        let tmp = tempfile::tempdir().unwrap();
+        let name = "strikebrain-viewer_9.9.9_amd64.deb";
+        let file = tmp.path().join(name);
+        // The size the release gives, other bytes.
+        std::fs::write(&file, b"the other release").unwrap();
+        let plan = Plan::Open {
+            file: file.clone(),
+            asset: asset(name, b"the newer release"),
+        };
+        let updater = offering(cx, plan, PAGE);
+        let events = said(cx, &updater, Updater::install);
+        assert_eq!(
+            events,
+            [UpdateEvent::InstallFailed(
+                "the file's digest is not the release's".to_owned()
+            )]
+        );
+        assert_eq!(cx.opened_url().as_deref(), Some(PAGE));
+        assert!(!file.exists());
+        assert!(failed(cx, &updater));
+        assert!(updater.read_with(cx, |updater, _| updater.offer().is_none()));
+    }
+
+    #[gpui_kit::test]
+    fn a_release_page_that_is_not_https_is_never_opened(cx: &mut TestAppContext) {
+        let page = "http://example.com/releases/tag/v9.9.9";
+        let updater = offering(cx, Plan::Page, page);
+        let events = said(cx, &updater, Updater::install);
+        assert_eq!(
+            events,
+            [UpdateEvent::InstallFailed(format!(
+                "not an https address: {page}"
+            ))]
+        );
+        assert_eq!(cx.opened_url(), None);
+        assert!(failed(cx, &updater));
+    }
+
+    #[gpui_kit::test]
+    fn the_release_page_opens_where_nothing_else_installs(cx: &mut TestAppContext) {
+        let updater = offering(cx, Plan::Page, PAGE);
+        let events = said(cx, &updater, Updater::install);
+        assert_eq!(events, []);
+        assert_eq!(cx.opened_url().as_deref(), Some(PAGE));
+        assert!(updater.read_with(cx, |updater, _| updater.phase == Phase::Idle));
+    }
+
+    /// A swap of 9.9.9 into `apps`, as `macos::stage` leaves it, from the
+    /// disk image `image`, which no longer holds the release's bytes.
+    #[cfg(target_os = "macos")]
+    fn swap_from_a_changed_image(apps: &std::path::Path) -> super::Swap {
+        let installed = apps.join("Strikebrain Viewer.app");
+        std::fs::create_dir_all(installed.join("Contents/MacOS")).unwrap();
+        let staged = apps.join(".Strikebrain Viewer.update/Strikebrain Viewer.app");
+        std::fs::create_dir_all(staged.join("Contents/MacOS")).unwrap();
+        let name = "Strikebrain-Viewer-9.9.9-macos-arm64.dmg";
+        let image = apps.join(name);
+        std::fs::write(&image, b"the other release").unwrap();
+        super::Swap {
+            version: offered(),
+            installed,
+            staged,
+            signer: super::macos::Signer::made_up(),
+            image,
+            asset: asset(name, b"the newer release"),
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[gpui_kit::test]
+    fn a_staged_app_that_fails_its_check_at_the_click_says_why(cx: &mut TestAppContext) {
+        let tmp = tempfile::tempdir().unwrap();
+        let swap = swap_from_a_changed_image(tmp.path());
+        let (installed, image) = (swap.installed.clone(), swap.image.clone());
+        let updater = offering(cx, Plan::Swap(swap), PAGE);
+        // The staged copy is not signed: codesign refuses it.
+        let events = said(cx, &updater, Updater::install);
+        let [UpdateEvent::InstallFailed(reason)] = events.as_slice() else {
+            panic!("{events:?}");
+        };
+        assert!(reason.starts_with("codesign failed: "), "{reason}");
+        // The image changed too: the release page opens in its place.
+        assert_eq!(cx.opened_url().as_deref(), Some(PAGE));
+        assert!(!image.exists());
+        assert!(installed.is_dir());
+        assert!(!tmp.path().join(".Strikebrain Viewer.update").exists());
+        assert!(failed(cx, &updater));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[gpui_kit::test]
+    fn a_swap_that_strands_the_old_app_says_where_it_is(cx: &mut TestAppContext) {
+        let tmp = tempfile::tempdir().unwrap();
+        let swap = swap_from_a_changed_image(tmp.path());
+        let old = swap.staged.with_file_name("old.app");
+        let stranded = super::macos::Error::Stranded {
+            old: old.clone(),
+            error: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+            restore: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        };
+        let updater = offering(cx, Plan::Page, PAGE);
+        let events = said(cx, &updater, |updater, cx| {
+            updater.swapped(Err(stranded), swap, cx);
+        });
+        let [UpdateEvent::InstallFailed(reason)] = events.as_slice() else {
+            panic!("{events:?}");
+        };
+        assert!(reason.contains(&old.display().to_string()), "{reason}");
+        assert_eq!(cx.opened_url().as_deref(), Some(PAGE));
+        assert!(failed(cx, &updater));
+    }
+
+    #[cfg(windows)]
+    #[gpui_kit::test]
+    fn an_installer_that_does_not_start_says_why_and_opens_the_release_page(
+        cx: &mut TestAppContext,
+    ) {
+        let updater = offering(cx, Plan::Page, PAGE);
+        let events = said(cx, &updater, |updater, cx| {
+            updater.started(Err("the installer did not run".to_owned()), cx);
+        });
+        assert_eq!(
+            events,
+            [UpdateEvent::InstallFailed(
+                "the installer did not run".to_owned()
+            )]
+        );
+        assert_eq!(cx.opened_url().as_deref(), Some(PAGE));
+        assert!(failed(cx, &updater));
+    }
 
     #[test]
     fn a_check_less_than_a_day_old_is_recent() {
