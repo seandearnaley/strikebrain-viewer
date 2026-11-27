@@ -258,6 +258,57 @@ fn fetch_into(agent: &Agent, asset: &Asset, part: &Path, cancel: &AtomicBool) ->
     out.sync_all().map_err(Error::Io)
 }
 
+/// Checks the file at `path`, downloaded and checked earlier, against
+/// `asset`'s size and SHA-256 digest once more, as it is about to be
+/// opened: it may have sat in the cache folder for days. A file that is no
+/// longer the release's, or cannot be read, is removed.
+#[cfg_attr(
+    all(not(test), not(target_os = "macos")),
+    expect(
+        dead_code,
+        reason = "used on macOS; Linux opens its checked file in a step still to come"
+    )
+)]
+pub(crate) fn check_again(path: &Path, asset: &Asset) -> Result<(), Error> {
+    let checked = same(path, asset);
+    if checked.is_err() {
+        let _removed = fs::remove_file(path);
+    }
+    checked
+}
+
+/// Whether the file at `path` is `asset`'s size and has its digest.
+#[cfg_attr(
+    all(not(test), not(target_os = "macos")),
+    expect(dead_code, reason = "only `check_again` reads a file back")
+)]
+fn same(path: &Path, asset: &Asset) -> Result<(), Error> {
+    let mut file = fs::File::open(path).map_err(Error::Io)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0_u8; CHUNK];
+    let mut length = 0_u64;
+    loop {
+        let read = match file.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => read,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(Error::Io(error)),
+        };
+        hasher.update(&buffer[..read]);
+        length += read as u64;
+        if length > asset.size {
+            return Err(Error::Size);
+        }
+    }
+    if length != asset.size {
+        return Err(Error::Size);
+    }
+    if hasher.finalize() != asset.sha256 {
+        return Err(Error::Digest);
+    }
+    Ok(())
+}
+
 /// The cache folder's `updates`, where each version's files download.
 pub(crate) fn updates_dir() -> Result<PathBuf, Error> {
     crate::persist::project_dirs()
@@ -496,6 +547,29 @@ mod tests {
         let result = fetch_json(&agent(), &url);
         assert!(matches!(result, Err(Error::Http(_))), "{result:?}");
         assert_eq!(server.requests().len(), 0);
+    }
+
+    #[test]
+    fn a_file_is_checked_again_and_removed_if_it_is_not_the_releases() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(NAME);
+        let release = asset(b"the release", String::new());
+        fs::write(&path, b"the release").unwrap();
+        check_again(&path, &release).unwrap();
+        assert_eq!(listing(tmp.path()), [NAME]);
+        // Changed since it was checked: the same size, other bytes.
+        fs::write(&path, b"the rel3ase").unwrap();
+        let changed = check_again(&path, &release);
+        assert!(matches!(changed, Err(Error::Digest)), "{changed:?}");
+        assert_eq!(listing(tmp.path()), NOTHING);
+        for other in [&b"the release and more"[..], b"the"] {
+            fs::write(&path, other).unwrap();
+            let resized = check_again(&path, &release);
+            assert!(matches!(resized, Err(Error::Size)), "{resized:?}");
+            assert_eq!(listing(tmp.path()), NOTHING);
+        }
+        let gone = check_again(&path, &release);
+        assert!(matches!(gone, Err(Error::Io(_))), "{gone:?}");
     }
 
     #[test]

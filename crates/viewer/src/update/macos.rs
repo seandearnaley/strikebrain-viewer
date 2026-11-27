@@ -1,12 +1,14 @@
 //! The last step of an update on macOS. The downloaded disk image is
 //! attached read-only and hidden. Its one app must pass `codesign`'s strict
-//! check of its whole signature and Gatekeeper's assessment, and be signed
-//! with the running app's Team ID as the same bundle identifier. Where the
-//! running bundle can be replaced, that app is copied beside it, onto the
-//! same volume, and **Restart to Update** swaps the two with two renames
-//! and relaunches. Where it cannot be replaced, the checked disk image
-//! opens in Finder instead. Blocking; the updater runs the checks and the
-//! copy on GPUI's background executor, and the swap as it relaunches.
+//! check of its whole signature against a requirement naming the running
+//! app's Team ID and bundle identifier, and Gatekeeper's assessment. Where
+//! the running bundle can be replaced, that app is copied beside it, onto
+//! the same volume, and the copy is checked the same way. **Restart to
+//! Update** checks the copy's signature once more, swaps the two bundles
+//! with two renames and relaunches. Where the bundle cannot be replaced,
+//! the checked disk image opens in Finder instead. Blocking; the updater
+//! runs the checks and the copy on GPUI's background executor, and the
+//! swap as it relaunches.
 //!
 //! The tools are the system's, by their full paths. A path given to one is
 //! always absolute: `codesign` reads an argument that starts with a digit
@@ -39,9 +41,13 @@ const STAGING: &str = ".Strikebrain Viewer.update";
 /// moves into its place.
 const OLD: &str = "old.app";
 
-/// The Team ID `codesign` reports for an app that has none: one signed ad
-/// hoc, as `just bundle` signs without an identity, or one Apple signed.
-const NO_TEAM: &str = "not set";
+/// How long a Team ID is: ten capital letters and digits. An app with none,
+/// signed ad hoc or by Apple, reports `not set`.
+const TEAM_ID_LENGTH: usize = 10;
+
+/// The exit status of `codesign --verify` when the code is properly signed
+/// but fails the requirement given with `-R`/`--test-requirement`.
+const FAILED_REQUIREMENT: i32 = 3;
 
 /// A part of the path of a translocated app: macOS runs a quarantined app
 /// that was never moved from where it was downloaded from a randomised,
@@ -59,11 +65,19 @@ pub(crate) enum Error {
     Failed(&'static str, String),
     /// The disk image does not hold exactly one app.
     NoApp,
-    /// The disk image's app is not signed with the running app's Team ID
-    /// as the same bundle identifier.
+    /// The app is validly signed, but not with the running app's Team ID as
+    /// the same bundle identifier.
     NotThisApp,
     /// The staging folder could not be made, or a bundle could not move.
     Io(io::Error),
+    /// The new app could not move into place (`error`), and the old one
+    /// could not move back either (`restore`): nothing is at the installed
+    /// path, and the old app is at `old`, in the staging folder.
+    Stranded {
+        old: PathBuf,
+        error: io::Error,
+        restore: io::Error,
+    },
 }
 
 impl fmt::Display for Error {
@@ -75,6 +89,15 @@ impl fmt::Display for Error {
             Self::NoApp => f.write_str("the disk image does not hold one app"),
             Self::NotThisApp => f.write_str("the update is not signed as this app"),
             Self::Io(error) => write!(f, "{error}"),
+            Self::Stranded {
+                old,
+                error,
+                restore,
+            } => write!(
+                f,
+                "the update could not move into place ({error}), nor the old app back ({restore}); the old app is at {}",
+                old.display()
+            ),
         }
     }
 }
@@ -87,18 +110,40 @@ fn name(tool: &str) -> &str {
 }
 
 /// Who signed an app, as `codesign` reports it: the Team ID of the
-/// developer's certificate and the app's bundle identifier.
+/// developer's certificate and the app's bundle identifier. Both hold only
+/// the characters such names may, so they can be written into a
+/// requirement as they are.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Signer {
     team: String,
     id: String,
 }
 
+impl Signer {
+    /// The code requirement an update must satisfy, as `codesign -R` takes
+    /// it: literal source after `=`, in Apple's Code Signing Requirement
+    /// Language. A certificate Apple issued (`anchor apple generic`), the
+    /// same identifier, and a signing certificate whose subject's
+    /// organizational unit, which holds the Team ID in Apple's developer
+    /// certificates, is the same team.
+    fn requirement(&self) -> String {
+        format!(
+            r#"=anchor apple generic and identifier "{}" and certificate leaf[subject.OU] = "{}""#,
+            self.id, self.team
+        )
+    }
+}
+
 /// An update checked and ready to install.
 #[derive(Debug)]
 pub(crate) enum Prepared {
-    /// Its app is staged at `staged`, to replace the bundle `installed`.
-    Swap { installed: PathBuf, staged: PathBuf },
+    /// Its app is staged at `staged`, to replace the bundle `installed`,
+    /// which `signer` signed.
+    Swap {
+        installed: PathBuf,
+        staged: PathBuf,
+        signer: Signer,
+    },
     /// The disk image passed, to open in Finder.
     Open,
 }
@@ -124,7 +169,13 @@ pub(crate) fn owner() -> Owner {
 
 /// The running app's bundle, from its executable's path.
 fn running() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
+    bundle_at(&std::env::current_exe().ok()?)
+}
+
+/// The bundle the executable `exe` runs in, by its canonical path: absolute,
+/// with no link in it, so what is moved is the bundle itself.
+fn bundle_at(exe: &Path) -> Option<PathBuf> {
+    let exe = explorer::canonical(exe).ok()?;
     bundle_of(&exe).map(Path::to_path_buf)
 }
 
@@ -145,7 +196,11 @@ fn prepare_for_running(image: &Path, replace: bool) -> Result<Prepared, Error> {
     let signer = signed_by(&installed).ok_or(Error::NotReleased)?;
     if replace {
         let staged = stage(image, &installed, &signer)?;
-        Ok(Prepared::Swap { installed, staged })
+        Ok(Prepared::Swap {
+            installed,
+            staged,
+            signer,
+        })
     } else {
         mounted(image, |app| check(app, &signer))?;
         Ok(Prepared::Open)
@@ -153,7 +208,10 @@ fn prepare_for_running(image: &Path, replace: bool) -> Result<Prepared, Error> {
 }
 
 /// Who signed `app`, from `codesign --display --verbose=2`: none when it is
-/// not a signed bundle, or is signed with no Team ID. Runs `codesign`.
+/// not a signed bundle, or is signed with no Team ID. Only the running
+/// app's own signature is read this way; an update is held to it by
+/// `codesign`'s requirement check, never by reading its report. Runs
+/// `codesign`.
 pub(crate) fn signed_by(app: &Path) -> Option<Signer> {
     let mut display = Command::new(CODESIGN);
     display.args(["--display", "--verbose=2"]).arg(app);
@@ -163,18 +221,32 @@ pub(crate) fn signed_by(app: &Path) -> Option<Signer> {
 }
 
 /// The signer `report`, what `codesign --display --verbose=2` wrote, names
-/// in its `TeamIdentifier=` and `Identifier=` lines; none when either is
-/// missing or empty, or the Team ID is `not set`.
+/// in its `TeamIdentifier=` and `Identifier=` lines. None unless each key
+/// is on exactly one line, the Team ID is ten capital letters and digits
+/// (not `not set`), and the identifier holds only letters, digits, `.` and
+/// `-`. The report's first line is the executable's path, which may hold
+/// a newline and so seem to add lines: a key found twice, or a value with
+/// any other character, is refused.
 fn signer(report: &str) -> Option<Signer> {
     let field = |key: &str| {
-        report
-            .lines()
-            .find_map(|line| line.strip_prefix(key))
-            .filter(|value| !value.is_empty())
+        // Split on `\n` alone: `lines` would also drop a `\r` before it.
+        let mut values = report.split('\n').filter_map(|line| line.strip_prefix(key));
+        match (values.next(), values.next()) {
+            (Some(value), None) => Some(value),
+            _ => None,
+        }
     };
     let team = field("TeamIdentifier=")?;
     let id = field("Identifier=")?;
-    (team != NO_TEAM).then(|| Signer {
+    let team_id = team.len() == TEAM_ID_LENGTH
+        && team
+            .bytes()
+            .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit());
+    let bundle_id = !id.is_empty()
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'.' || byte == b'-');
+    (team_id && bundle_id).then(|| Signer {
         team: team.to_owned(),
         id: id.to_owned(),
     })
@@ -201,20 +273,33 @@ fn writable(dir: &Path) -> bool {
 
 /// Stages the app in the disk image `image` beside the bundle `installed`:
 /// checked as [`check`] says, then copied by `ditto` into
-/// `<installed's folder>/.Strikebrain Viewer.update/`, made afresh. The
-/// image is always detached, and on any failure the staging folder is
+/// `<installed's folder>/.Strikebrain Viewer.update/`, made afresh, and the
+/// copy checked the same way, so what moves into place is what passed.
+/// The image is always detached, and on any failure the staging folder is
 /// removed. Runs the tools.
 pub(crate) fn stage(image: &Path, installed: &Path, signer: &Signer) -> Result<PathBuf, Error> {
     let staging = installed.with_file_name(STAGING);
     mounted(image, |app| {
         check(app, signer)?;
         let staged = staging.join(app.file_name().ok_or(Error::NoApp)?);
-        let copied = copy(app, &staging, &staged);
+        let copied = copy(app, &staging, &staged).and_then(|()| check(&staged, signer));
         if copied.is_err() {
             let _removed = fs::remove_dir_all(&staging);
         }
         copied.map(|()| staged)
     })
+}
+
+/// Checks `staged`, the copy [`stage`] made, once more as it is about to
+/// move into place: it may have sat beside the app for days. Its signature
+/// must still be whole and satisfy `signer`'s requirement ([`satisfies`]).
+/// A copy that fails is removed with its staging folder. Runs `codesign`.
+pub(crate) fn check_staged(staged: &Path, signer: &Signer) -> Result<(), Error> {
+    let checked = satisfies(staged, signer);
+    if checked.is_err() {
+        remove_staging(staged);
+    }
+    checked
 }
 
 /// Copies `app` to `staged`, in the folder `staging`, which is made afresh:
@@ -231,11 +316,33 @@ fn copy(app: &Path, staging: &Path, staged: &Path) -> Result<(), Error> {
     run(DITTO, &mut ditto).map(drop)
 }
 
-/// Attaches the disk image `image` read-only, hidden from Finder and not
-/// opened there, at a mount point of its own; hands `then` the one app in
-/// it; and detaches it, whatever `then` returned.
+/// Attaches the disk image `image` at a mount point of its own, hands
+/// `then` the one app in it, and detaches it, whatever `then` returned.
 fn mounted<T>(image: &Path, then: impl FnOnce(&Path) -> Result<T, Error>) -> Result<T, Error> {
+    mounted_with(image, attach, detach, then)
+}
+
+/// [`mounted`], attaching with `attach` and detaching with `detach`, which
+/// a test replaces. Once `attach` succeeds, `detach` always runs.
+fn mounted_with<T>(
+    image: &Path,
+    attach: impl FnOnce(&Path, &Path) -> Result<(), Error>,
+    detach: impl FnOnce(&Path),
+    then: impl FnOnce(&Path) -> Result<T, Error>,
+) -> Result<T, Error> {
     let mount = mount_point();
+    if let Err(error) = attach(image, &mount) {
+        let _removed = fs::remove_dir(&mount);
+        return Err(error);
+    }
+    let result = the_app(&mount).and_then(|app| then(&app));
+    detach(&mount);
+    result
+}
+
+/// Attaches the disk image `image` at `mount`: read-only, hidden from
+/// Finder and not opened there.
+fn attach(image: &Path, mount: &Path) -> Result<(), Error> {
     let mut attach = Command::new(HDIUTIL);
     attach
         .args([
@@ -245,15 +352,9 @@ fn mounted<T>(image: &Path, then: impl FnOnce(&Path) -> Result<T, Error>) -> Res
             "-noautoopen",
             "-mountpoint",
         ])
-        .arg(&mount)
+        .arg(mount)
         .arg(image);
-    if let Err(error) = run(HDIUTIL, &mut attach) {
-        let _removed = fs::remove_dir(&mount);
-        return Err(error);
-    }
-    let result = the_app(&mount).and_then(|app| then(&app));
-    detach(&mount);
-    result
+    run(HDIUTIL, &mut attach).map(drop)
 }
 
 /// A mount point no other attach uses: in the temporary folder, which on
@@ -304,22 +405,35 @@ fn the_app(mount: &Path) -> Result<PathBuf, Error> {
     }
 }
 
-/// Checks `app` as the update of the app `signer` signed: its signature is
-/// valid and seals all of it, nested code too (`codesign --verify --deep
-/// --strict`); Gatekeeper accepts it to run (`spctl --assess --type
-/// execute`), which a notarized Developer ID app passes; and it carries
-/// `signer`'s Team ID and bundle identifier.
+/// Checks `app` as the update of the app `signer` signed: it satisfies
+/// `signer`'s requirement ([`satisfies`]), and Gatekeeper accepts it to run
+/// (`spctl --assess --type execute`), which a notarized Developer ID app
+/// passes.
 fn check(app: &Path, signer: &Signer) -> Result<(), Error> {
-    let mut verify = Command::new(CODESIGN);
-    verify.args(["--verify", "--deep", "--strict"]).arg(app);
-    run(CODESIGN, &mut verify)?;
+    satisfies(app, signer)?;
     let mut assess = Command::new(SPCTL);
     assess.args(["--assess", "--type", "execute"]).arg(app);
-    run(SPCTL, &mut assess)?;
-    if signed_by(app).as_ref() == Some(signer) {
-        Ok(())
-    } else {
-        Err(Error::NotThisApp)
+    run(SPCTL, &mut assess).map(drop)
+}
+
+/// Whether `app`'s signature is valid and seals all of it, nested code too,
+/// and satisfies [`Signer::requirement`]: `codesign --verify --deep
+/// --strict --test-requirement <requirement>`. `codesign` evaluates the
+/// requirement against the signature itself; nothing it prints is read.
+/// It exits 3 for code properly signed that fails the requirement.
+fn satisfies(app: &Path, signer: &Signer) -> Result<(), Error> {
+    let mut verify = Command::new(CODESIGN);
+    verify
+        .args(["--verify", "--deep", "--strict", "--test-requirement"])
+        .arg(signer.requirement())
+        .arg(app);
+    let output = verify
+        .output()
+        .map_err(|error| Error::Run(CODESIGN, error))?;
+    match output.status.code() {
+        Some(0) => Ok(()),
+        Some(FAILED_REQUIREMENT) => Err(Error::NotThisApp),
+        _ => Err(Error::Failed(CODESIGN, said(&output))),
     }
 }
 
@@ -351,11 +465,15 @@ fn said(output: &Output) -> String {
         .unwrap_or_else(|| output.status.to_string())
 }
 
-/// Replaces the bundle `installed` with `staged`, the copy [`stage`] made.
-/// The installed app moves into the staging folder as `old.app` and the
-/// staged one into its place, both renames on one volume; then the staging
-/// folder goes, the old app with it. If the staged app cannot move in, the
-/// old one moves back and the staging folder goes.
+/// Replaces the bundle `installed` with `staged`, the copy [`stage`] made
+/// and [`check_staged`] checked again. The installed app moves into the
+/// staging folder as `old.app` and the staged one into its place, both
+/// renames on one volume; then the staging folder goes, the old app with
+/// it. If the installed app cannot move aside, nothing has moved and the
+/// staging folder goes. If the staged app cannot move in, the old one moves
+/// back and the staging folder goes; if the old one cannot move back
+/// either, nothing is at `installed`, the staging folder stays with the old
+/// app in it, and the error ([`Error::Stranded`]) says where it is.
 pub(crate) fn swap(installed: &Path, staged: &Path) -> Result<(), Error> {
     swap_with(installed, staged, |from, to| fs::rename(from, to))
 }
@@ -372,11 +490,17 @@ fn swap_with(
         return Err(Error::Io(error));
     }
     if let Err(error) = rename(staged, installed) {
-        // Until the old app is back, the staging folder holds it and stays.
-        if rename(&old, installed).is_ok() {
-            remove_staging(staged);
-        }
-        return Err(Error::Io(error));
+        return match rename(&old, installed) {
+            Ok(()) => {
+                remove_staging(staged);
+                Err(Error::Io(error))
+            }
+            Err(restore) => Err(Error::Stranded {
+                old,
+                error,
+                restore,
+            }),
+        };
     }
     // An old app that will not go is removed with the next update's
     // staging folder.
@@ -396,6 +520,7 @@ fn remove_staging(staged: &Path) {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::{Cell, RefCell};
     use std::ffi::OsString;
     use std::os::unix::fs::{PermissionsExt as _, symlink};
     use std::os::unix::process::ExitStatusExt as _;
@@ -493,6 +618,14 @@ Chosen signature=1
         names
     }
 
+    /// The release's signer, as the recorded report names it.
+    fn ours() -> Signer {
+        Signer {
+            team: "ABCDE12345".to_owned(),
+            id: "ai.brainstrike.viewer".to_owned(),
+        }
+    }
+
     /// An installed app holding "old" in `apps` and a staged one holding
     /// "new" beside it, as `stage` leaves them.
     fn installed_and_staged(apps: &Path) -> (PathBuf, PathBuf) {
@@ -522,6 +655,151 @@ Chosen signature=1
         assert_eq!(signer(&without(RELEASED, "Identifier=")), None);
         assert_eq!(signer(&without(RELEASED, "TeamIdentifier=")), None);
         assert_eq!(signer("Identifier=\nTeamIdentifier=ABCDE12345\n"), None);
+    }
+
+    #[test]
+    fn a_report_with_lines_injected_through_the_executables_path_has_no_signer() {
+        // An app signed by another team, whose executable's name carries a
+        // newline and this app's keys, which come first in the report.
+        let injected = RELEASED
+            .replace(
+                "Identifier=ai.brainstrike.viewer",
+                "Identifier=com.example.other",
+            )
+            .replace("TeamIdentifier=ABCDE12345", "TeamIdentifier=OTHER12345")
+            .replacen(
+                "/MacOS/strikebrain-viewer\n",
+                "/MacOS/x\nIdentifier=ai.brainstrike.viewer\nTeamIdentifier=ABCDE12345\n",
+                1,
+            );
+        assert!(injected.starts_with("Executable="), "{injected}");
+        assert_eq!(signer(&injected), None);
+    }
+
+    #[test]
+    fn a_signer_must_be_a_team_id_and_a_bundle_identifier() {
+        let report = |team: &str, id: &str| format!("Identifier={id}\nTeamIdentifier={team}\n");
+        assert_eq!(
+            signer(&report("ABCDE12345", "ai.brainstrike.viewer")),
+            Some(ours())
+        );
+        for (team, id) in [
+            ("abcde12345", "ai.brainstrike.viewer"),
+            ("ABCDE1234", "ai.brainstrike.viewer"),
+            ("ABCDE123456", "ai.brainstrike.viewer"),
+            ("ABCDE-1234", "ai.brainstrike.viewer"),
+            ("not set", "ai.brainstrike.viewer"),
+            ("ABCDE12345", "ai.\"brainstrike\""),
+            ("ABCDE12345", "ai.brainstrike.viewer\r"),
+            ("ABCDE12345", "ai brainstrike"),
+            ("ABCDE12345", "ai\\brainstrike"),
+        ] {
+            assert_eq!(signer(&report(team, id)), None, "{team:?} {id:?}");
+        }
+    }
+
+    #[test]
+    fn the_requirement_names_apples_anchor_the_identifier_and_the_team() {
+        assert_eq!(
+            ours().requirement(),
+            r#"=anchor apple generic and identifier "ai.brainstrike.viewer" and certificate leaf[subject.OU] = "ABCDE12345""#
+        );
+    }
+
+    #[test]
+    fn an_app_not_signed_as_this_one_does_not_satisfy_its_requirement() {
+        // Every Mac has Calculator, signed by Apple: valid, but not ours.
+        let calculator = Path::new("/System/Applications/Calculator.app");
+        let result = satisfies(calculator, &ours());
+        assert!(matches!(result, Err(Error::NotThisApp)), "{result:?}");
+        let tmp = tempfile::tempdir().unwrap();
+        let unsigned = tmp.path().join("Unsigned.app");
+        bundle(&unsigned, "unsigned");
+        let result = satisfies(&unsigned, &ours());
+        assert!(
+            matches!(result, Err(Error::Failed(CODESIGN, _))),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn a_staged_app_that_fails_its_second_check_is_removed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (installed, staged) = installed_and_staged(tmp.path());
+        let result = check_staged(&staged, &ours());
+        assert!(
+            matches!(result, Err(Error::Failed(CODESIGN, _))),
+            "{result:?}"
+        );
+        assert_eq!(listing(tmp.path()), ["Strikebrain Viewer.app"]);
+        assert_eq!(executable(&installed), "old");
+    }
+
+    #[test]
+    fn the_running_bundle_is_found_by_its_canonical_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real");
+        bundle(&real.join("Strikebrain Viewer.app"), "app");
+        symlink(&real, tmp.path().join("link")).unwrap();
+        let exe = tmp
+            .path()
+            .join("link/Strikebrain Viewer.app/Contents/MacOS/strikebrain-viewer");
+        let canonical = explorer::canonical(tmp.path()).unwrap();
+        assert_eq!(
+            bundle_at(&exe),
+            Some(canonical.join("real/Strikebrain Viewer.app"))
+        );
+        assert_eq!(bundle_at(&tmp.path().join("missing")), None);
+    }
+
+    #[test]
+    fn the_image_is_detached_whatever_its_check_finds() {
+        let tmp = tempfile::tempdir().unwrap();
+        let image = tmp.path().join("update.dmg");
+        let attached = RefCell::new(Vec::<PathBuf>::new());
+        let detached = RefCell::new(Vec::<PathBuf>::new());
+        let attach = |with_app: bool| {
+            let attached = &attached;
+            move |_image: &Path, mount: &Path| {
+                fs::create_dir(mount).unwrap();
+                if with_app {
+                    bundle(&mount.join("Strikebrain Viewer.app"), "new");
+                }
+                attached.borrow_mut().push(mount.to_owned());
+                Ok(())
+            }
+        };
+        let detach = |mount: &Path| {
+            detached.borrow_mut().push(mount.to_owned());
+            fs::remove_dir_all(mount).unwrap();
+        };
+        // The check fails.
+        let result: Result<(), Error> =
+            mounted_with(&image, attach(true), detach, |_| Err(Error::NotThisApp));
+        assert!(matches!(result, Err(Error::NotThisApp)), "{result:?}");
+        // The image holds no app.
+        let result: Result<(), Error> = mounted_with(&image, attach(false), detach, |_| Ok(()));
+        assert!(matches!(result, Err(Error::NoApp)), "{result:?}");
+        // The check passes.
+        let result = mounted_with(&image, attach(true), detach, |app| Ok(app.to_owned()));
+        assert!(result.unwrap().ends_with("Strikebrain Viewer.app"));
+        assert_eq!(*detached.borrow(), *attached.borrow());
+        assert_eq!(detached.borrow().len(), 3);
+
+        // An image that will not attach is neither checked nor detached.
+        let checked = Cell::new(false);
+        let result: Result<(), Error> = mounted_with(
+            &image,
+            |_, _| Err(Error::NoApp),
+            detach,
+            |_| {
+                checked.set(true);
+                Ok(())
+            },
+        );
+        assert!(matches!(result, Err(Error::NoApp)), "{result:?}");
+        assert!(!checked.get());
+        assert_eq!(detached.borrow().len(), 3);
     }
 
     #[test]
@@ -597,9 +875,16 @@ Chosen signature=1
             }
         };
         let result = swap_with(&installed, &staged, refused);
-        assert!(matches!(result, Err(Error::Io(_))), "{result:?}");
+        let Err(Error::Stranded { old: kept, .. }) = &result else {
+            panic!("{result:?}");
+        };
+        assert_eq!(kept, &old);
+        assert!(!installed.exists());
         assert_eq!(executable(&old), "old");
         assert_eq!(executable(&staged), "new");
+        // The message says where the old app is.
+        let message = result.unwrap_err().to_string();
+        assert!(message.contains(&old.display().to_string()), "{message}");
     }
 
     #[test]
