@@ -158,6 +158,12 @@ actions!(
         GoBack,
         /// Shows again what Back left.
         GoForward,
+        /// Checks for a newer release now, and says how it went.
+        CheckForUpdates,
+        /// Turns the automatic checks for updates off, or on again.
+        ToggleCheckAutomatically,
+        /// Installs the update the bar offers.
+        InstallUpdate,
     ]
 );
 
@@ -546,7 +552,7 @@ mod tests {
 
     #[test]
     fn the_menu_only_actions_have_no_key() {
-        let actions: [&dyn Action; 8] = [
+        let actions: [&dyn Action; 11] = [
             &About,
             &StartPresenting,
             &Zoom,
@@ -555,6 +561,9 @@ mod tests {
             &CollapseAll,
             &SelectAllFiles,
             &DeselectAll,
+            &CheckForUpdates,
+            &ToggleCheckAutomatically,
+            &InstallUpdate,
         ];
         for action in actions {
             assert!(

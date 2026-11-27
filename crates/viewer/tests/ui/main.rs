@@ -28,6 +28,7 @@ mod scale;
 mod sidebar;
 mod stage;
 mod timing;
+mod updates;
 mod watch;
 
 use std::path::{Path, PathBuf};

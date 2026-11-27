@@ -19,7 +19,8 @@ const VERSION: u32 = 2;
 /// on the stage and the top row by their paths on disk; which of the
 /// stage's views showed, `file` in a file saved before the gallery;
 /// whether the explorer was hidden, `false` in a file saved before it
-/// could hide.
+/// could hide; whether to check for updates automatically, `true` in a
+/// file saved before updates, and when the last check was.
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 struct StateFile {
@@ -35,6 +36,14 @@ struct StateFile {
     explorer_width: Option<f32>,
     explorer_hidden: bool,
     window: Option<WindowFile>,
+    #[serde(default = "checks_updates")]
+    check_updates: bool,
+    last_update_check: Option<u64>,
+}
+
+/// A file saved before updates checks for them.
+fn checks_updates() -> bool {
+    true
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -178,6 +187,8 @@ pub(super) fn encode(saved: &Saved) -> io::Result<Vec<u8>> {
         explorer_width: saved.explorer_width.filter(|width| width.is_finite()),
         explorer_hidden: saved.explorer_hidden,
         window: saved.window.as_ref().and_then(window_file),
+        check_updates: saved.check_updates,
+        last_update_check: saved.last_update_check,
     };
     serde_json::to_vec_pretty(&file).map_err(io::Error::other)
 }
@@ -262,6 +273,8 @@ pub(super) fn decode(bytes: &[u8]) -> Option<Saved> {
             .filter(|width| width.is_finite() && *width > 0.),
         explorer_hidden: file.explorer_hidden,
         window: file.window.and_then(saved_window),
+        check_updates: file.check_updates,
+        last_update_check: file.last_update_check,
     })
 }
 
@@ -296,6 +309,8 @@ fn from_version_1(file: StateFileV1) -> StateFile {
         explorer_width: file.explorer_width,
         explorer_hidden: false,
         window: file.window,
+        check_updates: checks_updates(),
+        last_update_check: None,
     }
 }
 

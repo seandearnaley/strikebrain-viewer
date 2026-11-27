@@ -23,6 +23,7 @@ pub use persist::{
 };
 pub use stage::{GalleryProbe, StageProbe};
 pub use state::{AppState, Launch, ScanStatus, StageView, StateOptions};
+pub use update::{Owner, UpdateOptions};
 
 use gpui_kit::App;
 
@@ -36,6 +37,6 @@ pub fn init(cx: &mut App) {
     cx.on_action(|_: &keys::Hide, cx| cx.hide());
     cx.on_action(|_: &keys::HideOthers, cx| cx.hide_other_apps());
     cx.on_action(|_: &keys::ShowAll, cx| cx.unhide_other_apps());
-    menus::install(false, false, cx);
+    menus::install(menus::MenuBar::default(), cx);
     theme::install(cx);
 }

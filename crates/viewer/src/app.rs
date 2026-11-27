@@ -16,6 +16,11 @@
 //! change (at most one save per half second), and when the app quits. A
 //! save copies the state out on the UI thread, cheaply, and names, encodes
 //! and writes it on the background executor.
+//!
+//! With update options the view owns an updater: it saves the updater's two
+//! settings, shows its offer in the bar, handles Check for Updates…, Check
+//! Automatically and the bar's button, and shows a manual check's answer in
+//! the system's alert.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -32,14 +37,16 @@ use gpui_kit::{
 
 use crate::explorer_panel::{ExplorerFocus, ExplorerPanel};
 use crate::keys::{
-    AddFolder, CloseWindow, CollapseAll, CopyPath, DeselectAll, ExpandAll, FocusExplorer,
-    FocusFilter, GoBack, GoForward, Minimize, NextPane, PreviousPane, Refresh, Reveal,
-    SelectAllFiles, StartPresenting, ToggleFullScreen, ToggleShowIgnored, ToggleSidebar, Zoom,
+    AddFolder, CheckForUpdates, CloseWindow, CollapseAll, CopyPath, DeselectAll, ExpandAll,
+    FocusExplorer, FocusFilter, GoBack, GoForward, InstallUpdate, Minimize, NextPane, PreviousPane,
+    Refresh, Reveal, SelectAllFiles, StartPresenting, ToggleCheckAutomatically, ToggleFullScreen,
+    ToggleShowIgnored, ToggleSidebar, Zoom,
 };
-use crate::menus;
+use crate::menus::{self, MenuBar};
 use crate::persist::{SavedView, SavedWindow, Snapshot, StateStore};
 use crate::stage::{GalleryProbe, Stage, StageProbe};
 use crate::state::{AppState, Launch, StateEvent, StateOptions};
+use crate::update::{UpdateEvent, UpdateOptions, Updater};
 use crate::{theme, title_bar};
 
 /// Starting width of the explorer pane, in pixels.
@@ -55,8 +62,9 @@ pub const STAGE_MIN_WIDTH: f32 = 220.0;
 /// along with it.
 pub const SAVE_DELAY: Duration = Duration::from_millis(500);
 
-/// What a window brings back from a saved state, where it saves, and
-/// whether it follows its folders on disk. The default does none of these.
+/// What a window brings back from a saved state, where it saves, whether
+/// it follows its folders on disk, and whether it checks for updates. The
+/// default does none of these.
 #[derive(Debug, Default)]
 pub struct Session {
     /// The saved view of the folders being opened.
@@ -72,6 +80,9 @@ pub struct Session {
     /// The bounds the window opened with, as [`SavedWindow`] holds them:
     /// what a fullscreen window is saved with until it has been windowed.
     pub opened_at: Option<Bounds<Pixels>>,
+    /// Check for updates and offer them, as these options say. `None`
+    /// checks nothing, and the update commands show disabled.
+    pub updates: Option<UpdateOptions>,
 }
 
 /// What the root view knows of the window's fullscreen.
@@ -83,15 +94,6 @@ struct Fullscreen {
     entered: bool,
     /// Whether the window was fullscreen when its bounds last changed.
     was: bool,
-}
-
-/// What the menu bar was last set with.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct MenuBar {
-    /// Whether Show Ignored is checked.
-    shows_ignored: bool,
-    /// Whether the View menu offers Show Sidebar.
-    explorer_hidden: bool,
 }
 
 /// A pane that takes keyboard focus, in Tab order.
@@ -106,7 +108,7 @@ enum Pane {
 /// right. Owns the [`AppState`] all three show, keeps the window title on
 /// the stage's or the app's, handles ⌘O, ⌘F, moving between panes and the
 /// menu bar's commands, hides and shows the explorer, follows the
-/// presentation, and saves the state.
+/// presentation, saves the state, and owns the updater.
 pub struct AppView {
     state: Entity<AppState>,
     explorer: Entity<ExplorerPanel>,
@@ -142,6 +144,11 @@ pub struct AppView {
     save_task: Option<Task<()>>,
     /// What the menu bar was last set with.
     menu_bar: MenuBar,
+    /// Checks for updates and offers them, when this window does.
+    updater: Option<Entity<Updater>>,
+    /// The updater's settings as last seen: whether it checks
+    /// automatically, and its last check. A change is saved.
+    update_settings: (bool, Option<u64>),
     _subscriptions: Vec<Subscription>,
 }
 
@@ -162,7 +169,8 @@ impl AppView {
     }
 
     /// Builds the window's content as [`AppView::new`] does, restoring,
-    /// saving and following the folders as `session` says. A session saved
+    /// saving, following the folders and checking for updates as `session`
+    /// says. A session saved
     /// with the explorer hidden opens with it hidden and the stage focused,
     /// unless there is nothing to open: the empty state is in the explorer.
     pub fn with_session(
@@ -181,7 +189,13 @@ impl AppView {
         let explorer = cx.new(|cx| ExplorerPanel::new(app_state.clone(), window, cx));
         let stage = cx.new(|cx| Stage::new(app_state.clone(), window, cx));
         let split = cx.new(|_| ResizableState::default());
-        let subscriptions = vec![
+        let update_settings = session.updates.as_ref().map_or((true, None), |options| {
+            (options.automatic, options.last_check)
+        });
+        let updater = session
+            .updates
+            .map(|options| cx.new(|cx| Updater::new(options, cx)));
+        let mut subscriptions = vec![
             cx.observe_in(&app_state, window, |this, _, window, cx| {
                 this.sync_title(window, cx);
                 this.sync_presentation(window, cx);
@@ -230,6 +244,9 @@ impl AppView {
                 }
             }),
         ];
+        if let Some(updater) = &updater {
+            subscriptions.extend(Self::follow_updater(updater, window, cx));
+        }
         if explorer_hidden {
             window.focus(&stage.focus_handle(cx), cx);
         } else {
@@ -258,12 +275,42 @@ impl AppView {
             store: session.store,
             save_task: None,
             menu_bar: MenuBar::default(),
+            updater,
+            update_settings,
             _subscriptions: subscriptions,
         };
         view.window = Some(view.place(window, cx));
         view.sync_title(window, cx);
         view.sync_menus(cx);
         view
+    }
+
+    /// Follows `updater`: saves its settings when they change, keeps the
+    /// menu bar's Check Automatically and the bar's offer on it, and shows
+    /// a manual check's answer.
+    fn follow_updater(
+        updater: &Entity<Updater>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> [Subscription; 2] {
+        [
+            cx.observe(updater, |this, updater, cx| {
+                let settings = {
+                    let updater = updater.read(cx);
+                    (updater.automatic(), updater.last_check())
+                };
+                if settings != this.update_settings {
+                    this.update_settings = settings;
+                    this.schedule_save(cx);
+                }
+                this.sync_menus(cx);
+                // The bar shows the offer.
+                cx.notify();
+            }),
+            cx.subscribe_in(updater, window, |_, _, event: &UpdateEvent, window, cx| {
+                menus::update_alert(event, window, cx);
+            }),
+        ]
     }
 
     /// The shared application state.
@@ -332,16 +379,21 @@ impl AppView {
         }
     }
 
-    /// Keeps the menu bar's Show Ignored check on the state, and its Hide
-    /// or Show Sidebar on the explorer.
+    /// Keeps the menu bar's Show Ignored check on the state, its Hide or
+    /// Show Sidebar on the explorer, and its Check Automatically check on
+    /// the updater.
     fn sync_menus(&mut self, cx: &mut Context<Self>) {
         let menu_bar = MenuBar {
             shows_ignored: self.state.read(cx).shows_ignored(),
             explorer_hidden: self.explorer_hidden,
+            check_updates: self
+                .updater
+                .as_ref()
+                .is_some_and(|updater| updater.read(cx).automatic()),
         };
         if menu_bar != self.menu_bar {
             self.menu_bar = menu_bar;
-            menus::install(menu_bar.shows_ignored, menu_bar.explorer_hidden, cx);
+            menus::install(menu_bar, cx);
         }
     }
 
@@ -470,15 +522,19 @@ impl AppView {
 
     /// Saves now: copies the state out here and writes it on the
     /// background executor. Returns the write, or `None` without a store.
-    /// A write that fails leaves the last good file in place.
+    /// A write that fails leaves the last good file in place. Without an
+    /// updater the update settings save as their defaults.
     pub fn save(&mut self, cx: &mut Context<Self>) -> Option<Task<()>> {
         let store = self.store.clone()?;
         let view = self.state.read(cx).take_snapshot();
+        let (check_updates, last_update_check) = self.update_settings;
         let snapshot = Snapshot {
             view,
             explorer_width: Some(self.explorer_width(cx)),
             explorer_hidden: self.explorer_hidden,
             window: self.window.clone(),
+            check_updates,
+            last_update_check,
         };
         let ticket = store.ticket();
         Some(cx.background_spawn(async move {
@@ -594,6 +650,33 @@ impl AppView {
         }
     }
 
+    // Updates: handled only with an updater.
+
+    fn check_for_updates(&mut self, _: &CheckForUpdates, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(updater) = &self.updater {
+            updater.update(cx, |updater, cx| updater.check(true, cx));
+        }
+    }
+
+    fn toggle_check_automatically(
+        &mut self,
+        _: &ToggleCheckAutomatically,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(updater) = &self.updater {
+            updater.update(cx, |updater, cx| {
+                updater.set_automatic(!updater.automatic(), cx);
+            });
+        }
+    }
+
+    fn install_update(&mut self, _: &InstallUpdate, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(updater) = &self.updater {
+            updater.update(cx, Updater::install);
+        }
+    }
+
     // Panes
 
     fn next_pane(&mut self, _: &NextPane, window: &mut Window, cx: &mut Context<Self>) {
@@ -696,7 +779,13 @@ impl Render for AppView {
             .on_action(|_: &Zoom, window, _| window.zoom_window())
             .on_action(|_: &ToggleFullScreen, window, _| window.toggle_fullscreen())
             // Closing the window quits, as its close button does.
-            .on_action(|_: &CloseWindow, _, cx| cx.quit());
+            .on_action(|_: &CloseWindow, _, cx| cx.quit())
+            // With no updater the menu bar shows these disabled.
+            .when(self.updater.is_some(), |root| {
+                root.on_action(cx.listener(Self::check_for_updates))
+                    .on_action(cx.listener(Self::toggle_check_automatically))
+                    .on_action(cx.listener(Self::install_update))
+            });
         if self.presenting {
             // No Add Folder while presenting, from a key or the menu bar,
             // whose item then shows disabled.
@@ -705,6 +794,7 @@ impl Render for AppView {
         let bar = title_bar::window_bar(
             self.state.read(cx),
             (!self.explorer_hidden).then(|| px(self.explorer_width(cx))),
+            self.updater.as_ref().map(|updater| updater.read(cx)),
             window,
             cx,
         );

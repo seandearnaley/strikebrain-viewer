@@ -18,7 +18,7 @@ pub(crate) struct Release {
 }
 
 /// One file of a release, with the size and digest GitHub computed for it.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct Asset {
     pub(crate) name: String,
     pub(crate) size: u64,

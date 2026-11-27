@@ -52,7 +52,8 @@ fn main() {
         viewer::init(cx);
         // Closing the window quits, as ⌘Q does: `open_main_window` makes
         // its close button quit, keeping the window for the quit's save.
-        let (_, view) = open_main_window(asked, store, true, cx).expect("open the main window");
+        let (_, view) =
+            open_main_window(asked, store, true, true, cx).expect("open the main window");
         let view = view.downgrade();
         cx.spawn(async move |cx| {
             while let Some(paths) = batches.next().await {

@@ -43,7 +43,8 @@ fn launch_unsettled(
     });
     cx.update(|cx| {
         let folders = folders.iter().map(|folder| folder.to_path_buf()).collect();
-        open_main_window(folders, Some(store.clone()), false, cx).expect("open the main window")
+        open_main_window(folders, Some(store.clone()), false, false, cx)
+            .expect("open the main window")
     })
 }
 

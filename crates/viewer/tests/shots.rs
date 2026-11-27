@@ -4,6 +4,8 @@
 //!
 //! Not a test suite: `cargo test` and nextest skip it (`test = false`).
 
+use std::io::{BufRead as _, BufReader, Write as _};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,8 +17,8 @@ use gpui_kit::{
     AnyWindowHandle, AppContext as _, Bounds, ElementId, Entity, HeadlessAppContext, Pixels,
     ScrollDelta, Size, WindowBounds, WindowOptions, point, px, size,
 };
-use viewer::keys::{SelectAllFiles, ToggleShowIgnored, ToggleSidebar};
-use viewer::{AppAssets, AppView, Launch, ScanStatus, Session};
+use viewer::keys::{CheckForUpdates, SelectAllFiles, ToggleShowIgnored, ToggleSidebar};
+use viewer::{AppAssets, AppView, Launch, Owner, ScanStatus, Session, UpdateOptions};
 
 /// A small project with nested folders, sizes and a long name.
 const FIXTURE: &[(&str, u64)] = &[
@@ -63,6 +65,15 @@ fn open_sized(
     launch: Launch,
     window_size: Size<Pixels>,
 ) -> (AnyWindowHandle, Entity<AppView>) {
+    open_with(cx, launch, window_size, Session::default())
+}
+
+fn open_with(
+    cx: &mut HeadlessAppContext,
+    launch: Launch,
+    window_size: Size<Pixels>,
+    session: Session,
+) -> (AnyWindowHandle, Entity<AppView>) {
     let opened = cx
         .update(|cx| {
             gpui_kit::open_window(
@@ -76,7 +87,7 @@ fn open_sized(
                     ..Default::default()
                 },
                 cx,
-                |window, cx| cx.new(|cx| AppView::new(launch, window, cx)),
+                |window, cx| cx.new(|cx| AppView::with_session(launch, session, window, cx)),
             )
         })
         .expect("open the window");
@@ -84,6 +95,41 @@ fn open_sized(
     cx.update_window(opened.0, |_, window, cx| window.render_frame(cx))
         .expect("draw the first frame");
     opened
+}
+
+/// An updater reading a feed on this machine that offers 9.9.9, which the
+/// release page installs: a check finds it with nothing to download. The
+/// feed answers one request.
+fn update_offered() -> UpdateOptions {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("a free local port");
+    let address = listener.local_addr().expect("the listener's address");
+    std::thread::spawn(move || {
+        let Ok((mut stream, _)) = listener.accept() else {
+            return;
+        };
+        // The request ends at a blank line; what it asks does not matter.
+        let mut reader = BufReader::new(&stream);
+        let mut line = String::new();
+        while reader.read_line(&mut line).is_ok_and(|read| read > 2) {
+            line.clear();
+        }
+        let body = r#"{"tag_name": "v9.9.9", "html_url": "https://github.com/seandearnaley/strikebrain-viewer/releases/tag/v9.9.9", "assets": []}"#;
+        let reply = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        // The shot shows whatever the app made of it.
+        let _written = stream.write_all(reply.as_bytes());
+    });
+    UpdateOptions {
+        feed: format!("http://{address}/latest"),
+        automatic: false,
+        last_check: None,
+        running: semver::Version::parse(env!("CARGO_PKG_VERSION"))
+            .expect("Cargo's package version is SemVer"),
+        owner: Owner::ReleasePage,
+        updates_dir: None,
+    }
 }
 
 /// Draws a frame in `mode` and writes it to `dir/name.png`.
@@ -598,6 +644,26 @@ fn main() {
             mode,
             &dir,
             &format!("sidebar-hidden-{suffix}"),
+        ));
+
+        // An update found: the primary button left of Present, after the
+        // title of a file on the stage.
+        let mut cx = context();
+        let session = Session {
+            updates: Some(update_offered()),
+            ..Session::default()
+        };
+        let (handle, view) = open_with(&mut cx, fixture(), size(px(900.), px(560.)), session);
+        let readme = node(&mut cx, &view, "README.md");
+        cx.update_window(handle, |_, window, cx| window.click(readme, cx))
+            .expect("show a file");
+        dispatch(&mut cx, handle, CheckForUpdates);
+        written.push(save(
+            &mut cx,
+            handle,
+            mode,
+            &dir,
+            &format!("update-ready-{suffix}"),
         ));
 
         // A long list scrolled to its middle, the pointer on the overlay

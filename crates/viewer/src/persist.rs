@@ -1,5 +1,7 @@
 //! The saved state: which folders were open and how they were seen, the
-//! explorer's width, whether it was hidden, and the window's bounds. One
+//! explorer's width, whether it was hidden, the window's bounds, and the
+//! update settings: whether to check automatically, and when the last
+//! check was. One
 //! JSON file in the platform's config folder (on macOS
 //! `~/Library/Application Support/ai.brainstrike.viewer/state.json`), read
 //! once at launch and written in the background as the view changes.
@@ -68,8 +70,9 @@ pub struct SavedWindow {
     pub display: Option<String>,
 }
 
-/// Everything the state file holds.
-#[derive(Clone, Debug, Default, PartialEq)]
+/// Everything the state file holds. The default, no saved state, checks
+/// for updates automatically.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Saved {
     /// How the explorer was seen.
     pub view: SavedView,
@@ -79,6 +82,23 @@ pub struct Saved {
     pub explorer_hidden: bool,
     /// Where the window was.
     pub window: Option<SavedWindow>,
+    /// Whether to check for updates automatically.
+    pub check_updates: bool,
+    /// When updates were last checked for, in seconds since the Unix epoch.
+    pub last_update_check: Option<u64>,
+}
+
+impl Default for Saved {
+    fn default() -> Self {
+        Self {
+            view: SavedView::default(),
+            explorer_width: None,
+            explorer_hidden: false,
+            window: None,
+            check_updates: true,
+            last_update_check: None,
+        }
+    }
 }
 
 /// What a launch opens and what of the saved state applies to it.
@@ -95,6 +115,10 @@ pub struct Plan {
     pub explorer_hidden: bool,
     /// The window's saved place.
     pub window: Option<SavedWindow>,
+    /// Whether to check for updates automatically.
+    pub check_updates: bool,
+    /// When updates were last checked for, in seconds since the Unix epoch.
+    pub last_update_check: Option<u64>,
 }
 
 /// Decides what a launch opens. Folders from the command line open, or
@@ -102,8 +126,8 @@ pub struct Plan {
 /// them. Each folder opening takes its saved view; one saved but gone is
 /// dropped when none is named. The filter, the sort, Show ignored, the file
 /// on the stage and the top row come back with any saved folder that opens.
-/// The window, the explorer's width and whether it was hidden are restored
-/// either way. A file opens no folder: it shows in an open folder that
+/// The window, the explorer's width, whether it was hidden and the update
+/// settings are restored either way. A file opens no folder: it shows in an open folder that
 /// lists it, or as a row of its own, so it is passed on as it is.
 /// Touches the disk: canonicalizing paths and asking what they are.
 #[must_use]
@@ -134,6 +158,8 @@ pub fn plan_launch(paths: Vec<PathBuf>, saved: Option<Saved>) -> Plan {
         explorer_width: saved.explorer_width,
         explorer_hidden: saved.explorer_hidden,
         window: saved.window,
+        check_updates: saved.check_updates,
+        last_update_check: saved.last_update_check,
     }
 }
 
@@ -181,6 +207,8 @@ pub(crate) struct Snapshot {
     pub(crate) explorer_width: Option<f32>,
     pub(crate) explorer_hidden: bool,
     pub(crate) window: Option<SavedWindow>,
+    pub(crate) check_updates: bool,
+    pub(crate) last_update_check: Option<u64>,
 }
 
 /// The view in a [`Snapshot`].
@@ -241,6 +269,8 @@ impl Snapshot {
             explorer_width: self.explorer_width,
             explorer_hidden: self.explorer_hidden,
             window: self.window,
+            check_updates: self.check_updates,
+            last_update_check: self.last_update_check,
         }
     }
 }

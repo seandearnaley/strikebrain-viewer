@@ -1,8 +1,8 @@
 //! Opening the main window as the app launches: the folders and files from
-//! the command line or the saved folders, the saved view and window, and
-//! what the system hands over later ("Open With", a folder or a file
-//! dropped on the Dock icon) as `file://` URLs. A file shows where a folder
-//! lists it, or as a row of its own.
+//! the command line or the saved folders, the saved view and window, the
+//! updater with its saved settings, and what the system hands over later
+//! ("Open With", a folder or a file dropped on the Dock icon) as `file://`
+//! URLs. A file shows where a folder lists it, or as a row of its own.
 
 use std::path::PathBuf;
 
@@ -13,19 +13,31 @@ use gpui_kit::{
 };
 
 use crate::app::{AppView, EXPLORER_MIN_WIDTH, STAGE_MIN_WIDTH, Session};
-use crate::persist::{APP_ID, SavedWindow, StateStore, fit, plan_launch};
+use crate::persist::{APP_ID, Plan, SavedWindow, StateStore, fit, plan_launch};
+use crate::update::{self, Owner, UpdateOptions};
 
 /// The shortest the window can be made, in pixels: the bar, the filter and
 /// a few rows.
 const MIN_HEIGHT: f32 = 240.0;
+
+/// The latest release, as GitHub's API gives it.
+const GITHUB_FEED: &str =
+    "https://api.github.com/repos/seandearnaley/strikebrain-viewer/releases/latest";
+
+/// Points the update checks at another feed, such as one served on this
+/// machine for the check by hand.
+const FEED_VAR: &str = "STRIKEBRAIN_VIEWER_UPDATE_FEED";
 
 /// Opens the main window. `folders` are the command line's paths, folders
 /// or files: the folders open as they would without the files, and each
 /// file shows where a folder lists it or as a row of its own. The saved state
 /// comes from `store`, which then also receives the window's state as it
 /// changes. With `watch` the folders are followed on disk, as the app does;
-/// tests that need determinism leave it off. Closing the window quits, so
-/// the state is saved by the quit with the window still there.
+/// with `updates` the app checks GitHub's latest release, or the feed
+/// `STRIKEBRAIN_VIEWER_UPDATE_FEED` names, and offers an update, as the app
+/// does. Tests that need determinism, or must not reach the network, leave
+/// them off. Closing the window quits, so the state is saved by the quit
+/// with the window still there.
 ///
 /// # Errors
 ///
@@ -34,9 +46,11 @@ pub fn open_main_window(
     folders: Vec<PathBuf>,
     store: Option<StateStore>,
     watch: bool,
+    updates: bool,
     cx: &mut App,
 ) -> Result<(AnyWindowHandle, Entity<AppView>)> {
     let plan = plan_launch(folders, store.as_ref().and_then(StateStore::load));
+    let updates = updates.then(|| update_options(&plan));
     let (window_bounds, display_id) = match plan.window.as_ref() {
         Some(saved) => {
             let (bounds, display) = placement(saved, cx);
@@ -51,6 +65,7 @@ pub fn open_main_window(
         store,
         watch,
         opened_at: window_bounds.map(|bounds| bounds.get_bounds()),
+        updates,
     };
     let launch = plan.launch;
     let opened = gpui_kit::open_window(
@@ -79,6 +94,28 @@ pub fn open_main_window(
         },
     )?;
     Ok(opened)
+}
+
+/// The updater's options for this installation: the feed, the saved
+/// settings, the running version, who owns the installation, and the cache
+/// folder.
+fn update_options(plan: &Plan) -> UpdateOptions {
+    UpdateOptions {
+        feed: feed(std::env::var(FEED_VAR).ok()),
+        automatic: plan.check_updates,
+        last_check: plan.last_update_check,
+        running: semver::Version::parse(env!("CARGO_PKG_VERSION"))
+            .expect("Cargo's package version is SemVer"),
+        owner: std::env::current_exe().map_or(Owner::ReleasePage, |exe| Owner::detect(&exe)),
+        updates_dir: update::updates_dir().ok(),
+    }
+}
+
+/// The feed `variable` names, or GitHub's when it names none.
+fn feed(variable: Option<String>) -> String {
+    variable
+        .filter(|feed| !feed.is_empty())
+        .unwrap_or_else(|| GITHUB_FEED.to_owned())
 }
 
 /// Where to open a window saved as `saved`: its display if still there,
@@ -138,7 +175,17 @@ pub fn path_from_url(url: &str) -> Option<PathBuf> {
 mod tests {
     use std::path::PathBuf;
 
-    use super::path_from_url;
+    use super::{GITHUB_FEED, feed, path_from_url};
+
+    #[test]
+    fn the_feed_is_githubs_unless_the_variable_names_another() {
+        assert_eq!(feed(None), GITHUB_FEED);
+        assert_eq!(feed(Some(String::new())), GITHUB_FEED);
+        assert_eq!(
+            feed(Some("http://127.0.0.1:8000/latest".to_owned())),
+            "http://127.0.0.1:8000/latest"
+        );
+    }
 
     #[test]
     fn a_file_url_names_its_path() {
