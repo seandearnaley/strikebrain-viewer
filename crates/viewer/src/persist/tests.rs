@@ -76,6 +76,8 @@ fn full(root: &Path) -> Saved {
             )),
             display: Some("4A1B".into()),
         }),
+        check_updates: false,
+        last_update_check: Some(1_764_158_400),
     }
 }
 
@@ -99,6 +101,24 @@ fn a_state_survives_the_trip_through_json() {
     );
     assert!(text.contains("\"view\": \"gallery\""), "{text}");
     assert!(text.contains("\"explorer_hidden\": true"), "{text}");
+    assert!(text.contains("\"check_updates\": false"), "{text}");
+    assert!(text.contains("\"last_update_check\": 1764158400"), "{text}");
+}
+
+#[test]
+fn a_state_with_no_update_settings_checks_for_updates() {
+    // No saved state, a file from before updates, and one of version 1.
+    assert!(Saved::default().check_updates);
+    for before in [&br#"{"version": 2}"#[..], br#"{"version": 1}"#] {
+        let saved = decode(before).unwrap();
+        assert!(saved.check_updates, "{}", String::from_utf8_lossy(before));
+        assert_eq!(saved.last_update_check, None);
+    }
+    let off = Saved {
+        check_updates: false,
+        ..Saved::default()
+    };
+    assert!(!decode(&encode(&off).unwrap()).unwrap().check_updates);
 }
 
 #[test]
@@ -310,6 +330,8 @@ fn folder_arguments_open_exactly_those_each_with_its_own_saved_view() {
     assert_eq!(plan.explorer_width, Some(412.5));
     assert!(plan.explorer_hidden);
     assert!(plan.window.is_some());
+    assert!(!plan.check_updates);
+    assert_eq!(plan.last_update_check, Some(1_764_158_400));
 
     // Folders never saved: no view, but the window and the width stay.
     let plan = plan_launch(vec![c.clone()], Some(saved.clone()));
@@ -413,6 +435,8 @@ fn no_argument_reopens_the_saved_folders_that_still_exist() {
     assert!(matches!(plan.launch, Launch::Empty));
     assert!(plan.window.is_none() && plan.explorer_width.is_none());
     assert!(!plan.explorer_hidden);
+    assert!(plan.check_updates);
+    assert_eq!(plan.last_update_check, None);
 }
 
 #[test]
@@ -457,6 +481,8 @@ fn a_snapshot_names_each_folder_in_order() {
         explorer_width: Some(300.),
         explorer_hidden: true,
         window: None,
+        check_updates: false,
+        last_update_check: Some(7),
     }
     .saved();
     assert_eq!(
@@ -480,6 +506,8 @@ fn a_snapshot_names_each_folder_in_order() {
     assert_eq!(saved.view.current, Some(PathBuf::from("/x/docs/a.md")));
     assert_eq!(saved.explorer_width, Some(300.));
     assert!(saved.explorer_hidden);
+    assert!(!saved.check_updates);
+    assert_eq!(saved.last_update_check, Some(7));
 }
 
 /// Saving 100,000 checked files. Run in release:
@@ -527,6 +555,8 @@ fn timing_saving_a_hundred_thousand_checked_files() {
             explorer_width: Some(300.),
             explorer_hidden: false,
             window: None,
+            check_updates: true,
+            last_update_check: None,
         };
         let ui = started.elapsed();
         let saved = snapshot.saved();

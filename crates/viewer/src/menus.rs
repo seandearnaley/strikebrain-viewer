@@ -2,7 +2,8 @@
 //! item an action the app handles, and the handlers of those that need no
 //! window's state: About, Hide, Hide Others and Show All. Items whose action nothing on
 //! the focused path handles show disabled, as macOS asks GPUI before it
-//! draws a menu.
+//! draws a menu: Check for Updates… and Check Automatically while the
+//! window has no updater.
 //!
 //! macOS adds Enter Full Screen to the View menu itself, so the menu has
 //! no item for `ToggleFullScreen`, only its key.
@@ -12,12 +13,14 @@
 //! and a menu shortcut of Space would take the key from the filter input.
 
 use gpui_kit::component::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
-use gpui_kit::{App, Menu, MenuItem, OsAction, PromptLevel, SystemMenuType};
+use gpui_kit::{App, Menu, MenuItem, OsAction, PromptLevel, SystemMenuType, Window};
 
 use crate::keys::{
-    About, AddFolder, CloseWindow, CopyPath, GoBack, GoForward, Hide, HideOthers, Minimize, Quit,
-    Refresh, Reveal, ShowAll, StartPresenting, ToggleShowIgnored, ToggleSidebar, Zoom,
+    About, AddFolder, CheckForUpdates, CloseWindow, CopyPath, GoBack, GoForward, Hide, HideOthers,
+    Minimize, Quit, Refresh, Reveal, ShowAll, StartPresenting, ToggleCheckAutomatically,
+    ToggleShowIgnored, ToggleSidebar, Zoom,
 };
+use crate::update::UpdateEvent;
 
 /// The name the menus show.
 pub(crate) const APP_NAME: &str = "Strikebrain Viewer";
@@ -29,12 +32,28 @@ const REVEAL: &str = if cfg!(target_os = "macos") {
     "Show in File Manager"
 };
 
-/// Sets the menu bar, with Show Ignored checked while ignored files show,
-/// and Show Sidebar in place of Hide Sidebar while the explorer is hidden.
-pub(crate) fn install(shows_ignored: bool, explorer_hidden: bool, cx: &App) {
+/// What the menu bar shows of the window's state.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct MenuBar {
+    /// Whether Show Ignored is checked.
+    pub(crate) shows_ignored: bool,
+    /// Whether the View menu offers Show Sidebar.
+    pub(crate) explorer_hidden: bool,
+    /// Whether Check Automatically is checked.
+    pub(crate) check_updates: bool,
+}
+
+/// Sets the menu bar as `bar` says: Show Ignored checked while ignored
+/// files show, Show Sidebar in place of Hide Sidebar while the explorer is
+/// hidden, and Check Automatically checked while updates are checked for
+/// automatically.
+pub(crate) fn install(bar: MenuBar, cx: &App) {
     cx.set_menus([
         Menu::new(APP_NAME).items([
             MenuItem::action(format!("About {APP_NAME}"), About),
+            MenuItem::action("Check for Updates…", CheckForUpdates),
+            MenuItem::action("Check Automatically", ToggleCheckAutomatically)
+                .checked(bar.check_updates),
             MenuItem::separator(),
             MenuItem::os_submenu("Services", SystemMenuType::Services),
             MenuItem::separator(),
@@ -65,7 +84,7 @@ pub(crate) fn install(shows_ignored: bool, explorer_hidden: bool, cx: &App) {
         ]),
         Menu::new("View").items([
             MenuItem::action(
-                if explorer_hidden {
+                if bar.explorer_hidden {
                     "Show Sidebar"
                 } else {
                     "Hide Sidebar"
@@ -75,7 +94,7 @@ pub(crate) fn install(shows_ignored: bool, explorer_hidden: bool, cx: &App) {
             MenuItem::separator(),
             MenuItem::action("Present", StartPresenting),
             MenuItem::separator(),
-            MenuItem::action("Show Ignored", ToggleShowIgnored).checked(shows_ignored),
+            MenuItem::action("Show Ignored", ToggleShowIgnored).checked(bar.shows_ignored),
             MenuItem::action("Refresh", Refresh),
         ]),
         Menu::new("Go").items([
@@ -109,11 +128,31 @@ pub(crate) fn about(_: &About, cx: &mut App) {
     });
 }
 
+/// Check for Updates…'s answer when there is nothing to install, in the
+/// system's alert: up to date, with the version, or the reason the check
+/// failed.
+pub(crate) fn update_alert(event: &UpdateEvent, window: &mut Window, cx: &mut App) {
+    let (level, message, detail) = match event {
+        UpdateEvent::UpToDate(version) => (
+            PromptLevel::Info,
+            format!("{APP_NAME} is up to date"),
+            format!("Version {version}"),
+        ),
+        UpdateEvent::CheckFailed(reason) => (
+            PromptLevel::Warning,
+            "Couldn't check for updates".to_owned(),
+            reason.clone(),
+        ),
+    };
+    // The only answer is OK; nothing waits for it.
+    drop(window.prompt(level, &message, Some(&detail), &["OK"], cx));
+}
+
 #[cfg(test)]
 mod tests {
     use gpui_kit::{OwnedMenuItem, TestAppContext};
 
-    use super::install;
+    use super::{MenuBar, install};
 
     /// Each menu's name and its items: name, then whether checked; a
     /// separator is "-".
@@ -138,7 +177,7 @@ mod tests {
 
     #[gpui_kit::test]
     fn the_menu_bar_holds_the_app_file_edit_view_go_and_window_menus(cx: &mut TestAppContext) {
-        cx.update(|cx| install(false, false, cx));
+        cx.update(|cx| install(MenuBar::default(), cx));
         let bar = menus(cx);
         let names: Vec<&str> = bar.iter().map(|(name, _)| name.as_str()).collect();
         assert_eq!(
@@ -151,6 +190,8 @@ mod tests {
             items(0),
             [
                 "About Strikebrain Viewer",
+                "Check for Updates…",
+                "Check Automatically",
                 "-",
                 "Services",
                 "-",
@@ -190,11 +231,32 @@ mod tests {
         assert_eq!(items(4), ["Back", "Forward"]);
         assert_eq!(items(5), ["Minimize", "Zoom"]);
         assert!(!bar[3].1[4].1);
+        assert!(!bar[0].1[2].1);
 
-        cx.update(|cx| install(true, false, cx));
-        assert!(menus(cx)[3].1[4].1, "Show Ignored is checked");
-
-        cx.update(|cx| install(false, true, cx));
-        assert_eq!(menus(cx)[3].1[0].0, "Show Sidebar");
+        let checked = |cx: &mut TestAppContext, bar: MenuBar| {
+            cx.update(|cx| install(bar, cx));
+            menus(cx)
+        };
+        let shows_ignored = MenuBar {
+            shows_ignored: true,
+            ..MenuBar::default()
+        };
+        assert!(
+            checked(cx, shows_ignored)[3].1[4].1,
+            "Show Ignored is checked"
+        );
+        let hidden = MenuBar {
+            explorer_hidden: true,
+            ..MenuBar::default()
+        };
+        assert_eq!(checked(cx, hidden)[3].1[0].0, "Show Sidebar");
+        let automatic = MenuBar {
+            check_updates: true,
+            ..MenuBar::default()
+        };
+        assert!(
+            checked(cx, automatic)[0].1[2].1,
+            "Check Automatically is checked"
+        );
     }
 }

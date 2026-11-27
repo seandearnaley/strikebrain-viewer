@@ -4,7 +4,7 @@ use std::path::Path;
 
 /// Who owns this installation, and so how an update reaches it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Owner {
+pub enum Owner {
     /// A macOS app bundle the app can replace itself.
     MacBundle,
     /// A macOS app bundle that cannot be replaced; the disk image is opened.

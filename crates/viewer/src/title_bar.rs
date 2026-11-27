@@ -8,9 +8,10 @@
 //! and the scan's progress along its bottom edge. While the explorer is
 //! hidden the part holds only the lights' room and the sidebar button, and
 //! no rule is drawn. Its part over the stage holds Back and Forward, the
-//! stage's title and Present. Its buttons dispatch the window's actions,
-//! which the root view handles, so a button, a menu item and a key run the
-//! same code.
+//! stage's title and Present, and left of Present an update ready to
+//! install. Its buttons dispatch the window's actions, which the root view
+//! handles, so a button, a menu item and a key run the same code. Windows
+//! and Linux draw no menu bar, so there More ends with the update commands.
 //!
 //! The Kit pads its bar 80 px on macOS (12 px elsewhere) for the traffic
 //! lights; this bar zeroes that padding and keeps the room inside its
@@ -34,10 +35,12 @@ use gpui_kit::{
 };
 
 use crate::keys::{
-    AddFolder, CollapseAll, DeselectAll, ExpandAll, GoBack, GoForward, Refresh, SelectAllFiles,
-    StartPresenting, ToggleShowIgnored, ToggleSidebar,
+    AddFolder, CheckForUpdates, CollapseAll, DeselectAll, ExpandAll, GoBack, GoForward,
+    InstallUpdate, Refresh, SelectAllFiles, StartPresenting, ToggleCheckAutomatically,
+    ToggleShowIgnored, ToggleSidebar,
 };
 use crate::state::{AppState, ScanStatus};
+use crate::update::{How, Offer, Updater};
 
 /// The traffic lights' room at the bar's left, as the Kit's bar leaves it:
 /// none in fullscreen.
@@ -69,10 +72,13 @@ fn command(
 }
 
 /// The bar for `state`. Its part over the explorer is `explorer` wide, or
-/// `None` while the explorer is hidden.
+/// `None` while the explorer is hidden. With an `updater`, it shows the
+/// update ready to install and, where there is no menu bar, the update
+/// commands.
 pub(crate) fn window_bar(
     state: &AppState,
     explorer: Option<Pixels>,
+    updater: Option<&Updater>,
     window: &Window,
     cx: &App,
 ) -> TitleBar {
@@ -83,6 +89,10 @@ pub(crate) fn window_bar(
     } else {
         px(0.)
     };
+    // macOS has the update commands in its app menu.
+    let automatic = updater
+        .filter(|_| !cfg!(target_os = "macos"))
+        .map(Updater::automatic);
     TitleBar::new()
         .bg(cx.theme().background)
         .border_color(cx.theme().border)
@@ -91,17 +101,25 @@ pub(crate) fn window_bar(
             state,
             explorer.map(|width| width - inset),
             lead(fullscreen),
+            automatic,
             cx,
         ))
-        .child(stage_part(state, explorer.is_some(), cx))
+        .child(stage_part(
+            state,
+            explorer.is_some(),
+            updater.and_then(Updater::offer),
+            cx,
+        ))
 }
 
 /// The part over the explorer: `width` wide, or only the lights' room and
-/// the sidebar button while the explorer is hidden.
+/// the sidebar button while the explorer is hidden. With `automatic`, More
+/// ends with the update commands.
 fn explorer_part(
     state: &AppState,
     width: Option<Pixels>,
     lead: Pixels,
+    automatic: Option<bool>,
     cx: &App,
 ) -> impl IntoElement {
     let part = h_flex()
@@ -135,7 +153,7 @@ fn explorer_part(
                 "Add Folder",
                 AddFolder,
             ))
-            .child(more(state))
+            .child(more(state, automatic))
         })
         .when(slow, |part| {
             part.child(
@@ -174,8 +192,10 @@ fn warning_refresh(message: &SharedString, cx: &App) -> Button {
         .on_click(|_, window, cx| window.dispatch_action(Box::new(Refresh), cx))
 }
 
-/// More (…): the explorer's commands, each showing its key.
-fn more(state: &AppState) -> impl IntoElement {
+/// More (…): the explorer's commands, each showing its key. With
+/// `automatic`, after a separator, Check for Updates… and Check
+/// Automatically, checked as `automatic` says.
+fn more(state: &AppState, automatic: Option<bool>) -> impl IntoElement {
     let has_tree = state.explorer().is_some();
     let checked = state.selected_count() > 0;
     let shows_ignored = state.shows_ignored();
@@ -194,13 +214,27 @@ fn more(state: &AppState) -> impl IntoElement {
                 .separator()
                 .menu_with_disabled("Select All", Box::new(SelectAllFiles), !has_tree)
                 .menu_with_disabled("Deselect All", Box::new(DeselectAll), !checked)
+                .when_some(automatic, |menu, on| {
+                    menu.separator()
+                        .menu("Check for Updates…", Box::new(CheckForUpdates))
+                        .menu_with_check(
+                            "Check Automatically",
+                            on,
+                            Box::new(ToggleCheckAutomatically),
+                        )
+                })
         })
 }
 
-/// The part over the stage: Back and Forward, its title and Present.
-/// Beside the explorer its left border is the rule that continues the
-/// split's divider.
-fn stage_part(state: &AppState, beside_explorer: bool, cx: &App) -> impl IntoElement {
+/// The part over the stage: Back and Forward, its title, the update
+/// `offer` if any, and Present. Beside the explorer its left border is the
+/// rule that continues the split's divider.
+fn stage_part(
+    state: &AppState,
+    beside_explorer: bool,
+    offer: Option<&Offer>,
+    cx: &App,
+) -> impl IntoElement {
     h_flex()
         .id("bar-stage")
         .test_support()
@@ -240,10 +274,43 @@ fn stage_part(state: &AppState, beside_explorer: bool, cx: &App) -> impl IntoEle
         })
         // Empty, so the window moves from here.
         .child(div().flex_1())
+        .when_some(offer, |part, offer| part.child(update_button(offer)))
         .child(
             // Disabled while the stage is blank, which is when it has no
             // title.
             command("present", Icons::Play, "Present", StartPresenting)
                 .disabled(state.stage_title().is_none()),
         )
+}
+
+/// The update ready to install: the Kit's primary button, small, named
+/// for how it installs. Its tooltip gives the version, and the Kit gives
+/// the tooltip to assistive technology as the button's description.
+fn update_button(offer: &Offer) -> Button {
+    Button::new("update")
+        .primary()
+        .small()
+        .label(install_label(offer.how))
+        .tooltip(format!("Version {}", offer.version))
+        .on_click(|_, window, cx| window.dispatch_action(Box::new(InstallUpdate), cx))
+}
+
+/// What the update button says for an update that installs `how`.
+fn install_label(how: How) -> &'static str {
+    match how {
+        How::Restart => "Restart to Update",
+        How::Install => "Install Update",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::install_label;
+    use crate::update::How;
+
+    #[test]
+    fn the_update_button_says_how_the_update_installs() {
+        assert_eq!(install_label(How::Restart), "Restart to Update");
+        assert_eq!(install_label(How::Install), "Install Update");
+    }
 }
