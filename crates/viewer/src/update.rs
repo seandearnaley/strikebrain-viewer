@@ -11,11 +11,14 @@
 //! Each platform's last step is its own module: on macOS, `macos` checks
 //! the disk image's app against the running one and replaces the bundle;
 //! on Windows, `windows` checks the installer's signature against the
-//! running app's and runs it, and it relaunches the app.
+//! running app's and runs it, and it relaunches the app; on Linux, `linux`
+//! hands the `.deb` to the software installer.
 
 mod download;
 mod feed;
 mod install;
+#[cfg(any(not(any(target_os = "macos", windows)), test))]
+mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(test)]
@@ -146,11 +149,15 @@ pub(crate) enum How {
 enum Plan {
     /// Opens the release's page, where the person installs it.
     Page,
-    /// Opens the disk image `image` in Finder, where the bundle cannot be
-    /// replaced, once it is checked again against `asset`, the release's
-    /// file.
-    #[cfg(target_os = "macos")]
-    Open { image: PathBuf, asset: Asset },
+    /// Opens `file` with the system once it is checked again against
+    /// `asset`, the release's file: on macOS the disk image in Finder,
+    /// where the bundle cannot be replaced; on Linux the `.deb` in the
+    /// software installer.
+    #[cfg_attr(
+        all(windows, not(test)),
+        expect(dead_code, reason = "Windows runs its installer and opens no file")
+    )]
+    Open { file: PathBuf, asset: Asset },
     /// Replaces the bundle with the staged copy and relaunches.
     #[cfg(target_os = "macos")]
     Swap(Swap),
@@ -338,8 +345,7 @@ impl Updater {
                     cx.open_url(page);
                 }
             }
-            #[cfg(target_os = "macos")]
-            Plan::Open { image, asset } => open_image(image, asset, cx),
+            Plan::Open { file, asset } => open_checked(file, asset, cx),
             #[cfg(target_os = "macos")]
             Plan::Swap(swap) => self.swap_in(swap, cx),
             #[cfg(windows)]
@@ -396,7 +402,7 @@ impl Updater {
                 // As for a check that failed: the next attempt waits a day.
                 self.last_attempt = Some(now(cx));
                 self.end(Phase::Failed(error.to_string()), cx);
-                open_image(image, asset, cx);
+                open_checked(image, asset, cx);
             }
         }
     }
@@ -593,19 +599,22 @@ impl Updater {
         }));
     }
 
-    /// Checks the downloaded `file` of `version` as its platform asks, then
-    /// offers it. Linux checks its file in a step still to come; until then
-    /// the release page installs the update.
+    /// Offers the downloaded `.deb` `package` of `version` at once: its
+    /// check, against the release's size and digest, was the download's.
+    /// **Install Update** opens it in the software installer. Another
+    /// owner's file, which tests download, is installed from the release
+    /// page.
     #[cfg(not(any(target_os = "macos", windows)))]
     fn verify(
         &mut self,
-        _file: PathBuf,
+        package: PathBuf,
         version: semver::Version,
-        _owner: Owner,
-        _asset: Asset,
+        owner: Owner,
+        asset: Asset,
         cx: &mut Context<Self>,
     ) {
-        self.make_offer(version, How::Install, Plan::Page, cx);
+        let plan = linux::plan(owner, package, asset);
+        self.make_offer(version, How::Install, plan, cx);
     }
 
     /// The disk image's check's end: the update is offered, or it failed
@@ -641,7 +650,7 @@ impl Updater {
                 self.make_offer(version, How::Restart, plan, cx);
             }
             Ok((macos::Prepared::Open, image)) => {
-                let plan = Plan::Open { image, asset };
+                let plan = Plan::Open { file: image, asset };
                 self.make_offer(version, How::Install, plan, cx);
             }
             Err(reason) => self.end(Phase::Failed(reason), cx),
@@ -715,17 +724,17 @@ impl Drop for Updater {
     }
 }
 
-/// Opens the disk image `image` in Finder once it is checked again, on the
-/// background executor, against `asset`, the release's file: it may have
-/// sat in the cache folder for days. One that is no longer the release's
-/// is removed and nothing opens.
-#[cfg(target_os = "macos")]
-fn open_image(image: PathBuf, asset: Asset, cx: &mut Context<Updater>) {
+/// Opens `file` with the system, the disk image in Finder or the `.deb` in
+/// the software installer, once it is checked again, on the background
+/// executor, against `asset`, the release's file: it may have sat in the
+/// cache folder for days. One that is no longer the release's is removed
+/// and nothing opens.
+fn open_checked(file: PathBuf, asset: Asset, cx: &mut Context<Updater>) {
     let checking =
-        cx.background_spawn(async move { download::check_again(&image, &asset).map(|()| image) });
+        cx.background_spawn(async move { download::check_again(&file, &asset).map(|()| file) });
     cx.spawn(async move |_, cx| {
-        if let Ok(image) = checking.await {
-            cx.update(|cx| cx.open_with_system(&image));
+        if let Ok(file) = checking.await {
+            cx.update(|cx| cx.open_with_system(&file));
         }
     })
     .detach();

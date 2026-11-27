@@ -262,13 +262,6 @@ fn fetch_into(agent: &Agent, asset: &Asset, part: &Path, cancel: &AtomicBool) ->
 /// `asset`'s size and SHA-256 digest once more, as it is about to be
 /// opened or run: it may have sat in the cache folder for days. A file
 /// that is no longer the release's, or cannot be read, is removed.
-#[cfg_attr(
-    all(not(test), not(any(target_os = "macos", windows))),
-    expect(
-        dead_code,
-        reason = "used on macOS and Windows; Linux opens its checked file in a step still to come"
-    )
-)]
 pub(crate) fn check_again(path: &Path, asset: &Asset) -> Result<(), Error> {
     let checked = same(path, asset);
     if checked.is_err() {
@@ -278,10 +271,6 @@ pub(crate) fn check_again(path: &Path, asset: &Asset) -> Result<(), Error> {
 }
 
 /// Whether the file at `path` is `asset`'s size and has its digest.
-#[cfg_attr(
-    all(not(test), not(any(target_os = "macos", windows))),
-    expect(dead_code, reason = "only `check_again` reads a file back")
-)]
 fn same(path: &Path, asset: &Asset) -> Result<(), Error> {
     let mut file = fs::File::open(path).map_err(Error::Io)?;
     let mut hasher = Sha256::new();
