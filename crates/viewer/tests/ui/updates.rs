@@ -1,6 +1,7 @@
 //! Updates: the automatic checks and the manual one against a feed served
 //! here, the bar's button, the two settings saved, the alerts of a manual
-//! check, and the More menu's update commands where there is no menu bar.
+//! check and of an install that failed, and the More menu's update commands
+//! where there is no menu bar.
 //! Nothing reaches the network: the feed and the files come from a local
 //! server, and time is GPUI's clock, advanced by the test.
 
@@ -356,7 +357,9 @@ fn install_update_opens_the_release_page_and_the_button_goes(cx: &mut TestAppCon
 // only a `.deb` that fails its second check is clicked here.
 #[cfg(not(any(target_os = "macos", windows)))]
 #[gpui_kit::test]
-fn a_deb_that_changed_since_its_download_is_removed_and_never_opened(cx: &mut TestAppContext) {
+fn a_deb_that_changed_since_its_download_is_removed_and_the_release_page_opens(
+    cx: &mut TestAppContext,
+) {
     let server = Server::start();
     serve_release(&server, "9.9.9", b"the newer release");
     let updates = tempfile::tempdir().unwrap();
@@ -370,7 +373,51 @@ fn a_deb_that_changed_since_its_download_is_removed_and_never_opened(cx: &mut Te
     click(cx, handle, "update");
     assert!(!package.exists());
     assert_eq!(update_button(cx, handle), None);
+    assert_eq!(
+        cx.pending_prompt(),
+        Some((
+            "Couldn't install the update".to_owned(),
+            "the file's digest is not the release's".to_owned()
+        ))
+    );
+    cx.simulate_prompt_answer("OK");
+    assert_eq!(cx.opened_url().as_deref(), Some(PAGE));
+}
+
+#[gpui_kit::test]
+fn an_install_that_fails_says_why_and_a_page_that_is_not_https_never_opens(
+    cx: &mut TestAppContext,
+) {
+    let server = Server::start();
+    let page = "http://example.com/releases/tag/v9.9.9";
+    server.serve(
+        "/latest",
+        release("9.9.9", b"the newer release", &server.url("/deb")).replace(PAGE, page),
+    );
+    let updates = tempfile::tempdir().unwrap();
+    let handle = open(
+        cx,
+        UpdateOptions {
+            owner: Owner::ReleasePage,
+            ..options(&server, updates.path())
+        },
+        None,
+    );
+
+    dispatch(cx, handle, CheckForUpdates);
+    assert_eq!(update_button(cx, handle), Some(install_9_9_9()));
+    click(cx, handle, "update");
+    assert_eq!(
+        cx.pending_prompt(),
+        Some((
+            "Couldn't install the update".to_owned(),
+            format!("not an https address: {page}")
+        ))
+    );
+    cx.simulate_prompt_answer("OK");
+    assert!(!cx.has_pending_prompt());
     assert_eq!(cx.opened_url(), None);
+    assert_eq!(update_button(cx, handle), None);
 }
 
 #[gpui_kit::test]

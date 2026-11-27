@@ -1,9 +1,13 @@
 //! The last step of an update on Linux. An installation from the `.deb`,
 //! the app at `/usr/bin/strikebrain-viewer`, is the package manager's: the
 //! `.deb`, checked against the release's size and digest as it downloaded
-//! and again as it opens, opens with the system, which hands it to the
-//! desktop's software installer, and that installs it through the package
-//! manager. GitHub's HTTPS and digest are its authenticity: a `.deb`
+//! and again as it opens, opens with the system. That is GPUI's
+//! `open_with_system`, which runs `xdg-open` on it (`gpui-pre-linux`
+//! 0.3.12, `platform.rs`): what opens is the desktop's default for a
+//! `.deb`, a software installer that installs it through the package
+//! manager, or an archive manager, or nothing; and GPUI only logs a failure
+//! to start `xdg-open` and never reads its exit status, so the app cannot
+//! tell which. GitHub's HTTPS and digest are its authenticity: a `.deb`
 //! carries no signature the app could check. Anything else, such as the
 //! `.tar.gz` unpacked anywhere, installs from the release page. Either way
 //! another program installs: **Install Update**.
