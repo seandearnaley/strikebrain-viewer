@@ -255,9 +255,10 @@ jobs:
           AZURE_SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
         run: just windows-packages
       # The packages as a person gets them: the installer run without its
-      # pages, the installed app opened until it shows its window, then
-      # uninstalled; and the .zip unpacked and its binary run. A signed
-      # build must be signed and timestamped throughout, by one publisher.
+      # pages, as an update runs it, which relaunches the app; the installed
+      # app opened until it shows its window, then uninstalled; and the .zip
+      # unpacked and its binary run. A signed build must be signed and
+      # timestamped throughout, by one publisher.
       - name: Check the packages
         shell: pwsh
         env:
@@ -271,7 +272,17 @@ jobs:
           }
           $out = 'target\release\bundle'
           $setup = Get-Item "$out\*-setup.exe"
-          Invoke-Quietly $setup
+          # Run silently, Setup relaunches the app as it ends. -Wait would
+          # wait for the app too, so only Setup is waited for; its handle,
+          # taken at once, keeps its exit code.
+          $install = Start-Process $setup -PassThru -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
+          $null = $install.Handle
+          $install.WaitForExit()
+          if ($install.ExitCode) { throw "$setup returned $($install.ExitCode)" }
+          $relaunched = @(Get-Process strikebrain-viewer -ErrorAction SilentlyContinue)
+          if (!$relaunched) { throw 'the silent install did not relaunch the app' }
+          "relaunched: $($relaunched.Path)"
+          $relaunched | ForEach-Object { $_.Kill(); $_.WaitForExit() }
           $app = "$env:LOCALAPPDATA\Programs\Strikebrain Viewer"
           $exe = Get-Item "$app\strikebrain-viewer.exe"
           Get-ChildItem $app | ForEach-Object Name

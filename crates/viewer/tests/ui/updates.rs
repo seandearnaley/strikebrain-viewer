@@ -398,6 +398,39 @@ fn a_bundle_the_release_did_not_sign_is_offered_the_release_page(cx: &mut TestAp
     assert_eq!(cx.opened_url().as_deref(), Some(PAGE));
 }
 
+#[cfg(windows)]
+#[gpui_kit::test]
+fn an_install_whose_app_the_release_did_not_sign_is_offered_the_release_page(
+    cx: &mut TestAppContext,
+) {
+    let server = Server::start();
+    let file = b"the newer release";
+    let setup = "Strikebrain-Viewer-9.9.9-windows-x64-setup.exe";
+    server.serve(
+        "/latest",
+        release_of(setup, "9.9.9", file, &server.url("/setup")),
+    );
+    server.serve("/setup", file.to_vec());
+    let updates = tempfile::tempdir().unwrap();
+    // Tests run from a development build's executable, which is not
+    // signed: the installer never runs over it.
+    let handle = open(
+        cx,
+        UpdateOptions {
+            owner: Owner::WindowsInstaller,
+            ..options(&server, updates.path())
+        },
+        None,
+    );
+
+    dispatch(cx, handle, CheckForUpdates);
+    assert_eq!(server.requests(), ["/latest"]);
+    assert_eq!(update_button(cx, handle), Some(install_9_9_9()));
+    assert_eq!(files_in(updates.path()), Vec::<String>::new());
+    click(cx, handle, "update");
+    assert_eq!(cx.opened_url().as_deref(), Some(PAGE));
+}
+
 #[gpui_kit::test]
 fn the_app_checks_again_every_day_it_runs(cx: &mut TestAppContext) {
     let server = Server::start();
