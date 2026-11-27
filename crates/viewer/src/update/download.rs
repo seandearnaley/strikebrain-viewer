@@ -306,14 +306,21 @@ pub(crate) fn updates_dir() -> Result<PathBuf, Error> {
 }
 
 /// The folder `version`'s files download into: `updates/<version>`, made
-/// if missing. Everything else in `updates`, older versions' files, is
-/// removed. `updates` is [`updates_dir`], or a temporary folder in tests.
+/// if missing. Every other entry in `updates` named as a version, an older
+/// version's files, is removed; one with any other name is left alone, as
+/// it is not the updater's: on Linux the cache folder is the generic
+/// `~/.cache/viewer`, which another program may share. `updates` is
+/// [`updates_dir`], or a temporary folder in tests.
 pub(crate) fn staging_dir(updates: &Path, version: &semver::Version) -> Result<PathBuf, Error> {
     let name = version.to_string();
     let dir = updates.join(&name);
     fs::create_dir_all(&dir).map_err(Error::Io)?;
     for entry in fs::read_dir(updates).map_err(Error::Io)?.flatten() {
-        if entry.file_name() == name.as_str() {
+        let entry_name = entry.file_name();
+        let a_version = entry_name
+            .to_str()
+            .is_some_and(|other| semver::Version::parse(other).is_ok());
+        if !a_version || entry_name == name.as_str() {
             continue;
         }
         let path = entry.path();
@@ -562,18 +569,24 @@ mod tests {
     }
 
     #[test]
-    fn staging_keeps_this_versions_folder_and_removes_the_rest() {
+    fn staging_keeps_this_versions_folder_and_removes_the_other_versions() {
         let tmp = tempfile::tempdir().unwrap();
         let updates = tmp.path().join("updates");
         fs::create_dir_all(updates.join("0.1.2")).unwrap();
         fs::write(updates.join("0.1.2/old.dmg"), b"old").unwrap();
         fs::create_dir_all(updates.join("0.1.3")).unwrap();
         fs::write(updates.join("0.1.3/kept.dmg"), b"kept").unwrap();
+        fs::create_dir_all(updates.join("1.0.0-rc.1")).unwrap();
+        fs::write(updates.join("0.0.9"), b"a stray file named as a version").unwrap();
+        // Not a version: another program's, in a cache folder it may share.
         fs::write(updates.join("stray"), b"stray").unwrap();
+        fs::create_dir_all(updates.join("v0.1.1")).unwrap();
+        fs::write(updates.join("v0.1.1/theirs"), b"theirs").unwrap();
         let dir = staging_dir(&updates, &semver::Version::new(0, 1, 3)).unwrap();
         assert_eq!(dir, updates.join("0.1.3"));
-        assert_eq!(listing(&updates), ["0.1.3"]);
+        assert_eq!(listing(&updates), ["0.1.3", "stray", "v0.1.1"]);
         assert_eq!(listing(&dir), ["kept.dmg"]);
+        assert_eq!(listing(&updates.join("v0.1.1")), ["theirs"]);
         // A first update makes the folders.
         let fresh = tmp.path().join("fresh/updates");
         let dir = staging_dir(&fresh, &semver::Version::new(1, 0, 0)).unwrap();
