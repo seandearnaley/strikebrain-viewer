@@ -49,6 +49,13 @@ CI (`.github/workflows/ci.yml`) runs `just check` on macOS for every pull reques
 2. Run `gh workflow run release.yml --ref main` (or Actions > Release > Run workflow). Add `-f dry_run=true` to do everything but publish, for any version, released or not. Follow it with `gh run watch`.
 3. When every package passes, the workflow tags the commit `v<version>`, publishes the release with `SHA256SUMS` and a build attestation, then downloads and verifies the published files. A failure anywhere publishes nothing; a version already tagged or released stops the run before it builds.
 
+Publishing makes the release live for every installed app at its next check, and installed apps hold a release to what they were built with:
+
+- The file names (`update::feed::file_for`: `Strikebrain-Viewer-<v>-macos-arm64.dmg`, `Strikebrain-Viewer-<v>-windows-x64-setup.exe`, `strikebrain-viewer_<v>_amd64.deb`) are a contract with every installed version: renamed, those versions never find their update.
+- Tags stay `v<semver>`, with no pre-release part and no build metadata, which installed apps refuse.
+- The macOS Team ID and bundle identifier, and the subject of the Windows signing certificate, stay as they are, or installed apps refuse the update.
+- `deny.toml`'s `[graph] targets` lists every release target: `cargo deny check` covers those alone, the three today.
+
 A pull request that touches the workflow, the `justfile`, `crates/viewer/bundle` or `crates/viewer/build.rs` runs it as a rehearsal: unsigned, unpublished, its files kept as artifacts.
 
 Signing runs in the repository's `release` environment, which only `main` can use; its secrets and variables are named in the workflow's header. macOS imports the Developer ID Application certificate into a keychain made for the job, signs with the hardened runtime, and `just dmg` notarizes the app with an App Store Connect API key (`strikebrain-viewer-notarize`) and staples its ticket to it, then builds, notarizes and staples the disk image. The app needs its own stapled ticket: the image's ticket stays with the image, so without it Gatekeeper fetches the app's ticket online on its first launch, and refuses an offline one. The workflow checks both tickets and Gatekeeper. Locally, `just bundle` and `just dmg` sign ad hoc, or with `CODESIGN_IDENTITY` when it is set, and notarize when `NOTARY_KEY`, `NOTARY_KEY_ID` and `NOTARY_ISSUER_ID` are set.
@@ -73,9 +80,31 @@ nextest reports a test as slow after 10 s and kills it after 30 s (`.config/next
 - Tests never touch it: `AppView::new` saves nothing and follows nothing. Tests that save pass `Session { store: Some(StateStore::at(<temp>/state.json)), .. }` to `AppView::with_session`, or a store to `open_main_window`. The bundle identifier lives in `persist::APP_ID` and in `crates/viewer/bundle/Info.plist`; a unit test keeps them equal.
 - Saves are timed on GPUI's clock: in a test, `cx.executor().advance_clock(SAVE_DELAY)` then `run_until_parked` writes a pending save; `cx.quit()` runs the quit save.
 - The file holds a list of folders (`"version": 2`, `persist/format.rs`) and `explorer_hidden` beside `explorer_width`; a version 1 file, from before several folders, still loads as one folder. Files opened on their own are never saved. Read it back in a test with `StateStore::at(path).load()` rather than matching its text.
+- The file also keeps the update settings: `check_updates`, and `last_update_check`, the last check that found the app up to date (none once a check finds an update). `Session::update_settings` starts the updater with them, and `Session::updates` (`UpdateOptions`) turns it on; `open_main_window(folders, store, watch, updates, cx)` turns it on with `updates`, against GitHub or `STRIKEBRAIN_VIEWER_UPDATE_FEED`. Tests build an updater only with `UpdateOptions` naming a feed that a `TcpListener` in the test serves and a temporary `updates_dir`, and move the calendar on the scheduler's clock (`advance_clock`; `set_utc_now` for a sleep), as `tests/ui/updates.rs` does.
 - Every folder is a top-level row, even alone, and so is a file opened on its own that no folder lists. UI tests open real folders and files with `Launch::Folders(vec![...])`; `tests/ui/main.rs` has `node` (a path inside the first folder), `node_at` (a path on disk), `under(dir, rows)` (the rows of one folder, its own row first), `checked` (checks by path inside their folder), `open_app_with_session` (a window over a `Session`: a saved view, a state store, the explorer hidden) and `dispatch` (an action, as a key, a menu item or a button sends it). `Launch::Tree` shows a `Tree::from_paths` fixture as it is, with no folder rows.
 - Tests run the bar's and the More menu's commands by dispatching their actions from `viewer::keys` (public for this), not by clicking inside the More menu; only the menu's own tests in `tests/ui/bar.rs` click its items. Tests click the bar's buttons but never press and drag on the bar: the test platform does not implement moving a window.
 - Live refresh (`state/watch.rs`) is off unless `Session::watch` is set. Tests with a real watcher (`tests/ui/watch.rs`) call `cx.executor().allow_parking()`, since its thread wakes the app, and wait in real time with `until`. In such a test every executor timer costs up to 100 ms of real time (the test scheduler parks in 100 ms slices), so wait in few, long steps.
+
+## Updates
+
+The updater (`crates/viewer/src/update.rs`; the spec's Milestone 9) checks GitHub's latest release and installs through whatever owns the installation.
+
+- `STRIKEBRAIN_VIEWER_UPDATE_FEED=<url>` points a run at another feed: `https`, or `http` to `localhost`, `127.0.0.1` or `[::1]`. Release builds honour it too.
+- A plain `just run` checks GitHub 5 s after launch, unless its saved state holds a check under a day old that found the app up to date. A development build only opens the release page; it never installs.
+- Each version downloads into `updates/<version>` in the platform's cache folder: `~/Library/Caches/ai.brainstrike.viewer` on macOS, `~/.cache/viewer` on Linux, `%LOCALAPPDATA%\brainstrike\viewer\cache` on Windows. On macOS the new app stages in `.Strikebrain Viewer.update`, beside the installed one.
+
+### The check by hand
+
+On a Mac, before releasing a change to the updater. The staged app's own version must be the release's, so the installed app is a build marked older than the update:
+
+1. The update: a release dry run's disk image (`gh workflow run release.yml --ref main -f dry_run=true`, then `gh run download <run> -n macos`), version V. Done when `spctl --assess --type execute` accepts the app inside.
+2. The app it updates: this source with the root `Cargo.toml`'s version set below V, built by `just bundle` with `CODESIGN_IDENTITY` set to the Developer ID Application identity, and copied into `/Applications`; then `Cargo.toml` put back. Done when `codesign -dv` on the copy shows the Team ID.
+3. The feed: a folder holding the disk image and a file `latest`, GitHub's reply with `tag_name` `vV`, an `https` `html_url`, and one asset named `Strikebrain-Viewer-V-macos-arm64.dmg` with the file's `size`, `"digest": "sha256:<shasum -a 256>"` and `browser_download_url` `http://127.0.0.1:<port>/<name>`; served by `python3 -m http.server <port> --bind 127.0.0.1` in it.
+4. The environment: GPUI's restart relaunches through `open`, which passes on nothing of the caller's, so set both variables for the session: `launchctl setenv STRIKEBRAIN_VIEWER_STATE <temporary file>` and `launchctl setenv STRIKEBRAIN_VIEWER_UPDATE_FEED http://127.0.0.1:<port>/latest`. (Or back up the real state file and restore it after.)
+5. A click-time check that fails: `open` the app; once Restart to Update shows, 5 s in, append a byte to a file in `/Applications/.Strikebrain Viewer.update/Strikebrain Viewer.app/Contents/Resources` and click it. Done when the alert "Couldn't install the update" names codesign, the disk image opens in Finder, and the installed app is unchanged.
+6. The update: Check for Updates…, then Restart to Update. Done when the app relaunches as V (About says so) and `/Applications` holds no `.Strikebrain Viewer.update`.
+7. The privacy log: `/usr/bin/log show --info --debug --last 15m --predicate 'subsystem == "com.apple.TCC"'`. Done when it holds no request from the app.
+8. Clean up: `launchctl unsetenv` both variables, stop the server, eject the image, and remove the temporary state file.
 
 ## Tools
 
@@ -125,7 +154,7 @@ Neither was added. Rebuild and restart instead.
 - Paths compared with a tree's go through `explorer::canonical`, which on Windows drops the `\\?\` prefix of the system's canonical form where the path means the same without it (`dunce`); Clippy rejects `std::fs::canonicalize`. A path that needs the prefix (a reserved name such as `con`, more than 260 characters) keeps it, and shows with it.
 - A local bundle is signed ad hoc (`codesign -s -`), for this Mac and for tools that find the app by bundle identifier. Only the release workflow signs with the Developer ID certificate and notarizes.
 - Releases cover macOS on Apple silicon, and Linux and Windows on x86-64. There is no Intel Mac build (none can be run here to test), no Linux Arm build and no Windows Arm build.
-- The Windows packages are checked only on GitHub's runner: the installer runs silently there, the installed app opens its window, and the uninstaller removes it. Nobody has watched the installer's pages or the app's icon on a real Windows desktop from them.
+- The Windows packages are checked only on GitHub's runner: the installer runs silently there and relaunches the installed app, the installed app starts, and the uninstaller removes it. Nobody has watched the installer's pages or the app's icon on a real Windows desktop from them.
 - Live refresh rescans the whole folder a change is in, on any change a scan would show, as the design says; the other folders are left alone. With Show ignored on, a busy folder the tree then shows (a build's `target/`) is rescanned back to back while it changes.
 - Folders are told apart by their canonical paths, and `realpath` does not join macOS firmlinks: `/System/Volumes/Data/Users/x` and `/Users/x` stay different, so the same folder added under both is listed twice. The picker and Finder give `/Users/...`.
 - A saved folder that no longer exists at launch is dropped from the saved state, as the design asks, even when it is only on a volume not mounted that day.
@@ -138,4 +167,10 @@ Neither was added. Rebuild and restart instead.
 - GPUI Base 0.10.0 draws the code view's caret line number in the foreground colour whatever the theme says; line 1 stands out when a file opens.
 - Space then Esc within the fullscreen animation can leave the window fullscreen: GPUI exposes no transition state.
 - The live-refresh tests wait on real file-system events, about 2 to 5 s each; they are the slowest in the suite.
+- Updates (the spec's Risks has the detail):
+  - Windows and Linux have never run the in-app update end to end; CI checks only that a silent install relaunches the installed app.
+  - macOS: the code requirement names the Team ID in the certificate's subject, not the Developer ID certificates' own fields (Gatekeeper's assessment stands in). A bundle the person cannot write, such as another user's, updates through the disk image. `hdiutil attach -mountpoint` and `detach` warn that they are deprecated on macOS 27, and stay while macOS 11 is supported. GPUI's restart only logs a relaunch script that fails to start. An app kept in Desktop, Documents or Downloads may make macOS ask for that folder.
+  - Windows: the publisher is the certificate's subject alone, so an identity validated again under another subject breaks every installed copy's updates. Every silent install relaunches the app. A PowerShell that fails sends the update to the release page. An install made with Run as administrator is updated per user.
+  - Everywhere: the tools the updater runs have no timeouts; proxies come from environment variables only; an unused offer's staged copy and cache files stay until the next update; GitHub allows 60 unauthenticated requests an hour per address; a download that always fails is tried again at each launch; while an update is ready no check runs; off macOS the update commands are out of reach while the explorer is hidden; only macOS checks the version inside the update.
+  - The release workflow's wait for the installed app's window never waits (`[IntPtr]::Zero` is true in PowerShell); it predates updates and is its own change.
 - The gallery decodes each tile's picture whole, then scales it down: about 200 ms for a 24-megapixel JPEG. At most four reads run at once, each keeping its slot until it ends; four grainy 24-megapixel JPEGs at once peak near half a gigabyte. The `image` crate has no reduced-size decode. See the spec's Risks.

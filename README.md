@@ -13,6 +13,15 @@ The [releases page](https://github.com/seandearnaley/strikebrain-viewer/releases
 
 The macOS image is signed with a Developer ID and notarized by Apple; the Windows installer and program are signed through Azure Artifact Signing. `SHA256SUMS` lists each file's checksum, and `gh attestation verify <file> -R seandearnaley/strikebrain-viewer` checks that GitHub built it from this repository.
 
+### Updates
+
+The app checks GitHub's latest release about 5 seconds after launch and then once a day, with one request that carries nothing about you: only the app's name and version. Check Automatically turns that off, and Check for Updates… checks at once: in the app menu on macOS, at the end of the bar's More menu (…) elsewhere. A new version downloads by itself, is checked against GitHub's digest (and on macOS and Windows against the running app's signature), and shows as one button in the bar:
+
+- **The macOS app** in a folder you can write, such as Applications: Restart to Update replaces it and relaunches. Where it cannot be replaced (run from the disk image, or a folder you cannot write), Install Update opens the new disk image.
+- **The Windows installer's install:** Restart to Update runs the new installer, which replaces the app and opens it again.
+- **The `.deb`:** Install Update opens the new `.deb` with the system (`xdg-open`), usually in your software installer.
+- **The `.zip`, the `.tar.gz` and builds from source:** Install Update opens the release page.
+
 ## Run from source
 
 Needs the toolchain in `rust-toolchain.toml` (rustup installs it). It is developed on macOS on Apple silicon; CI builds and tests it on Linux and Windows. On Linux, install the libraries `.github/workflows/ci.yml` lists.
@@ -66,13 +75,13 @@ On macOS this builds the release binary and wraps it in an `.app`, signed ad hoc
 
 ## Develop
 
-`just` lists the tasks. `just check` runs every gate and must pass before each commit; `just shot` renders key screens to `target/shots/` without a window. `AGENTS.md` has the rules, the commands and how the tests work.
+`just` lists the tasks. `just check` runs every gate and must pass before each commit; `just shot` renders key screens to `target/shots/` without a window. `AGENTS.md` has the rules, the commands and how the tests work. `STRIKEBRAIN_VIEWER_UPDATE_FEED=<url>` points the update checks at another feed, such as one served on this machine (`http://127.0.0.1:<port>/latest`); `STRIKEBRAIN_VIEWER_STATE=<file>` keeps a trial run's saved state apart from yours.
 
 ## Layout
 
 ```
 crates/explorer   the engine: scan, tree, filter, sort, checks, rows; no UI
-crates/viewer     the app: GPUI views, state, saved state, live refresh, menus
+crates/viewer     the app: GPUI views, state, saved state, live refresh, menus, updates
   bundle/         Info.plist template, icon source and Linux desktop entry for the packages
   tests/ui/       headless UI tests on the real views
 docs/superpowers/specs/2026-11-22-strikebrain-viewer-design.md   the design
