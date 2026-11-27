@@ -681,8 +681,7 @@ fn more_is_on_the_bar_with_nothing_open_where_there_is_no_menu_bar(cx: &mut Test
     }
     assert!(more(cx));
     click(cx, handle, "more");
-    // The explorer's commands stay, disabled where there is no tree; the
-    // Kit's menu items do not expose that state to assistive technology.
+    // Only the update commands: the explorer's would act on nothing.
     let names = cx
         .update_window(handle, |_, window, cx| {
             window.render_frame(cx);
@@ -694,19 +693,7 @@ fn more_is_on_the_bar_with_nothing_open_where_there_is_no_menu_bar(cx: &mut Test
                 .collect::<Vec<_>>()
         })
         .unwrap();
-    assert_eq!(
-        names,
-        [
-            "Expand All",
-            "Collapse All",
-            "Show Ignored",
-            "Refresh",
-            "Select All",
-            "Deselect All",
-            "Check for Updates…",
-            "Check Automatically"
-        ]
-    );
+    assert_eq!(names, ["Check for Updates…", "Check Automatically"]);
 }
 
 #[gpui_kit::test]
