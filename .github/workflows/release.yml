@@ -272,6 +272,8 @@ jobs:
           }
           $out = 'target\release\bundle'
           $setup = Get-Item "$out\*-setup.exe"
+          $app = "$env:LOCALAPPDATA\Programs\Strikebrain Viewer"
+          $installed = "$app\strikebrain-viewer.exe"
           # Run silently, Setup relaunches the app as it ends. -Wait would
           # wait for the app too, so only Setup is waited for; its handle,
           # taken at once, keeps its exit code.
@@ -279,12 +281,15 @@ jobs:
           $null = $install.Handle
           $install.WaitForExit()
           if ($install.ExitCode) { throw "$setup returned $($install.ExitCode)" }
+          # The app the install put in place, and nothing else. A process's
+          # path is read from it while it runs.
           $relaunched = @(Get-Process strikebrain-viewer -ErrorAction SilentlyContinue)
           if (!$relaunched) { throw 'the silent install did not relaunch the app' }
-          "relaunched: $($relaunched.Path)"
+          $paths = @($relaunched | ForEach-Object { $_.Path })
+          $paths | ForEach-Object { "relaunched: $_" }
           $relaunched | ForEach-Object { $_.Kill(); $_.WaitForExit() }
-          $app = "$env:LOCALAPPDATA\Programs\Strikebrain Viewer"
-          $exe = Get-Item "$app\strikebrain-viewer.exe"
+          if (@($paths | Where-Object { $_ -ne $installed }).Count) { throw "the silent install relaunched an app that is not $installed" }
+          $exe = Get-Item $installed
           Get-ChildItem $app | ForEach-Object Name
           # A windowed program's output reaches a pipe, not the console.
           $version = & $exe --version | Out-String
