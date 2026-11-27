@@ -149,6 +149,11 @@ pub(crate) struct Updater {
     asked: bool,
     /// The page of the release found, which the stub install opens.
     page: Option<String>,
+    /// When the last check started, settled or not, in seconds since the
+    /// Unix epoch. Kept only while the app runs: an automatic check waits a
+    /// day after it too, so a release whose file fails to download is not
+    /// downloaded again every hour.
+    last_attempt: Option<u64>,
     /// Set when the updater goes, so a download under way stops.
     cancel: Arc<AtomicBool>,
     /// The step of the check under way.
@@ -182,6 +187,7 @@ impl Updater {
             phase: Phase::Idle,
             asked: false,
             page: None,
+            last_attempt: None,
             cancel: Arc::default(),
             step: None,
             _schedule: schedule(cx),
@@ -229,6 +235,7 @@ impl Updater {
             Phase::Ready(_) => return,
         }
         self.asked = manual;
+        self.last_attempt = Some(now(cx));
         self.phase = Phase::Checking;
         cx.notify();
         let feed = self.feed.clone();
@@ -255,10 +262,15 @@ impl Updater {
         cx.notify();
     }
 
-    /// The automatic check, when automatic checks are on and the last
-    /// check is a day old or more by the calendar.
+    /// The automatic check, when automatic checks are on and both the last
+    /// check that settled and the last attempt are a day old or more by the
+    /// calendar.
     fn check_if_due(&mut self, cx: &mut Context<Self>) {
-        if self.settings.automatic && !recent(self.settings.last_check, now(cx)) {
+        let now = now(cx);
+        if self.settings.automatic
+            && !recent(self.settings.last_check, now)
+            && !recent(self.last_attempt, now)
+        {
             self.check(false, cx);
         }
     }
@@ -323,8 +335,8 @@ impl Updater {
 
     /// Ends a check in `phase`. One asked for hears how it went when there
     /// is nothing to install. A check that settled, up to date or with an
-    /// update ready, is the last check; one that failed is not, so the next
-    /// hour's look tries again.
+    /// update ready, is the last check, which is saved; one that failed is
+    /// not, and the first look a day after its attempt tries again.
     fn end(&mut self, phase: Phase, cx: &mut Context<Self>) {
         if std::mem::take(&mut self.asked) {
             match &phase {

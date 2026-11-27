@@ -671,6 +671,45 @@ fn a_file_that_is_not_the_releases_is_never_offered(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn a_check_whose_download_fails_is_tried_again_a_day_later(cx: &mut TestAppContext) {
+    let server = Server::start();
+    // The size the release gives, other bytes: every download fails.
+    server.serve(
+        "/latest",
+        release("9.9.9", b"the newer release", &server.url("/deb")),
+    );
+    server.serve("/deb", b"the other release".to_vec());
+    let updates = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let state_file = state.path().join("state.json");
+    open(
+        cx,
+        options(&server, updates.path()),
+        Some(StateStore::at(&state_file)),
+    );
+    let attempt = ["/latest", "/deb"];
+
+    wait(cx, Duration::from_secs(5));
+    assert_eq!(server.requests(), attempt);
+    // The hourly looks of the next day find the attempt too recent.
+    wait(cx, DAY.checked_sub(Duration::from_millis(1)).unwrap());
+    assert_eq!(server.requests(), attempt);
+    // A day after it, by the calendar, the next attempt.
+    wait(cx, Duration::from_millis(1));
+    assert_eq!(server.requests(), attempt.repeat(2));
+    // Two days asleep: the first look on waking tries again.
+    sleep(cx, Duration::from_hours(48));
+    wait(cx, Duration::from_hours(1));
+    assert_eq!(server.requests(), attempt.repeat(3));
+    assert!(!cx.has_pending_prompt());
+
+    // Only a check that settles is saved as the last one.
+    cx.quit();
+    let saved = StateStore::at(&state_file).load().unwrap();
+    assert_eq!(saved.last_update_check, None);
+}
+
+#[gpui_kit::test]
 fn the_update_commands_are_on_offer_only_with_an_updater(cx: &mut TestAppContext) {
     let available = |cx: &mut TestAppContext, handle: AnyWindowHandle| {
         cx.update_window(handle, |_, window, cx| {
