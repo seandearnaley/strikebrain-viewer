@@ -334,7 +334,14 @@ fn install_update_opens_the_release_page_and_the_button_goes(cx: &mut TestAppCon
     let server = Server::start();
     serve_release(&server, "9.9.9", b"the newer release");
     let updates = tempfile::tempdir().unwrap();
-    let handle = open(cx, options(&server, updates.path()), None);
+    let handle = open(
+        cx,
+        UpdateOptions {
+            owner: Owner::ReleasePage,
+            ..options(&server, updates.path())
+        },
+        None,
+    );
 
     dispatch(cx, handle, CheckForUpdates);
     assert_eq!(update_button(cx, handle), Some(install_9_9_9()));
@@ -343,6 +350,27 @@ fn install_update_opens_the_release_page_and_the_button_goes(cx: &mut TestAppCon
     click(cx, handle, "update");
     assert_eq!(cx.opened_url().as_deref(), Some(PAGE));
     assert_eq!(update_button(cx, handle), None);
+}
+
+// Linux opens the `.deb` with the system, which the test platform cannot:
+// only a `.deb` that fails its second check is clicked here.
+#[cfg(not(any(target_os = "macos", windows)))]
+#[gpui_kit::test]
+fn a_deb_that_changed_since_its_download_is_removed_and_never_opened(cx: &mut TestAppContext) {
+    let server = Server::start();
+    serve_release(&server, "9.9.9", b"the newer release");
+    let updates = tempfile::tempdir().unwrap();
+    let handle = open(cx, options(&server, updates.path()), None);
+
+    dispatch(cx, handle, CheckForUpdates);
+    assert_eq!(update_button(cx, handle), Some(install_9_9_9()));
+    // The size the release gives, other bytes.
+    let package = updates.path().join("9.9.9").join(deb("9.9.9"));
+    std::fs::write(&package, b"the other release").unwrap();
+    click(cx, handle, "update");
+    assert!(!package.exists());
+    assert_eq!(update_button(cx, handle), None);
+    assert_eq!(cx.opened_url(), None);
 }
 
 #[gpui_kit::test]
