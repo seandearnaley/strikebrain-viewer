@@ -11,8 +11,8 @@
 //! stage's title and Present, and left of Present an update ready to
 //! install. Its buttons dispatch the window's actions, which the root view
 //! handles, so a button, a menu item and a key run the same code. Windows
-//! and Linux draw no menu bar, so there More ends with the update commands
-//! and shows with no folder open too.
+//! and Linux draw no menu bar, so there More ends with the update commands,
+//! and shows with nothing open too, holding only them.
 //!
 //! The Kit pads its bar 80 px on macOS (12 px elsewhere) for the traffic
 //! lights; this bar zeroes that padding and keeps the room inside its
@@ -25,7 +25,7 @@
 
 use gpui_kit::assets::IconName as Icons;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::menu::DropdownMenu as _;
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu};
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, TitleBar, h_flex,
@@ -115,7 +115,8 @@ pub(crate) fn window_bar(
 
 /// The part over the explorer: `width` wide, or only the lights' room and
 /// the sidebar button while the explorer is hidden. With `automatic`, More
-/// ends with the update commands and shows with no folder open.
+/// ends with the update commands, and shows with nothing open, holding only
+/// them.
 fn explorer_part(
     state: &AppState,
     width: Option<Pixels>,
@@ -156,9 +157,9 @@ fn explorer_part(
             ))
         })
         // Where More holds the update commands it shows with nothing open
-        // too, its explorer commands disabled.
+        // too, holding only them: the explorer's would act on nothing.
         .when(open || automatic.is_some(), |part| {
-            part.child(more(state, automatic))
+            part.child(more(state, open, automatic))
         })
         .when(slow, |part| {
             part.child(
@@ -197,10 +198,11 @@ fn warning_refresh(message: &SharedString, cx: &App) -> Button {
         .on_click(|_, window, cx| window.dispatch_action(Box::new(Refresh), cx))
 }
 
-/// More (…): the explorer's commands, each showing its key. With
-/// `automatic`, after a separator, Check for Updates… and Check
-/// Automatically, checked as `automatic` says.
-fn more(state: &AppState, automatic: Option<bool>) -> impl IntoElement {
+/// More (…): with something `open`, the explorer's commands, each showing
+/// its key. With `automatic`, Check for Updates… and Check Automatically,
+/// checked as `automatic` says, after a separator when the explorer's
+/// commands come first.
+fn more(state: &AppState, open: bool, automatic: Option<bool>) -> impl IntoElement {
     let has_tree = state.explorer().is_some();
     let checked = state.selected_count() > 0;
     let shows_ignored = state.shows_ignored();
@@ -211,23 +213,25 @@ fn more(state: &AppState, automatic: Option<bool>) -> impl IntoElement {
         .tooltip("More")
         .accessibility_label("More")
         .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
-            menu.menu_with_disabled("Expand All", Box::new(ExpandAll), !has_tree)
-                .menu_with_disabled("Collapse All", Box::new(CollapseAll), !has_tree)
-                .separator()
-                .menu_with_check("Show Ignored", shows_ignored, Box::new(ToggleShowIgnored))
-                .menu("Refresh", Box::new(Refresh))
-                .separator()
-                .menu_with_disabled("Select All", Box::new(SelectAllFiles), !has_tree)
-                .menu_with_disabled("Deselect All", Box::new(DeselectAll), !checked)
-                .when_some(automatic, |menu, on| {
-                    menu.separator()
-                        .menu("Check for Updates…", Box::new(CheckForUpdates))
-                        .menu_with_check(
-                            "Check Automatically",
-                            on,
-                            Box::new(ToggleCheckAutomatically),
-                        )
-                })
+            menu.when(open, |menu| {
+                menu.menu_with_disabled("Expand All", Box::new(ExpandAll), !has_tree)
+                    .menu_with_disabled("Collapse All", Box::new(CollapseAll), !has_tree)
+                    .separator()
+                    .menu_with_check("Show Ignored", shows_ignored, Box::new(ToggleShowIgnored))
+                    .menu("Refresh", Box::new(Refresh))
+                    .separator()
+                    .menu_with_disabled("Select All", Box::new(SelectAllFiles), !has_tree)
+                    .menu_with_disabled("Deselect All", Box::new(DeselectAll), !checked)
+            })
+            .when_some(automatic, |menu, on| {
+                menu.when(open, PopupMenu::separator)
+                    .menu("Check for Updates…", Box::new(CheckForUpdates))
+                    .menu_with_check(
+                        "Check Automatically",
+                        on,
+                        Box::new(ToggleCheckAutomatically),
+                    )
+            })
         })
 }
 
