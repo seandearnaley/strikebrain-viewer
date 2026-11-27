@@ -11,7 +11,8 @@
 //! stage's title and Present, and left of Present an update ready to
 //! install. Its buttons dispatch the window's actions, which the root view
 //! handles, so a button, a menu item and a key run the same code. Windows
-//! and Linux draw no menu bar, so there More ends with the update commands.
+//! and Linux draw no menu bar, so there More ends with the update commands
+//! and shows with no folder open too.
 //!
 //! The Kit pads its bar 80 px on macOS (12 px elsewhere) for the traffic
 //! lights; this bar zeroes that padding and keeps the room inside its
@@ -114,7 +115,7 @@ pub(crate) fn window_bar(
 
 /// The part over the explorer: `width` wide, or only the lights' room and
 /// the sidebar button while the explorer is hidden. With `automatic`, More
-/// ends with the update commands.
+/// ends with the update commands and shows with no folder open.
 fn explorer_part(
     state: &AppState,
     width: Option<Pixels>,
@@ -153,7 +154,11 @@ fn explorer_part(
                 "Add Folder",
                 AddFolder,
             ))
-            .child(more(state, automatic))
+        })
+        // Where More holds the update commands it shows with nothing open
+        // too, its explorer commands disabled.
+        .when(open || automatic.is_some(), |part| {
+            part.child(more(state, automatic))
         })
         .when(slow, |part| {
             part.child(

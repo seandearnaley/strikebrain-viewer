@@ -18,7 +18,9 @@ use gpui_kit::{
     ScrollDelta, Size, WindowBounds, WindowOptions, point, px, size,
 };
 use viewer::keys::{CheckForUpdates, SelectAllFiles, ToggleShowIgnored, ToggleSidebar};
-use viewer::{AppAssets, AppView, Launch, Owner, ScanStatus, Session, UpdateOptions};
+use viewer::{
+    AppAssets, AppView, Launch, Owner, ScanStatus, Session, UpdateOptions, UpdateSettings,
+};
 
 /// A small project with nested folders, sizes and a long name.
 const FIXTURE: &[(&str, u64)] = &[
@@ -123,8 +125,6 @@ fn update_offered() -> UpdateOptions {
     });
     UpdateOptions {
         feed: format!("http://{address}/latest"),
-        automatic: false,
-        last_check: None,
         running: semver::Version::parse(env!("CARGO_PKG_VERSION"))
             .expect("Cargo's package version is SemVer"),
         owner: Owner::ReleasePage,
@@ -650,6 +650,11 @@ fn main() {
         // title of a file on the stage.
         let mut cx = context();
         let session = Session {
+            // No automatic check: the feed answers the one asked for.
+            update_settings: UpdateSettings {
+                automatic: false,
+                last_check: None,
+            },
             updates: Some(update_offered()),
             ..Session::default()
         };

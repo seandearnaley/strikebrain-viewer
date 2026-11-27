@@ -1,10 +1,10 @@
 //! Learning of a newer release and installing it. The [`Updater`] entity
-//! checks GitHub's latest release 5 s after launch and then daily, or when
-//! asked; downloads and verifies the file that updates this installation;
-//! and offers it. It follows GPUI Kit's guide, Auto Update: a foreground
-//! task coordinates each check, the background executor reads the feed and
-//! downloads the file, and their results come back to the entity, which
-//! notifies. The root view owns the updater, saves its two settings, shows
+//! checks GitHub's latest release 5 s after launch and then once a day by
+//! the calendar, or when asked; downloads and verifies the file that
+//! updates this installation; and offers it. It follows GPUI Kit's guide,
+//! Auto Update: a foreground task coordinates each check, the background
+//! executor reads the feed and downloads the file, and their results come
+//! back to the entity, which notifies. The root view owns the updater, saves its two settings, shows
 //! its offer in the bar and its answers to a manual check as alerts.
 
 mod download;
@@ -16,9 +16,9 @@ mod test_server;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
-use gpui_kit::{AppContext as _, Context, EventEmitter, Task};
+use gpui_kit::{App, AppContext as _, Context, EventEmitter, Task};
 use ureq::Agent;
 
 pub(crate) use download::updates_dir;
@@ -29,22 +29,42 @@ pub use install::Owner;
 /// compete with the first scans.
 const FIRST_CHECK: Duration = Duration::from_secs(5);
 
-/// How often the automatic checks run while the app does, and how long
-/// after the last check a launch checks again.
+/// How long after the last check, by the calendar, an automatic check is
+/// due.
 const DAY: Duration = Duration::from_hours(24);
 
-/// What the root view hands its updater: where to read the latest release,
-/// the saved settings, and this installation.
+/// How often the updater looks at the calendar for a check that is due.
+/// GPUI's timers stop while the computer sleeps, so a day-long timer would
+/// stretch over the nights a laptop sleeps.
+const HOUR: Duration = Duration::from_hours(1);
+
+/// The update settings the state file keeps. The default, with nothing
+/// saved, checks automatically.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UpdateSettings {
+    /// Whether to check automatically: 5 seconds after launch, then a day
+    /// after the last check, by the calendar.
+    pub automatic: bool,
+    /// When updates were last checked for, in seconds since the Unix epoch.
+    pub last_check: Option<u64>,
+}
+
+impl Default for UpdateSettings {
+    fn default() -> Self {
+        Self {
+            automatic: true,
+            last_check: None,
+        }
+    }
+}
+
+/// What the root view hands its updater, with the saved settings: where to
+/// read the latest release, and this installation.
 #[derive(Debug)]
 pub struct UpdateOptions {
     /// The address of the latest release's JSON: GitHub's, or a feed
     /// served on this machine.
     pub feed: String,
-    /// Whether to check automatically: 5 seconds after launch, unless the
-    /// last check was within a day, then daily while the app runs.
-    pub automatic: bool,
-    /// When updates were last checked for, in seconds since the Unix epoch.
-    pub last_check: Option<u64>,
     /// The version running: a release is an update when it is greater.
     pub running: semver::Version,
     /// Who owns this installation, and so which file updates it.
@@ -122,9 +142,11 @@ pub(crate) struct Updater {
     running: semver::Version,
     owner: Owner,
     updates_dir: Option<PathBuf>,
-    automatic: bool,
-    last_check: Option<u64>,
+    settings: UpdateSettings,
     phase: Phase,
+    /// Whether someone asked for the check under way, and so hears how it
+    /// ends.
+    asked: bool,
     /// The page of the release found, which the stub install opens.
     page: Option<String>,
     /// Set when the updater goes, so a download under way stops.
@@ -138,13 +160,15 @@ pub(crate) struct Updater {
 impl EventEmitter<UpdateEvent> for Updater {}
 
 impl Updater {
-    /// An updater as `options` say, its automatic checks scheduled on GPUI's
-    /// timer.
-    pub(crate) fn new(options: UpdateOptions, cx: &mut Context<Self>) -> Self {
+    /// An updater as `options` and `settings` say, its automatic checks
+    /// scheduled on GPUI's timer.
+    pub(crate) fn new(
+        options: UpdateOptions,
+        settings: UpdateSettings,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let UpdateOptions {
             feed,
-            automatic,
-            last_check,
             running,
             owner,
             updates_dir,
@@ -154,9 +178,9 @@ impl Updater {
             running,
             owner,
             updates_dir,
-            automatic,
-            last_check,
+            settings,
             phase: Phase::Idle,
+            asked: false,
             page: None,
             cancel: Arc::default(),
             step: None,
@@ -174,29 +198,37 @@ impl Updater {
 
     /// Whether updates are checked for automatically.
     pub(crate) fn automatic(&self) -> bool {
-        self.automatic
+        self.settings.automatic
     }
 
     /// When a check last read the latest release and settled, in seconds
     /// since the Unix epoch.
     pub(crate) fn last_check(&self) -> Option<u64> {
-        self.last_check
+        self.settings.last_check
     }
 
     /// Turns the automatic checks on or off. A manual check works either
     /// way.
     pub(crate) fn set_automatic(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.automatic = on;
+        self.settings.automatic = on;
         cx.notify();
     }
 
-    /// Checks for a newer release now, unless a check is under way or an
-    /// update is ready. A `manual` check tells how it ended when there is
-    /// nothing to install; an automatic one says nothing.
+    /// Checks for a newer release now. A `manual` check hears how it ended
+    /// when there is nothing to install; an automatic one says nothing.
+    /// While a check is under way, a manual one hears how that one ends.
+    /// While an update is ready there is nothing new to say: the offer
+    /// stands, in the bar, or there once the presentation ends.
     pub(crate) fn check(&mut self, manual: bool, cx: &mut Context<Self>) {
-        if !matches!(self.phase, Phase::Idle | Phase::Failed(_)) {
-            return;
+        match self.phase {
+            Phase::Idle | Phase::Failed(_) => {}
+            Phase::Checking | Phase::Downloading { .. } | Phase::Verifying { .. } => {
+                self.asked |= manual;
+                return;
+            }
+            Phase::Ready(_) => return,
         }
+        self.asked = manual;
         self.phase = Phase::Checking;
         cx.notify();
         let feed = self.feed.clone();
@@ -204,7 +236,7 @@ impl Updater {
         self.step = Some(cx.spawn(async move |this, cx| {
             let read = reading.await;
             // The updater is gone only as its window closes.
-            this.update(cx, |this, cx| this.found(read, manual, cx))
+            this.update(cx, |this, cx| this.found(read, cx))
                 .unwrap_or_default();
         }));
     }
@@ -223,9 +255,10 @@ impl Updater {
         cx.notify();
     }
 
-    /// The automatic check: only while automatic checks are on.
-    fn check_automatically(&mut self, cx: &mut Context<Self>) {
-        if self.automatic {
+    /// The automatic check, when automatic checks are on and the last
+    /// check is a day old or more by the calendar.
+    fn check_if_due(&mut self, cx: &mut Context<Self>) {
+        if self.settings.automatic && !recent(self.settings.last_check, now(cx)) {
             self.check(false, cx);
         }
     }
@@ -233,23 +266,18 @@ impl Updater {
     /// What the latest release says: nothing newer, a file to download, or
     /// an update the release page installs: there the owner has no file, or
     /// the release lacks this installation's.
-    fn found(
-        &mut self,
-        read: Result<(Agent, Release), String>,
-        manual: bool,
-        cx: &mut Context<Self>,
-    ) {
+    fn found(&mut self, read: Result<(Agent, Release), String>, cx: &mut Context<Self>) {
         let (agent, release) = match read {
             Ok(read) => read,
-            Err(reason) => return self.end(Phase::Failed(reason), manual, cx),
+            Err(reason) => return self.end(Phase::Failed(reason), cx),
         };
         if !feed::newer(&release, &self.running) {
-            return self.end(Phase::Idle, manual, cx);
+            return self.end(Phase::Idle, cx);
         }
         self.page = Some(release.page.clone());
         match feed::file_for(&release, self.owner).cloned() {
-            Some(asset) => self.download(agent, asset, release.version, manual, cx),
-            None => self.end(ready(release.version), manual, cx),
+            Some(asset) => self.download(agent, asset, release.version, cx),
+            None => self.end(ready(release.version), cx),
         }
     }
 
@@ -260,7 +288,6 @@ impl Updater {
         agent: Agent,
         asset: Asset,
         version: semver::Version,
-        manual: bool,
         cx: &mut Context<Self>,
     ) {
         self.phase = Phase::Downloading {
@@ -276,19 +303,14 @@ impl Updater {
         });
         self.step = Some(cx.spawn(async move |this, cx| {
             let downloaded = downloading.await.map_err(|error| error.to_string());
-            this.update(cx, |this, cx| this.downloaded(downloaded, manual, cx))
+            this.update(cx, |this, cx| this.downloaded(downloaded, cx))
                 .unwrap_or_default();
         }));
     }
 
     /// The download's end: its size and digest were the release's, and the
     /// update is ready, or it failed and nothing is left of it.
-    fn downloaded(
-        &mut self,
-        downloaded: Result<PathBuf, String>,
-        manual: bool,
-        cx: &mut Context<Self>,
-    ) {
+    fn downloaded(&mut self, downloaded: Result<PathBuf, String>, cx: &mut Context<Self>) {
         let Phase::Downloading { version } = &self.phase else {
             return;
         };
@@ -296,15 +318,15 @@ impl Updater {
             Ok(_staged) => ready(version.clone()),
             Err(reason) => Phase::Failed(reason),
         };
-        self.end(phase, manual, cx);
+        self.end(phase, cx);
     }
 
-    /// Ends a check in `phase`. A manual one hears how it went when there
+    /// Ends a check in `phase`. One asked for hears how it went when there
     /// is nothing to install. A check that settled, up to date or with an
     /// update ready, is the last check; one that failed is not, so the next
-    /// launch tries again.
-    fn end(&mut self, phase: Phase, manual: bool, cx: &mut Context<Self>) {
-        if manual {
+    /// hour's look tries again.
+    fn end(&mut self, phase: Phase, cx: &mut Context<Self>) {
+        if std::mem::take(&mut self.asked) {
             match &phase {
                 Phase::Idle => cx.emit(UpdateEvent::UpToDate(self.running.clone())),
                 Phase::Failed(reason) => cx.emit(UpdateEvent::CheckFailed(reason.clone())),
@@ -312,7 +334,7 @@ impl Updater {
             }
         }
         if matches!(phase, Phase::Idle | Phase::Ready(_)) {
-            self.last_check = Some(now());
+            self.settings.last_check = Some(now(cx));
         }
         self.phase = phase;
         cx.notify();
@@ -336,25 +358,18 @@ fn ready(version: semver::Version) -> Phase {
     })
 }
 
-/// The automatic checks: 5 s after launch, unless the last check was
-/// within a day, then every day while the app runs.
+/// The automatic checks: a look 5 s after launch, then every hour, for a
+/// check that is due.
 fn schedule(cx: &mut Context<Updater>) -> Task<()> {
     cx.spawn(async move |this, cx| {
-        cx.background_executor().timer(FIRST_CHECK).await;
-        let first = this.update(cx, |this, cx| {
-            if !recent(this.last_check, now()) {
-                this.check_automatically(cx);
-            }
-        });
-        // The updater is gone.
-        if first.is_err() {
-            return;
-        }
+        let mut wait = FIRST_CHECK;
         loop {
-            cx.background_executor().timer(DAY).await;
-            if this.update(cx, Updater::check_automatically).is_err() {
+            cx.background_executor().timer(wait).await;
+            // The updater is gone.
+            if this.update(cx, Updater::check_if_due).is_err() {
                 return;
             }
+            wait = HOUR;
         }
     })
 }
@@ -375,11 +390,18 @@ fn recent(last: Option<u64>, now: u64) -> bool {
     last.is_some_and(|last| last <= now && now - last < DAY.as_secs())
 }
 
-/// Seconds since the Unix epoch; 0 on a clock set before it.
-fn now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |since| since.as_secs())
+/// The calendar's time, in seconds since the Unix epoch; 0 on a clock set
+/// before it. GPUI's clock: the system's, or in tests the test scheduler's,
+/// which `advance_clock` moves.
+fn now(cx: &App) -> u64 {
+    let seconds = cx
+        .background_executor()
+        .scheduler_executor()
+        .scheduler()
+        .clock()
+        .utc_now()
+        .timestamp();
+    u64::try_from(seconds).unwrap_or(0)
 }
 
 #[cfg(test)]
