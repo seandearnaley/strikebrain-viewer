@@ -5,9 +5,12 @@ use std::path::Path;
 /// Who owns this installation, and so how an update reaches it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Owner {
-    /// A macOS app bundle the app can replace itself.
+    /// A macOS app bundle. Where a check finds that the release signed it,
+    /// with a Team ID, and that it can be replaced, the app replaces it.
     MacBundle,
-    /// A macOS app bundle that cannot be replaced; the disk image is opened.
+    /// A macOS app bundle the release signed that cannot be replaced: it is
+    /// translocated, or its folder cannot be written, as the disk image's
+    /// cannot. The checked disk image opens.
     MacUnreplaceable,
     /// A Windows install by the installer, which owns its files.
     WindowsInstaller,
@@ -26,9 +29,11 @@ const UNINSTALLER: &str = "unins000.exe";
 
 impl Owner {
     /// The owner of the installation whose executable is `exe`, by its path
-    /// and what sits beside it. Whether a macOS bundle can be replaced, and
-    /// whether the release signed it, is checked later; this says only what
-    /// kind of install it is.
+    /// and what sits beside it: only what kind of install it is, without
+    /// running anything, as the app opens. Whether a macOS bundle is the
+    /// release's, signed with a Team ID, and whether it can be replaced are
+    /// asked by each check that finds an update, on the background executor
+    /// (`update::macos::owner`).
     pub(crate) fn detect(exe: &Path) -> Self {
         if cfg!(target_os = "macos") {
             if in_app_bundle(exe) {
@@ -53,18 +58,19 @@ impl Owner {
 /// Whether `exe` is `<X>.app/Contents/MacOS/<exe>`: the layout of a bundle,
 /// which the app replaces as a whole.
 fn in_app_bundle(exe: &Path) -> bool {
-    let Some(macos) = exe.parent() else {
-        return false;
-    };
-    let Some(contents) = macos.parent() else {
-        return false;
-    };
-    let Some(app) = contents.parent() else {
-        return false;
-    };
-    macos.file_name().is_some_and(|name| name == "MacOS")
+    bundle_of(exe).is_some()
+}
+
+/// The bundle `exe` runs in, `<X>.app` of `<X>.app/Contents/MacOS/<exe>`;
+/// none if it is not laid out so.
+pub(crate) fn bundle_of(exe: &Path) -> Option<&Path> {
+    let macos = exe.parent()?;
+    let contents = macos.parent()?;
+    let app = contents.parent()?;
+    let laid_out = macos.file_name().is_some_and(|name| name == "MacOS")
         && contents.file_name().is_some_and(|name| name == "Contents")
-        && app.extension().is_some_and(|extension| extension == "app")
+        && app.extension().is_some_and(|extension| extension == "app");
+    laid_out.then_some(app)
 }
 
 /// Whether the installer's uninstaller sits beside `exe`: only an install
@@ -96,6 +102,11 @@ mod tests {
                 .join("Viewer.app/Contents/Resources/strikebrain-viewer")
         ));
         assert!(!in_app_bundle(Path::new("strikebrain-viewer")));
+        assert_eq!(
+            bundle_of(&exe),
+            Some(tmp.path().join("Strikebrain Viewer.app").as_path())
+        );
+        assert_eq!(bundle_of(&tmp.path().join("strikebrain-viewer")), None);
     }
 
     #[test]

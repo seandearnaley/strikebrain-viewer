@@ -27,7 +27,7 @@ use crate::{
     PROJECT, click, dispatch, folder, node, open_app_with_session, press, read, row, tree,
 };
 
-/// The release's page, which the stub install opens.
+/// The release's page, which opens where nothing else installs the update.
 const PAGE: &str = "https://github.com/seandearnaley/strikebrain-viewer/releases/tag/v9.9.9";
 
 /// A day of GPUI's clock.
@@ -158,9 +158,14 @@ fn deb(version: &str) -> String {
 /// GitHub's latest-release reply for `version`, carrying its `.deb` at
 /// `url` with the size and digest of `file`.
 fn release(version: &str, file: &[u8], url: &str) -> String {
+    release_of(&deb(version), version, file, url)
+}
+
+/// GitHub's latest-release reply for `version`, carrying the file `name`
+/// at `url` with the size and digest of `file`.
+fn release_of(name: &str, version: &str, file: &[u8], url: &str) -> String {
     format!(
-        r#"{{"tag_name": "v{version}", "html_url": "{PAGE}", "assets": [{{"name": "{}", "size": {}, "digest": "sha256:{}", "browser_download_url": "{url}"}}]}}"#,
-        deb(version),
+        r#"{{"tag_name": "v{version}", "html_url": "{PAGE}", "assets": [{{"name": "{name}", "size": {}, "digest": "sha256:{}", "browser_download_url": "{url}"}}]}}"#,
         file.len(),
         sha256(file)
     )
@@ -360,6 +365,37 @@ fn where_the_release_page_installs_an_update_is_offered_without_a_download(
     assert_eq!(server.requests(), ["/latest"]);
     assert_eq!(update_button(cx, handle), Some(install_9_9_9()));
     assert_eq!(files_in(updates.path()), Vec::<String>::new());
+}
+
+#[cfg(target_os = "macos")]
+#[gpui_kit::test]
+fn a_bundle_the_release_did_not_sign_is_offered_the_release_page(cx: &mut TestAppContext) {
+    let server = Server::start();
+    let file = b"the newer release";
+    let dmg = "Strikebrain-Viewer-9.9.9-macos-arm64.dmg";
+    server.serve(
+        "/latest",
+        release_of(dmg, "9.9.9", file, &server.url("/dmg")),
+    );
+    server.serve("/dmg", file.to_vec());
+    let updates = tempfile::tempdir().unwrap();
+    // Tests run from a bare executable, as a development build does; a
+    // bundle signed ad hoc has no Team ID either. Neither is the release's.
+    let handle = open(
+        cx,
+        UpdateOptions {
+            owner: Owner::MacBundle,
+            ..options(&server, updates.path())
+        },
+        None,
+    );
+
+    dispatch(cx, handle, CheckForUpdates);
+    assert_eq!(server.requests(), ["/latest"]);
+    assert_eq!(update_button(cx, handle), Some(install_9_9_9()));
+    assert_eq!(files_in(updates.path()), Vec::<String>::new());
+    click(cx, handle, "update");
+    assert_eq!(cx.opened_url().as_deref(), Some(PAGE));
 }
 
 #[gpui_kit::test]
