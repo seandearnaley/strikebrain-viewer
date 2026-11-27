@@ -95,7 +95,8 @@ pub(crate) enum Phase {
     /// it streams.
     Downloading { version: semver::Version },
     /// Checking the downloaded file of `version` as its platform asks: its
-    /// signature against the running app's.
+    /// signature against the running app's. On macOS also the staged copy,
+    /// once more, as **Restart to Update** is pressed.
     #[cfg_attr(
         not(target_os = "macos"),
         expect(
@@ -140,19 +141,35 @@ pub(crate) enum How {
 enum Plan {
     /// Opens the release's page, where the person installs it.
     Page,
-    /// Opens the checked disk image in Finder, where the bundle cannot be
-    /// replaced.
+    /// Opens the disk image `image` in Finder, where the bundle cannot be
+    /// replaced, once it is checked again against `asset`, the release's
+    /// file.
     #[cfg(target_os = "macos")]
-    Open(PathBuf),
-    /// Replaces the bundle `installed` with the checked copy `staged`
-    /// beside it and relaunches. If that fails, the old bundle is back in
-    /// place and the disk image `image` opens instead.
+    Open { image: PathBuf, asset: Asset },
+    /// Replaces the bundle with the staged copy and relaunches.
     #[cfg(target_os = "macos")]
-    Swap {
-        installed: PathBuf,
-        staged: PathBuf,
-        image: PathBuf,
-    },
+    Swap(Swap),
+}
+
+/// The macOS swap an update offers, as [`Updater::swap_in`] carries it out.
+#[cfg(target_os = "macos")]
+#[derive(Debug)]
+struct Swap {
+    /// The version the staged app is.
+    version: semver::Version,
+    /// The running bundle, which the staged app replaces.
+    installed: PathBuf,
+    /// The checked copy of the update's app, beside the running bundle.
+    staged: PathBuf,
+    /// Who signed the running app, whose requirement the copy must satisfy
+    /// again before it moves in.
+    signer: macos::Signer,
+    /// The disk image the copy came from, which opens if the swap does not
+    /// happen.
+    image: PathBuf,
+    /// The release's file, which the disk image is checked against again
+    /// before it opens.
+    asset: Asset,
 }
 
 /// How a manual check ended with nothing to install, for the root view to
@@ -287,39 +304,78 @@ impl Updater {
     }
 
     /// Installs the update offered, through whatever owns the installation,
-    /// as its plan says. The offer is then used. On macOS a bundle that can
-    /// be replaced is swapped for the staged copy here, two renames and the
-    /// old app's removal, and the app relaunches as the new version.
+    /// as its plan says. The offer is then used. On macOS the disk image is
+    /// checked against the release again before it opens, and a staged copy
+    /// is checked again before it replaces the bundle ([`Self::swap_in`]).
     pub(crate) fn install(&mut self, cx: &mut Context<Self>) {
         if self.offer().is_none() {
             return;
         }
-        let plan = self.plan.take();
+        let Some(plan) = self.plan.take() else {
+            return;
+        };
         self.phase = Phase::Idle;
         cx.notify();
         match plan {
-            Some(Plan::Page) => {
+            Plan::Page => {
                 if let Some(page) = &self.page {
                     cx.open_url(page);
                 }
             }
             #[cfg(target_os = "macos")]
-            Some(Plan::Open(image)) => cx.open_with_system(&image),
+            Plan::Open { image, asset } => open_image(image, asset, cx),
             #[cfg(target_os = "macos")]
-            Some(Plan::Swap {
-                installed,
-                staged,
-                image,
-            }) => {
-                if macos::swap(&installed, &staged).is_ok() {
-                    cx.set_restart_path(installed);
-                    cx.restart();
-                } else {
-                    // The old app is back in place, and the app runs on.
-                    cx.open_with_system(&image);
-                }
+            Plan::Swap(swap) => self.swap_in(swap, cx),
+        }
+    }
+
+    /// Checks the staged copy again on the background executor, as
+    /// **Restart to Update** asks for it: it may have sat beside the app
+    /// for days. Meanwhile the update is verifying again, so the button
+    /// goes and no check starts.
+    #[cfg(target_os = "macos")]
+    fn swap_in(&mut self, swap: Swap, cx: &mut Context<Self>) {
+        self.phase = Phase::Verifying {
+            version: swap.version.clone(),
+        };
+        cx.notify();
+        let (staged, signer) = (swap.staged.clone(), swap.signer.clone());
+        let checking = cx.background_spawn(async move { macos::check_staged(&staged, &signer) });
+        self.step = Some(cx.spawn(async move |this, cx| {
+            let checked = checking.await;
+            this.update(cx, |this, cx| this.swapped(checked, swap, cx))
+                .unwrap_or_default();
+        }));
+    }
+
+    /// The second check's end. Where it passed and the swap worked, the app
+    /// relaunches as the new version. Otherwise the reason ends the update,
+    /// which a manual check asked for meanwhile hears, and the disk image,
+    /// checked against the release again, opens so the person can install
+    /// it. A copy that failed its check is removed, and the old app is
+    /// still in place. A swap that failed has put the old app back, or, if
+    /// that failed too, left it in the staging folder, which the reason
+    /// names.
+    #[cfg(target_os = "macos")]
+    fn swapped(&mut self, checked: Result<(), macos::Error>, swap: Swap, cx: &mut Context<Self>) {
+        let Swap {
+            installed,
+            staged,
+            image,
+            asset,
+            ..
+        } = swap;
+        match checked.and_then(|()| macos::swap(&installed, &staged)) {
+            Ok(()) => {
+                cx.set_restart_path(installed);
+                cx.restart();
             }
-            None => {}
+            Err(error) => {
+                // As for a check that failed: the next attempt waits a day.
+                self.last_attempt = Some(now(cx));
+                self.end(Phase::Failed(error.to_string()), cx);
+                open_image(image, asset, cx);
+            }
         }
     }
 
@@ -371,14 +427,15 @@ impl Updater {
         cx.notify();
         let updates = self.updates_dir.clone();
         let cancel = Arc::clone(&self.cancel);
+        let wanted = asset.clone();
         let downloading = cx.background_spawn(async move {
             let updates = updates.ok_or(download::Error::NoCacheFolder)?;
             let into = download::staging_dir(&updates, &version)?;
-            download::file(&agent, &asset, &into, &cancel)
+            download::file(&agent, &wanted, &into, &cancel)
         });
         self.step = Some(cx.spawn(async move |this, cx| {
             let downloaded = downloading.await.map_err(|error| error.to_string());
-            this.update(cx, |this, cx| this.downloaded(downloaded, owner, cx))
+            this.update(cx, |this, cx| this.downloaded(downloaded, owner, asset, cx))
                 .unwrap_or_default();
         }));
     }
@@ -390,6 +447,7 @@ impl Updater {
         &mut self,
         downloaded: Result<PathBuf, String>,
         owner: Owner,
+        asset: Asset,
         cx: &mut Context<Self>,
     ) {
         let Phase::Downloading { version } = &self.phase else {
@@ -397,7 +455,7 @@ impl Updater {
         };
         let version = version.clone();
         match downloaded {
-            Ok(file) => self.verify(file, version, owner, cx),
+            Ok(file) => self.verify(file, version, owner, asset, cx),
             Err(reason) => self.end(Phase::Failed(reason), cx),
         }
     }
@@ -414,6 +472,7 @@ impl Updater {
         image: PathBuf,
         version: semver::Version,
         owner: Owner,
+        asset: Asset,
         cx: &mut Context<Self>,
     ) {
         let replace = match owner {
@@ -430,7 +489,7 @@ impl Updater {
         });
         self.step = Some(cx.spawn(async move |this, cx| {
             let verified = verifying.await;
-            this.update(cx, |this, cx| this.verified(verified, cx))
+            this.update(cx, |this, cx| this.verified(verified, asset, cx))
                 .unwrap_or_default();
         }));
     }
@@ -444,6 +503,7 @@ impl Updater {
         _file: PathBuf,
         version: semver::Version,
         _owner: Owner,
+        _asset: Asset,
         cx: &mut Context<Self>,
     ) {
         self.make_offer(version, How::Install, Plan::Page, cx);
@@ -455,6 +515,7 @@ impl Updater {
     fn verified(
         &mut self,
         verified: Result<(macos::Prepared, PathBuf), String>,
+        asset: Asset,
         cx: &mut Context<Self>,
     ) {
         let Phase::Verifying { version } = &self.phase else {
@@ -462,16 +523,27 @@ impl Updater {
         };
         let version = version.clone();
         match verified {
-            Ok((macos::Prepared::Swap { installed, staged }, image)) => {
-                let plan = Plan::Swap {
+            Ok((
+                macos::Prepared::Swap {
                     installed,
                     staged,
+                    signer,
+                },
+                image,
+            )) => {
+                let plan = Plan::Swap(Swap {
+                    version: version.clone(),
+                    installed,
+                    staged,
+                    signer,
                     image,
-                };
+                    asset,
+                });
                 self.make_offer(version, How::Restart, plan, cx);
             }
             Ok((macos::Prepared::Open, image)) => {
-                self.make_offer(version, How::Install, Plan::Open(image), cx);
+                let plan = Plan::Open { image, asset };
+                self.make_offer(version, How::Install, plan, cx);
             }
             Err(reason) => self.end(Phase::Failed(reason), cx),
         }
@@ -516,6 +588,22 @@ impl Drop for Updater {
         // wrote.
         self.cancel.store(true, Ordering::Relaxed);
     }
+}
+
+/// Opens the disk image `image` in Finder once it is checked again, on the
+/// background executor, against `asset`, the release's file: it may have
+/// sat in the cache folder for days. One that is no longer the release's
+/// is removed and nothing opens.
+#[cfg(target_os = "macos")]
+fn open_image(image: PathBuf, asset: Asset, cx: &mut Context<Updater>) {
+    let checking =
+        cx.background_spawn(async move { download::check_again(&image, &asset).map(|()| image) });
+    cx.spawn(async move |_, cx| {
+        if let Ok(image) = checking.await {
+            cx.update(|cx| cx.open_with_system(&image));
+        }
+    })
+    .detach();
 }
 
 /// The automatic checks: a look 5 s after launch, then every hour, for a
