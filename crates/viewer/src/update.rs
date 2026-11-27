@@ -9,7 +9,9 @@
 //! answers to a manual check as alerts.
 //!
 //! Each platform's last step is its own module: on macOS, `macos` checks
-//! the disk image's app against the running one and replaces the bundle.
+//! the disk image's app against the running one and replaces the bundle;
+//! on Windows, `windows` checks the installer's signature against the
+//! running app's and runs it, and it relaunches the app.
 
 mod download;
 mod feed;
@@ -18,6 +20,8 @@ mod install;
 mod macos;
 #[cfg(test)]
 mod test_server;
+#[cfg(any(windows, test))]
+mod windows;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -74,9 +78,9 @@ pub struct UpdateOptions {
     /// The version running: a release is an update when it is greater.
     pub running: semver::Version,
     /// Who owns this installation, and so which file updates it: what
-    /// `Owner::detect` finds as the app opens. On macOS each check that
-    /// finds an update asks again whether the release signed the bundle and
-    /// whether it can be replaced.
+    /// `Owner::detect` finds as the app opens. On macOS and Windows each
+    /// check that finds an update asks again whether the release signed the
+    /// app, and on macOS whether the bundle can be replaced.
     pub owner: Owner,
     /// Where each version's files download: the cache folder's `updates`,
     /// or a temporary folder in tests. `None` where the platform gives no
@@ -95,13 +99,14 @@ pub(crate) enum Phase {
     /// it streams.
     Downloading { version: semver::Version },
     /// Checking the downloaded file of `version` as its platform asks: its
-    /// signature against the running app's. On macOS also the staged copy,
-    /// once more, as **Restart to Update** is pressed.
+    /// signature against the running app's. Again as **Restart to Update**
+    /// is pressed: on macOS the staged copy's signature, on Windows the
+    /// installer's digest.
     #[cfg_attr(
-        not(target_os = "macos"),
+        not(any(target_os = "macos", windows)),
         expect(
             dead_code,
-            reason = "entered on macOS; Windows checks its installer's signature in a step still to come"
+            reason = "macOS and Windows check a signature; elsewhere the digest checked as the file downloads is all"
         )
     )]
     Verifying { version: semver::Version },
@@ -124,10 +129,10 @@ pub(crate) enum How {
     /// The app is replaced, by itself or by the installer, and restarts:
     /// the macOS bundle, an install by the Windows installer.
     #[cfg_attr(
-        all(not(test), not(target_os = "macos")),
+        all(not(test), not(any(target_os = "macos", windows))),
         expect(
             dead_code,
-            reason = "offered on macOS; Windows installs and restarts in a step still to come"
+            reason = "offered on macOS and Windows; elsewhere another program installs"
         )
     )]
     Restart,
@@ -149,6 +154,15 @@ enum Plan {
     /// Replaces the bundle with the staged copy and relaunches.
     #[cfg(target_os = "macos")]
     Swap(Swap),
+    /// Runs `installer`, the release's file `asset` of `version`, once it
+    /// is checked against `asset` again, and quits; the installer
+    /// relaunches the app.
+    #[cfg(windows)]
+    Run {
+        version: semver::Version,
+        installer: PathBuf,
+        asset: Asset,
+    },
 }
 
 /// The macOS swap an update offers, as [`Updater::swap_in`] carries it out.
@@ -306,7 +320,9 @@ impl Updater {
     /// Installs the update offered, through whatever owns the installation,
     /// as its plan says. The offer is then used. On macOS the disk image is
     /// checked against the release again before it opens, and a staged copy
-    /// is checked again before it replaces the bundle ([`Self::swap_in`]).
+    /// is checked again before it replaces the bundle ([`Self::swap_in`]);
+    /// on Windows the installer is checked against the release again before
+    /// it runs (`Self::run_installer`).
     pub(crate) fn install(&mut self, cx: &mut Context<Self>) {
         if self.offer().is_none() {
             return;
@@ -326,6 +342,12 @@ impl Updater {
             Plan::Open { image, asset } => open_image(image, asset, cx),
             #[cfg(target_os = "macos")]
             Plan::Swap(swap) => self.swap_in(swap, cx),
+            #[cfg(windows)]
+            Plan::Run {
+                version,
+                installer,
+                asset,
+            } => self.run_installer(version, installer, asset, cx),
         }
     }
 
@@ -375,6 +397,53 @@ impl Updater {
                 self.last_attempt = Some(now(cx));
                 self.end(Phase::Failed(error.to_string()), cx);
                 open_image(image, asset, cx);
+            }
+        }
+    }
+
+    /// Hashes the installer of `version` again on the background executor,
+    /// as **Restart to Update** asks for it: it may have sat in the cache
+    /// folder for days. One that is still the release's file `asset` starts
+    /// there too, off the UI thread, where starting a process can run the
+    /// window's messages. Meanwhile the update is verifying again, so the
+    /// button goes and no check starts.
+    #[cfg(windows)]
+    fn run_installer(
+        &mut self,
+        version: semver::Version,
+        installer: PathBuf,
+        asset: Asset,
+        cx: &mut Context<Self>,
+    ) {
+        self.phase = Phase::Verifying { version };
+        cx.notify();
+        let starting = cx.background_spawn(async move {
+            download::check_again(&installer, &asset).map_err(|error| error.to_string())?;
+            windows::run(&installer).map_err(|error| error.to_string())
+        });
+        self.step = Some(cx.spawn(async move |this, cx| {
+            let started = starting.await;
+            this.update(cx, |this, cx| this.started(started, cx))
+                .unwrap_or_default();
+        }));
+    }
+
+    /// The installer's start. Once it runs, the app quits, so none of its
+    /// files is in use, and the installer relaunches it. Otherwise the
+    /// reason ends the update, which a manual check asked for meanwhile
+    /// hears, and the release page opens so the person can install it. An
+    /// installer that is no longer the release's was removed.
+    #[cfg(windows)]
+    fn started(&mut self, started: Result<(), String>, cx: &mut Context<Self>) {
+        match started {
+            Ok(()) => cx.quit(),
+            Err(reason) => {
+                // As for a check that failed: the next attempt waits a day.
+                self.last_attempt = Some(now(cx));
+                self.end(Phase::Failed(reason), cx);
+                if let Some(page) = &self.page {
+                    cx.open_url(page);
+                }
             }
         }
     }
@@ -494,10 +563,40 @@ impl Updater {
         }));
     }
 
+    /// Checks the downloaded installer `installer` of `version` on the
+    /// background executor against the running app's signature, then
+    /// offers it: **Restart to Update**, which runs it. Another owner's
+    /// file, which tests download, is installed from the release page.
+    #[cfg(windows)]
+    fn verify(
+        &mut self,
+        installer: PathBuf,
+        version: semver::Version,
+        owner: Owner,
+        asset: Asset,
+        cx: &mut Context<Self>,
+    ) {
+        if owner != Owner::WindowsInstaller {
+            return self.make_offer(version, How::Install, Plan::Page, cx);
+        }
+        self.phase = Phase::Verifying { version };
+        cx.notify();
+        let verifying = cx.background_spawn(async move {
+            windows::check(&installer)
+                .map(|()| installer)
+                .map_err(|error| error.to_string())
+        });
+        self.step = Some(cx.spawn(async move |this, cx| {
+            let verified = verifying.await;
+            this.update(cx, |this, cx| this.verified(verified, asset, cx))
+                .unwrap_or_default();
+        }));
+    }
+
     /// Checks the downloaded `file` of `version` as its platform asks, then
-    /// offers it. Windows and Linux check their files in steps still to
-    /// come; until then the release page installs the update.
-    #[cfg(not(target_os = "macos"))]
+    /// offers it. Linux checks its file in a step still to come; until then
+    /// the release page installs the update.
+    #[cfg(not(any(target_os = "macos", windows)))]
     fn verify(
         &mut self,
         _file: PathBuf,
@@ -544,6 +643,32 @@ impl Updater {
             Ok((macos::Prepared::Open, image)) => {
                 let plan = Plan::Open { image, asset };
                 self.make_offer(version, How::Install, plan, cx);
+            }
+            Err(reason) => self.end(Phase::Failed(reason), cx),
+        }
+    }
+
+    /// The installer's check's end: the update is offered, or it failed and
+    /// the installer is gone.
+    #[cfg(windows)]
+    fn verified(
+        &mut self,
+        verified: Result<PathBuf, String>,
+        asset: Asset,
+        cx: &mut Context<Self>,
+    ) {
+        let Phase::Verifying { version } = &self.phase else {
+            return;
+        };
+        let version = version.clone();
+        match verified {
+            Ok(installer) => {
+                let plan = Plan::Run {
+                    version: version.clone(),
+                    installer,
+                    asset,
+                };
+                self.make_offer(version, How::Restart, plan, cx);
             }
             Err(reason) => self.end(Phase::Failed(reason), cx),
         }
@@ -648,11 +773,17 @@ fn read(
 /// The owner of this installation, which [`Owner::detect`] found to be
 /// `owner`, as the system says now. On macOS a bundle is the release's
 /// only if signed with a Team ID, and can be replaced only where its folder
-/// can be written: `macos::owner`. Blocking.
+/// can be written: `macos::owner`. On Windows an install by the installer
+/// is updated by it only if the app is validly signed: `windows::owner`.
+/// Blocking.
 fn refine(owner: Owner) -> Owner {
     #[cfg(target_os = "macos")]
     if matches!(owner, Owner::MacBundle | Owner::MacUnreplaceable) {
         return macos::owner();
+    }
+    #[cfg(windows)]
+    if owner == Owner::WindowsInstaller {
+        return windows::owner();
     }
     owner
 }

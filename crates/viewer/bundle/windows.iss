@@ -35,4 +35,9 @@ Source: "{#Stage}\LICENSE-*"; DestDir: "{app}"; Flags: ignoreversion
 Name: "{autoprograms}\Strikebrain Viewer"; Filename: "{app}\strikebrain-viewer.exe"
 
 [Run]
+; Installed by hand: a box on the last page opens the app.
 Filename: "{app}\strikebrain-viewer.exe"; Description: "{cm:LaunchProgram,Strikebrain Viewer}"; Flags: nowait postinstall skipifsilent
+; Installed silently, as an update installs, which quit the app to replace
+; it: the app opens again, as the person who started Setup, and Setup does
+; not wait for it.
+Filename: "{app}\strikebrain-viewer.exe"; Flags: nowait runasoriginaluser skipifnotsilent
