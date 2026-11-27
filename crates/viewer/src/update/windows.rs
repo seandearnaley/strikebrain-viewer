@@ -10,7 +10,8 @@
 //! background executor.
 //!
 //! PowerShell is Windows PowerShell, by its full path in the system folder,
-//! with no profile and no prompts. The file reaches the script in an
+//! with no profile, no prompts and its own module path. The file reaches
+//! the script in an
 //! environment variable, never in its text, so no path can change the
 //! command; and the script holds no double quote or backslash, so the
 //! command line carries it whole. It writes the subject's UTF-8 bytes
@@ -24,10 +25,12 @@ use std::fmt;
 use std::io;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt as _;
+use std::path::Path;
 #[cfg(windows)]
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+use std::process::Command;
 #[cfg(windows)]
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 #[cfg(windows)]
 use super::install::Owner;
@@ -81,6 +84,9 @@ const SCRIPT: &str = concat!(
 
 /// The environment variable that carries the file to [`SCRIPT`].
 const FILE_VARIABLE: &str = "STRIKEBRAIN_VIEWER_SIGNED";
+
+/// The environment variable that lists where PowerShell finds its modules.
+const MODULE_PATH: &str = "PSModulePath";
 
 /// The program that reads signatures, named in a reason.
 #[cfg(windows)]
@@ -172,12 +178,7 @@ fn running_publisher() -> Result<Option<String>, Error> {
 /// subject of the identity it validated. Runs PowerShell.
 #[cfg(windows)]
 fn publisher(file: &Path) -> Result<Option<String>, Error> {
-    let mut powershell = Command::new(powershell_path()?);
-    powershell
-        .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
-        .env(FILE_VARIABLE, file)
-        .creation_flags(CREATE_NO_WINDOW);
-    let output = powershell
+    let output = powershell(&powershell_path()?, file)
         .output()
         .map_err(|error| Error::Run(POWERSHELL, error))?;
     if !output.status.success() {
@@ -185,6 +186,29 @@ fn publisher(file: &Path) -> Result<Option<String>, Error> {
         return Err(Error::Failed(said));
     }
     Ok(publisher_in(&output.stdout))
+}
+
+/// The command that runs [`SCRIPT`] on `file` with the Windows PowerShell
+/// at `program`: no profile, no prompts, the file in [`FILE_VARIABLE`], and
+/// no console window.
+///
+/// `PSModulePath` is removed. Inherited from PowerShell 7, as when the app
+/// is started from a `pwsh` terminal, it lists PowerShell 7's modules
+/// first, and Windows PowerShell finds a `Microsoft.PowerShell.Security`
+/// it cannot load, so `Get-AuthenticodeSignature` fails. Without the
+/// variable, Windows PowerShell builds its own default: "If `PSModulePath`
+/// doesn't exist, combine `CurrentUser`, `AllUsers`, and the `$PSHOME`
+/// modules paths" (`about_PSModulePath` for PowerShell 5.1, whose note on
+/// a process tree that contains PowerShell 7 names this very case).
+fn powershell(program: &Path, file: &Path) -> Command {
+    let mut command = Command::new(program);
+    command
+        .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
+        .env(FILE_VARIABLE, file)
+        .env_remove(MODULE_PATH);
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+    command
 }
 
 /// Windows PowerShell's full path, in the system folder `SystemRoot` names.
@@ -303,6 +327,26 @@ mod tests {
         assert!(SCRIPT.contains("$signature.Status -eq 'Valid'"));
         // The command line carries it whole only with neither inside.
         assert!(!SCRIPT.contains(['"', '\\']), "{SCRIPT}");
+    }
+
+    #[test]
+    fn powershell_runs_with_its_own_module_path_and_the_file_in_the_environment() {
+        let command = powershell(Path::new("powershell.exe"), Path::new("setup.exe"));
+        let envs: Vec<_> = command.get_envs().collect();
+        // Removed, whatever the app inherited, so PowerShell builds its own.
+        assert!(
+            envs.iter()
+                .any(|(key, value)| key.eq_ignore_ascii_case(MODULE_PATH) && value.is_none()),
+            "{envs:?}"
+        );
+        assert!(
+            envs.contains(&(FILE_VARIABLE.as_ref(), Some("setup.exe".as_ref()))),
+            "{envs:?}"
+        );
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            ["-NoProfile", "-NonInteractive", "-Command", SCRIPT]
+        );
     }
 
     #[test]

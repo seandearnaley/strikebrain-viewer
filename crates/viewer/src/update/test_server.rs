@@ -17,13 +17,35 @@ use ureq::unversioned::transport::{
     Buffers, ConnectionDetails, Connector, NextTimeout, TcpConnector, Transport,
 };
 
+/// How much of a body one write takes.
+const CHUNK: usize = 64 * 1024;
+
 /// A reply: its status, where it redirects, and its body.
 /// `Content-Length` and `Connection: close` are added.
 #[derive(Clone, Debug)]
 pub(crate) struct Reply {
     status: &'static str,
     location: Option<String>,
-    body: Vec<u8>,
+    body: Body,
+}
+
+/// A reply's body.
+#[derive(Clone, Debug)]
+enum Body {
+    /// These bytes.
+    Bytes(Vec<u8>),
+    /// `length` bytes of `byte`, never held whole.
+    Repeated { byte: u8, length: u64 },
+}
+
+impl Body {
+    /// How many bytes the body has, as `Content-Length` says.
+    fn len(&self) -> u64 {
+        match self {
+            Self::Bytes(bytes) => bytes.len() as u64,
+            Self::Repeated { length, .. } => *length,
+        }
+    }
 }
 
 impl Reply {
@@ -32,7 +54,18 @@ impl Reply {
         Self {
             status: "200 OK",
             location: None,
-            body: body.into(),
+            body: Body::Bytes(body.into()),
+        }
+    }
+
+    /// `200 OK` with `length` bytes of `byte`, written a chunk at a time
+    /// from one chunk: a body longer than any socket's buffers hold, which
+    /// the server writes whole only if the client reads it whole.
+    pub(crate) fn long(byte: u8, length: u64) -> Self {
+        Self {
+            status: "200 OK",
+            location: None,
+            body: Body::Repeated { byte, length },
         }
     }
 
@@ -41,7 +74,7 @@ impl Reply {
         Self {
             status: "302 Found",
             location: Some(location.to_owned()),
-            body: Vec::new(),
+            body: Body::Bytes(Vec::new()),
         }
     }
 
@@ -49,19 +82,21 @@ impl Reply {
         Self {
             status: "404 Not Found",
             location: None,
-            body: Vec::new(),
+            body: Body::Bytes(Vec::new()),
         }
     }
 }
 
 /// A request as the server read it: its first line and its headers, names
-/// in lower case, and whether the whole reply was written. The client may
-/// hang up first, as on a body longer than it takes; `whole` is settled
-/// once the server has [stopped](Server::stop).
+/// in lower case, how many bytes of the reply's body were written, and
+/// whether that was all of it. The client may hang up first, as on a body
+/// longer than it takes; `written` and `whole` are settled once the server
+/// has [stopped](Server::stop).
 #[derive(Clone, Debug)]
 pub(crate) struct Request {
     pub(crate) line: String,
     pub(crate) headers: Vec<(String, String)>,
+    pub(crate) written: u64,
     pub(crate) whole: bool,
 }
 
@@ -201,6 +236,7 @@ fn answer(stream: &TcpStream, routes: &Routes, requests: &Requests) -> io::Resul
         requests.push(Request {
             line,
             headers,
+            written: 0,
             whole: false,
         });
         requests.len() - 1
@@ -212,18 +248,53 @@ fn answer(stream: &TcpStream, routes: &Routes, requests: &Requests) -> io::Resul
     let location = reply
         .location
         .map_or_else(String::new, |to| format!("Location: {to}\r\n"));
+    let length = reply.body.len();
     let head = format!(
-        "HTTP/1.1 {}\r\nContent-Length: {}\r\nConnection: close\r\n{location}\r\n",
+        "HTTP/1.1 {}\r\nContent-Length: {length}\r\nConnection: close\r\n{location}\r\n",
         reply.status,
-        reply.body.len()
     );
     let mut stream = stream;
     stream.write_all(head.as_bytes())?;
-    stream.write_all(&reply.body)?;
+    let written = write_body(&mut stream, &reply.body);
     if let Some(request) = lock(requests).get_mut(index) {
-        request.whole = true;
+        request.written = written;
+        request.whole = written == length;
     }
     Ok(())
+}
+
+/// Writes `body` to `stream` a chunk at a time until all of it is written
+/// or the client hangs up; how many of its bytes went.
+fn write_body(stream: &mut impl io::Write, body: &Body) -> u64 {
+    let mut written = 0_u64;
+    let mut send = |chunk: &[u8]| {
+        let sent = stream.write_all(chunk).is_ok();
+        if sent {
+            written += chunk.len() as u64;
+        }
+        sent
+    };
+    match body {
+        Body::Bytes(bytes) => {
+            for chunk in bytes.chunks(CHUNK) {
+                if !send(chunk) {
+                    break;
+                }
+            }
+        }
+        Body::Repeated { byte, length } => {
+            let chunk = vec![*byte; CHUNK];
+            let mut left = *length;
+            while left > 0 {
+                let size = usize::try_from(left).map_or(CHUNK, |left| left.min(CHUNK));
+                if !send(&chunk[..size]) {
+                    break;
+                }
+                left -= size as u64;
+            }
+        }
+    }
+    written
 }
 
 /// An agent with `config` that speaks plain HTTP over TCP to `https`
