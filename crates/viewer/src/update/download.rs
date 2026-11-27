@@ -342,7 +342,7 @@ mod tests {
     use std::net::TcpListener;
     use std::sync::atomic::Ordering;
 
-    use super::super::test_server::{Reply, Server, plain_as_tls};
+    use super::super::test_server::{Reply, Request, Server, plain_as_tls};
     use super::*;
 
     const NAME: &str = "Strikebrain-Viewer-9.9.9-macos-arm64.dmg";
@@ -608,18 +608,23 @@ mod tests {
 
     #[test]
     fn a_body_far_longer_than_the_size_is_cut_off() {
+        // A gigabyte, far more than any socket's buffers hold: Windows'
+        // loopback takes 32 MiB whole. The server can write it all only if
+        // the client reads it all.
+        const LONG: u64 = 1 << 30;
         let server = Server::start();
-        // Far more than a socket's buffers hold, so the server can write it
-        // all only if the client reads it all.
-        let body = vec![b'x'; 32 << 20];
-        server.route("/dmg", Reply::ok(body.clone()));
+        server.route("/dmg", Reply::long(b'x', LONG));
         let tmp = tempfile::tempdir().unwrap();
-        let result = download(&asset(&body[..10], server.url("/dmg")), tmp.path());
+        let result = download(&asset(&[b'x'; 10], server.url("/dmg")), tmp.path());
         assert!(matches!(result, Err(Error::Size)), "{result:?}");
         assert_eq!(listing(tmp.path()), NOTHING);
         let requests = server.stop();
         assert_eq!(requests.len(), 1);
-        assert!(!requests[0].whole, "the client read the whole body");
+        let Request { written, whole, .. } = requests[0];
+        assert!(
+            !whole && written < LONG / 2,
+            "the server wrote {written} of {LONG} bytes"
+        );
     }
 
     #[test]
