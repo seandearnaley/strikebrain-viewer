@@ -191,8 +191,9 @@ impl AppView {
         };
         let app_state = cx.new(|cx| AppState::with_options(launch, options, cx));
         let explorer_hidden = session.explorer_hidden && !app_state.read(cx).is_empty();
-        let explorer = cx.new(|cx| ExplorerPanel::new(app_state.clone(), window, cx));
         let stage = cx.new(|cx| Stage::new(app_state.clone(), window, cx));
+        let stage_focus = stage.focus_handle(cx);
+        let explorer = cx.new(|cx| ExplorerPanel::new(app_state.clone(), stage_focus, window, cx));
         let split = cx.new(|_| ResizableState::default());
         let update_settings = session.update_settings;
         let updater = session

@@ -168,17 +168,16 @@ fn copy_path_takes_the_focus_row_and_from_the_stage_its_file(cx: &mut TestAppCon
     click(cx, handle, row(a));
     press(cx, handle, "secondary-alt-c");
     let a_path = root.join("a.txt").to_string_lossy().into_owned();
-    assert_eq!(clipboard(cx), Some(a_path.clone()));
+    assert_eq!(clipboard(cx), Some(a_path));
 
-    // Focus moves up the tree, to the folder above; the stage keeps its
-    // file. Each pane copies its own.
+    // Moving up previews the folder. Both panes now copy its path.
     press(cx, handle, "up");
     choose(cx, handle, "viewer::CopyPath");
     let sub = root.join("sub").to_string_lossy().into_owned();
-    assert_eq!(clipboard(cx), Some(sub));
+    assert_eq!(clipboard(cx), Some(sub.clone()));
     press(cx, handle, "tab");
     choose(cx, handle, "viewer::CopyPath");
-    assert_eq!(clipboard(cx), Some(a_path));
+    assert_eq!(clipboard(cx), Some(sub));
     // Reveal goes to the system; here it only has to be on offer.
     assert!(enabled(cx, handle, "viewer::Reveal"));
 }

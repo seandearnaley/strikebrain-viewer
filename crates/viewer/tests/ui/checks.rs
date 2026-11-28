@@ -136,28 +136,19 @@ fn unchecking_the_current_file_moves_the_stage_to_its_neighbour(cx: &mut TestApp
 }
 
 #[gpui_kit::test]
-fn enter_shows_a_file_and_does_nothing_on_a_folder(cx: &mut TestAppContext) {
+fn enter_opens_the_focused_folder_and_then_its_child(cx: &mut TestAppContext) {
     let (handle, view) = open_app(cx, tree(PROJECT));
-
-    // Focus starts on the first row, the docs folder.
-    cx.update_window(handle, |_, window, cx| window.press("enter", cx))
-        .unwrap();
-    assert_eq!(stage_now(cx, handle), None);
-
-    cx.update_window(handle, |_, window, cx| {
-        window.press("down", cx);
-        window.press("down", cx);
-        window.press("enter", cx);
-    })
-    .unwrap();
-    assert_eq!(stage_now(cx, handle).as_deref(), Some("file2.txt"));
-    let file2 = node(cx, &view, "file2.txt");
-    assert_eq!(current(cx, &view), Some(file2));
-    cx.update_window(handle, |_, window, _| {
-        // Enter shows a file without checking it.
-        assert_eq!(window.find(row(file2)).checked(), Some(false));
-    })
-    .unwrap();
+    let docs = node(cx, &view, "docs");
+    let first = node(cx, &view, "docs/a.md");
+    press(cx, handle, "enter");
+    assert_eq!(current(cx, &view), Some(docs));
+    assert!(crate::read(cx, &view, |s| s
+        .explorer()
+        .unwrap()
+        .is_open(docs)));
+    press(cx, handle, "enter");
+    assert_eq!(current(cx, &view), Some(first));
+    assert_eq!(crate::read(cx, &view, viewer::AppState::selected_count), 0);
 }
 
 #[gpui_kit::test]

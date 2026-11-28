@@ -267,6 +267,7 @@ pub(super) fn details_row<F: Fn(&ClickEvent, &mut Window, &mut App) + 'static>(
         .id(("folder-entry", id.index()))
         .test_support()
         .role(Role::ListItem)
+        .aria_selected(focused)
         .aria_label(name.clone())
         .h_8()
         .text_sm()

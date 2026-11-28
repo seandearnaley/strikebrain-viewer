@@ -335,6 +335,41 @@ fn a_scan_slower_than_200_ms_shows_the_progress_bar_until_it_lands(cx: &mut Test
     .unwrap();
 }
 
+#[gpui_kit::test]
+fn refreshing_a_browsable_folder_shows_background_status_without_a_loading_bar(
+    cx: &mut TestAppContext,
+) {
+    let dir = folder(&[("a.txt", "already visible")]);
+    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
+    state(cx, &view).update(cx, AppState::refresh);
+    cx.dispatcher
+        .scheduler()
+        .clock()
+        .advance(Duration::from_millis(200));
+    while cx.dispatcher.tick(true) {}
+    while read(cx, &view, |s| s.status().clone()) == (ScanStatus::Scanning { slow: false })
+        && cx.dispatcher.tick(false)
+    {}
+    let name = crate::name_of(dir.path());
+    let a = node(cx, &view, "a.txt");
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find(row(a)).visible());
+        assert!(window.try_find("scan-progress").is_none());
+        assert_eq!(
+            window.find("folder-activity").label(),
+            Some(format!("Checking for changes · {name}").as_str())
+        );
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("folder-activity").is_none());
+    })
+    .unwrap();
+}
+
 /// Without the 200 ms, the scan lands with no bar ever shown.
 #[gpui_kit::test]
 fn a_fast_scan_never_shows_the_progress_bar(cx: &mut TestAppContext) {

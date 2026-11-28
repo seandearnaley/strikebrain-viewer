@@ -410,7 +410,7 @@ fn folder_click_opens_contents_and_children_join_navigation_history(cx: &mut Tes
     let child = node(cx, &view, "docs/a.md");
     click(cx, handle, row(docs));
     assert_eq!(current(cx, &view), Some(docs));
-    click(cx, handle, ("folder-entry", child.index()));
+    crate::double_click(cx, handle, ("folder-entry", child.index()));
     assert_eq!(current(cx, &view), Some(child));
     dispatch(cx, handle, GoBack);
     assert_eq!(current(cx, &view), Some(docs));
@@ -436,7 +436,7 @@ fn clicking_an_ancestor_breadcrumb_opens_that_folder(cx: &mut TestAppContext) {
     let docs = node(cx, &view, "docs");
     let file = node(cx, &view, "docs/a.md");
     click(cx, handle, row(docs));
-    click(cx, handle, ("folder-entry", file.index()));
+    crate::double_click(cx, handle, ("folder-entry", file.index()));
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         let title = window.find("stage-title").bounds();

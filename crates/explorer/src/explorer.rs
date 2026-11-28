@@ -109,6 +109,24 @@ impl Explorer {
         self.order.children(&self.tree, folder)
     }
 
+    /// The adjacent visible file in the same folder, in display order.
+    #[must_use]
+    pub fn sibling_file(&self, id: NodeId, forward: bool) -> Option<NodeId> {
+        let siblings = self.children(self.tree.parent(id)?);
+        let ix = siblings
+            .binary_search_by_key(&self.order.position(id), |&child| {
+                self.order.position(child)
+            })
+            .ok()?;
+        let visible_file =
+            |child: &NodeId| self.tree.is_file(*child) && self.visibility.is_visible(*child);
+        if forward {
+            siblings[ix + 1..].iter().copied().find(visible_file)
+        } else {
+            siblings[..ix].iter().rev().copied().find(visible_file)
+        }
+    }
+
     /// The nodes on screen, top to bottom. The root is never a row.
     #[must_use]
     pub fn rows(&self) -> &[NodeId] {

@@ -268,6 +268,16 @@ impl Updater {
         }
     }
 
+    /// Progress displayed in the title bar while checking or preparing an update.
+    pub(crate) fn activity(&self) -> Option<gpui_kit::SharedString> {
+        match &self.phase {
+            Phase::Checking if self.asked => Some("Checking for updates…".into()),
+            Phase::Downloading { version } => Some(format!("Downloading {version}…").into()),
+            Phase::Verifying { version } => Some(format!("Verifying {version}…").into()),
+            _ => None,
+        }
+    }
+
     /// The update ready to install, if any.
     pub(crate) fn offer(&self) -> Option<&Offer> {
         match &self.phase {
@@ -303,7 +313,10 @@ impl Updater {
         match self.phase {
             Phase::Idle | Phase::Failed(_) => {}
             Phase::Checking | Phase::Downloading { .. } | Phase::Verifying { .. } => {
-                self.asked |= manual;
+                if manual && !self.asked {
+                    self.asked = true;
+                    cx.notify();
+                }
                 return;
             }
             Phase::Ready(_) => return,

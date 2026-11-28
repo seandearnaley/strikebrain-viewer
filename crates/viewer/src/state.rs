@@ -111,9 +111,10 @@ pub(crate) struct DrawnRow {
 /// What a pointer press or an assistive-technology action asks of a row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RowAction {
-    /// A press on the row: shows a file on the stage; on a folder, nothing
-    /// more than focus.
+    /// A single click previews the entry and keeps focus in the sidebar.
     Show,
+    /// Double-click to open and expand a folder.
+    Open,
     /// A press on the checkbox.
     ToggleCheck,
     /// A press on the chevron, or Expand or Collapse from assistive
@@ -369,6 +370,9 @@ impl AppState {
     #[must_use]
     pub fn position(&self) -> Option<(usize, usize)> {
         let explorer = self.explorer.as_ref()?;
+        if self.view == StageView::FolderFile {
+            return None;
+        }
         let at = explorer.gallery_position(self.current?)?;
         Some((at + 1, explorer.gallery_len()))
     }

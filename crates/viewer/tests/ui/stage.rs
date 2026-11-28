@@ -877,7 +877,7 @@ fn a_document_opened_on_its_own_can_link_to_a_sibling_folder(cx: &mut TestAppCon
     let target = crate::node_at(cx, &view, &dir.path().join("examples"));
     assert_eq!(current(cx, &view), Some(target));
     let child = crate::node_at(cx, &view, &dir.path().join("examples/one.txt"));
-    click(cx, handle, ("folder-entry", child.index()));
+    crate::double_click(cx, handle, ("folder-entry", child.index()));
     assert_eq!(shown(cx, handle), Some(Shown::Code("one.txt".into())));
     dispatch(cx, handle, viewer::keys::GoBack);
     assert_eq!(current(cx, &view), Some(target));

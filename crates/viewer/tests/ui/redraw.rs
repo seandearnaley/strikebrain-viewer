@@ -34,22 +34,18 @@ fn key(cx: &mut TestAppContext, handle: AnyWindowHandle, key: &'static str) {
 }
 
 #[gpui_kit::test]
-fn moving_focus_in_the_tree_leaves_the_stage_alone(cx: &mut TestAppContext) {
+fn previewing_a_new_row_draws_the_stage_and_staying_on_it_does_not(cx: &mut TestAppContext) {
     let (handle, view) = open_app(cx, tree(PROJECT));
-    // The first key after the pointer redraws every view once: GPUI
-    // refreshes the window when the input changes from pointer to keys.
     press(cx, handle, "down");
     let before = stage_renders(cx, &view);
-
-    for _ in 0..3 {
-        key(cx, handle, "down");
-    }
-    assert_eq!(focus(cx, &view), Some(node(cx, &view, "README.md")));
-    assert_eq!(stage_renders(cx, &view), before);
-
-    // Enter shows the file: now the stage draws.
-    key(cx, handle, "enter");
-    assert!(stage_renders(cx, &view) > before);
+    key(cx, handle, "end");
+    let last = node(cx, &view, "README.md");
+    assert_eq!(focus(cx, &view), Some(last));
+    assert_eq!(crate::current(cx, &view), Some(last));
+    let after = stage_renders(cx, &view);
+    assert!(after > before);
+    key(cx, handle, "down");
+    assert_eq!(stage_renders(cx, &view), after);
 }
 
 #[gpui_kit::test]
@@ -59,15 +55,15 @@ fn moving_focus_in_the_tree_leaves_the_gallery_alone(cx: &mut TestAppContext) {
     press(cx, handle, "down");
     let gallery_renders =
         |cx: &mut TestAppContext| cx.update(|cx| view.read(cx).gallery_probe(cx).renders());
-    let before = (stage_renders(cx, &view), gallery_renders(cx));
-    assert!(before.1 > 0, "the gallery shows");
+    let before = gallery_renders(cx);
+    assert!(before > 0, "the gallery shows");
 
     for _ in 0..3 {
         key(cx, handle, "down");
     }
-    assert_eq!((stage_renders(cx, &view), gallery_renders(cx)), before);
+    assert_eq!(gallery_renders(cx), before);
 
     // Space checks the focus row's file: the gallery changes and draws.
     key(cx, handle, "space");
-    assert!(gallery_renders(cx) > before.1);
+    assert!(gallery_renders(cx) > before);
 }

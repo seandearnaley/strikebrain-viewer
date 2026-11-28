@@ -87,7 +87,7 @@ struct Asked {
     folder: Option<folder::Options>,
     /// The file view offers the way back to the gallery: two or more
     /// files are checked.
-    back: bool,
+    back: Option<crate::StageView>,
 }
 
 impl Asked {
@@ -106,7 +106,13 @@ impl Asked {
             presenting,
             gallery,
             folder,
-            back: file_view && state.selected_count() >= 2,
+            back: match state.stage_view() {
+                crate::StageView::FolderFile if file_view => Some(crate::StageView::Folder),
+                crate::StageView::File if file_view && state.selected_count() >= 2 => {
+                    Some(crate::StageView::Gallery)
+                }
+                _ => None,
+            },
         }
     }
 }
@@ -399,6 +405,20 @@ impl Stage {
     }
 
     fn scroll(&mut self, scroll: Scroll, cx: &mut Context<Self>) {
+        let state = self.state.read(cx);
+        if state.stage_view() == crate::StageView::FolderFile
+            && state
+                .explorer()
+                .zip(state.current())
+                .is_some_and(|(e, id)| explorer::is_image_extension(e.tree().extension(id)))
+        {
+            match scroll {
+                Scroll::Up => self.state.update(cx, AppState::show_previous),
+                Scroll::Down => self.state.update(cx, AppState::show_next),
+                _ => {}
+            }
+            return;
+        }
         match self.content {
             Content::Code(_) => self.text_views.scroll_code(scroll, cx),
             Content::Markdown(_) => self.text_views.scroll_markdown(scroll, cx),

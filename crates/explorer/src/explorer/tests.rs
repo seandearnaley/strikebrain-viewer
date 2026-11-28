@@ -843,3 +843,25 @@ fn next_and_previous_work_from_any_node() {
 
 mod folders;
 mod props;
+
+#[test]
+fn folder_navigation_follows_sorted_visible_siblings_and_skips_directories() {
+    let mut e = explorer(&[
+        "pics/album/nested.png",
+        "pics/a.png",
+        "pics/b.txt",
+        "pics/c.png",
+        "other.png",
+    ]);
+    let (a, c) = (id(&e, "pics/a.png"), id(&e, "pics/c.png"));
+    e.set_sort(Sort {
+        key: SortKey::Name,
+        direction: Direction::Descending,
+    });
+    let filtered = e.filter_job("", KindFilter::Images).run().unwrap();
+    assert!(e.apply_filter(filtered));
+    assert_eq!(e.sibling_file(c, true), Some(a));
+    assert_eq!(e.sibling_file(a, false), Some(c));
+    assert_eq!(e.sibling_file(c, false), None);
+    assert_eq!(e.sibling_file(a, true), None);
+}

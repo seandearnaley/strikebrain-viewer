@@ -53,6 +53,7 @@ pub(crate) enum ExplorerFocus {
 pub(crate) struct ExplorerPanel {
     state: Entity<AppState>,
     focus_handle: FocusHandle,
+    stage_focus: FocusHandle,
     filter: Entity<InputState>,
     scroll: UniformListScrollHandle,
     /// Whether the focus ring shows: set by a key press that moves or lands
@@ -81,6 +82,7 @@ impl Focusable for ExplorerPanel {
 impl ExplorerPanel {
     pub(crate) fn new(
         state: Entity<AppState>,
+        stage_focus: FocusHandle,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -124,6 +126,7 @@ impl ExplorerPanel {
         Self {
             state,
             focus_handle: cx.focus_handle(),
+            stage_focus,
             filter,
             scroll,
             ring: false,
@@ -228,8 +231,11 @@ impl ExplorerPanel {
         self.after_key(row, cx);
     }
 
-    fn show_file(&mut self, _: &ShowFile, _: &mut Window, cx: &mut Context<Self>) {
+    fn show_file(&mut self, _: &ShowFile, window: &mut Window, cx: &mut Context<Self>) {
         self.state.update(cx, AppState::show_focus);
+        if self.state.read(cx).stage_view() == crate::StageView::Folder {
+            window.focus(&self.stage_focus, cx);
+        }
         let row = self.state.read(cx).focus_index();
         self.after_key(row, cx);
     }
@@ -346,7 +352,15 @@ impl ExplorerPanel {
             .state
             .update(cx, |state, cx| state.row_action(row, action, cx))
         {
-            window.focus(&self.focus_handle, cx);
+            let enter = matches!(action, RowAction::Open);
+            window.focus(
+                if enter {
+                    &self.stage_focus
+                } else {
+                    &self.focus_handle
+                },
+                cx,
+            );
         }
     }
 
@@ -577,23 +591,12 @@ impl Render for ExplorerPanel {
 
         panel
             .child(self.render_filter_bar(cx))
-            .when_some(state.folder_activity(), |panel, label| {
-                panel.child(
-                    div()
-                        .id("folder-activity")
-                        .test_support()
-                        .role(Role::Status)
-                        .aria_label(label.clone())
-                        .px_3()
-                        .py_1()
-                        .flex_shrink_0()
-                        .truncate()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(label),
-                )
-            })
             .children(header)
             .child(body)
+            .when_some(state.folder_activity(), |panel, label| {
+                panel.child(div().flex_shrink_0().px_3().py_1().child(
+                    crate::title_bar::activity_label("folder-activity", label, cx),
+                ))
+            })
     }
 }

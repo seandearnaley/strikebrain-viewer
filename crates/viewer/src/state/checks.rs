@@ -87,6 +87,10 @@ impl AppState {
 
     /// Opens an entry on the stage without changing its checkbox.
     pub(super) fn show(&mut self, id: NodeId, cx: &mut Context<Self>) {
+        if self.gallery_len() < 2 {
+            self.show_browser_entry(id, Record::Add, cx);
+            return;
+        }
         self.fragment = None;
         self.pending_link = None;
         self.open_entry(id, cx);
@@ -117,7 +121,29 @@ impl AppState {
         }
         self.use_browsed_row(id);
         self.reveal(id, cx);
-        self.show(id, cx);
+        self.show_browser_entry(id, Record::Add, cx);
+    }
+
+    pub(super) fn show_browser_entry(
+        &mut self,
+        id: NodeId,
+        record: Record,
+        cx: &mut Context<Self>,
+    ) {
+        self.fragment = None;
+        self.pending_link = None;
+        self.open_entry(id, cx);
+        if self.view == super::StageView::File
+            && self.explorer.as_ref().is_some_and(|e| {
+                e.tree().is_file(id)
+                    && e.tree()
+                        .parent(id)
+                        .is_some_and(|p| !e.tree().is_joined() || p != NodeId::ROOT)
+            })
+        {
+            self.view = super::StageView::FolderFile;
+        }
+        self.record(record);
     }
 
     /// Shows `id` in the file view as [`AppState::show`] does, recording
@@ -154,20 +180,26 @@ impl AppState {
         if self.view == super::StageView::Folder {
             return;
         }
-        let (Some(explorer), Some(current)) = (&self.explorer, self.current) else {
-            return;
-        };
-        let to = if forward {
-            explorer.gallery_next(current)
-        } else {
-            explorer.gallery_previous(current)
-        };
+        let to = self.neighbour(forward);
         if let Some(to) = to {
             self.fragment = None;
+            self.pending_link = None;
             self.current = Some(to);
             self.record(Record::Replace);
             cx.emit(StateEvent::CurrentMoved);
             cx.notify();
+        }
+    }
+
+    pub(crate) fn neighbour(&self, forward: bool) -> Option<NodeId> {
+        let e = self.explorer.as_ref()?;
+        let current = self.current?;
+        if self.view == super::StageView::FolderFile {
+            e.sibling_file(current, forward)
+        } else if forward {
+            e.gallery_next(current)
+        } else {
+            e.gallery_previous(current)
         }
     }
 
@@ -212,7 +244,7 @@ impl AppState {
     pub fn show_focus(&mut self, cx: &mut Context<Self>) {
         if let Some(focus) = self.focus {
             self.use_browsed_row(focus);
-            self.show(focus, cx);
+            self.open_row(focus, cx);
         }
     }
 

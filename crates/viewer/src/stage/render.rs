@@ -101,14 +101,19 @@ impl Stage {
                 .text_color(theme.muted_foreground)
                 .child(text)
         });
-        let back = self.asked.back.then(|| {
+        let back = self.asked.back.map(|destination| {
+            let (label, icon) = if destination == crate::StageView::Folder {
+                ("Back to Folder", AssetIcon::Folder)
+            } else {
+                ("Gallery", AssetIcon::LayoutGrid)
+            };
             Button::new("gallery-button")
-                .icon(Icon::new(AssetIcon::LayoutGrid).text_color(theme.muted_foreground))
+                .icon(Icon::new(icon).text_color(theme.muted_foreground))
                 .ghost()
                 .compact()
                 .small()
-                .tooltip("Gallery")
-                .accessibility_label("Gallery")
+                .tooltip(label)
+                .accessibility_label(label)
                 .on_click(cx.listener(|this, _, window, cx| this.show_gallery(false, window, cx)))
         });
         // Either side of the position takes half of what is left, so the
@@ -193,7 +198,8 @@ impl Render for Stage {
         } else {
             self.render_content(cx)
         };
-        let bar = (self.asked.position.is_some() || self.asked.back).then(|| self.render_bar(cx));
+        let bar = (self.asked.position.is_some() || self.asked.back.is_some())
+            .then(|| self.render_bar(cx));
         let theme = cx.theme();
 
         v_flex()

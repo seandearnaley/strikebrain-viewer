@@ -34,18 +34,18 @@ cargo run -p viewer                              # reopen the last folders as yo
 
 Add Folder (⌘O, the bar's folder button, or File > Add Folder…) adds more, as does a folder dropped on the window; each folder is a top-level row, removed with the button that shows on its row when you point at it, or ⌘⌫. A file opened on its own (named on the command line, dropped on the window, or sent by Open With) shows in an open folder that holds it, or else as a row of its own, without reading its folder, until the app quits. The explorer hides with ⌃⌘S, the bar's sidebar button or View > Hide Sidebar, and the stage takes the window. Back and Forward (⌘[ and ⌘], the bar's arrows, the Go menu or the mouse's side buttons) go through what the stage showed. The app remembers the folders, their open folders and checks, the filter, sort, scroll, the file on the stage and whether the gallery showed, the explorer's width and whether it was hidden, and the window, in `~/Library/Application Support/ai.brainstrike.viewer/state.json`. It follows each folder on disk and refreshes it when it changes; a file row is not followed, and Refresh (⌘R), or opening the file again, reads it again.
 
-Click a folder to browse its contents as thumbnails. Switch between **Gallery** and **List** in the folder toolbar (⌘1 and ⌘2 on macOS, Ctrl+1 and Ctrl+2 elsewhere). The viewer remembers the layout. The two views share the sidebar’s filter and sort order. In List, click **Name**, **Type**, or **Size** to sort, and click again to reverse the order.
+Click a folder in the sidebar to preview its contents. Up and Down preview each highlighted row. Double-click a folder or press Enter to move into it. In the folder pane, click once to select an item and double-click or press Enter to open it. Switch between **Gallery** and **List** in the folder toolbar (⌘1 and ⌘2 on macOS, Ctrl+1 and Ctrl+2 elsewhere). The viewer remembers the layout. The two views share the sidebar’s filter and sort order. In List, click **Name**, **Type**, or **Size** to sort, and click again to reverse the order.
 
 ## Keys
 
 | Key | Tree | Gallery | Stage | Presentation |
 | --- | --- | --- | --- | --- |
-| ↑ ↓ | Move focus | Move focus up or down a row | Scroll text | Scroll text |
+| ↑ ↓ | Preview the previous or next row | Move focus up or down a row | Previous or next folder image, or scroll text | Browse folder images or scroll text |
 | → | Open folder, then first child | Next tile | Next file | Next file |
 | ← | Close folder, then parent | Previous tile | Previous file | Previous file |
 | Space | Check or uncheck | Present from the focused tile | Present | Next file |
-| Enter | Show the file | Open the focused tile | Present | |
-| Esc | Clear the filter | Back to the tree | Back to the gallery, with two or more checked; else to the tree | Leave, to the gallery or the file |
+| Enter | Open the file or folder | Open the focused tile | Present | |
+| Esc | Clear the filter | Back to the tree | Return to the folder, checked gallery, or tree | Leave, to the gallery or the file |
 | Home, End | Jump | First or last tile | Jump within text | Jump within text |
 | Page Up, Page Down | Jump | A screen of rows | Jump within text | Jump within text |
 | ⌘F | Filter | Filter | Filter | |
@@ -62,7 +62,7 @@ Click a folder to browse its contents as thumbnails. Switch between **Gallery** 
 
 On Windows and Linux, Ctrl stands for ⌘, F11 is fullscreen, Alt+← and Alt+→ go back and forward, and Ctrl+B hides or shows the explorer.
 
-A click on a tile opens it too; under the file, the grid button left of its place ("2 / 3") goes back to the gallery. In the filter, Esc clears the text, then returns to the tree.
+In a folder, Left and Right browse the visible files in the current sort order. Esc returns to the folder with the last file selected. In a gallery of checked files, clicking a tile opens it and the grid button under the file returns to that gallery. In the filter, Esc clears the text, then returns to the tree.
 
 ## Build the packages
 
