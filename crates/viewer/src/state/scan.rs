@@ -14,8 +14,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use explorer::{
-    Explorer, IdMap, Kind, NodeId, SavedFolder, ScanError, ScanOptions, SortKey, Tree, TreeError,
-    read_sizes, scan_observed,
+    CacheMode, Explorer, IdMap, Kind, NodeId, SavedFolder, ScanError, ScanOptions, SortKey, Tree,
+    TreeError, read_sizes,
 };
 use gpui_kit::{AppContext as _, Context, SharedString};
 
@@ -67,21 +67,29 @@ impl AppState {
     /// folder. A folder not followed on disk because its watcher could not
     /// start is followed again.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        self.rescan_all(CacheMode::Rebuild, cx);
+    }
+
+    fn rescan_all(&mut self, mode: CacheMode, cx: &mut Context<Self>) {
         let keys: Vec<u64> = self.folders.iter().map(|folder| folder.key).collect();
         for key in keys {
-            self.refresh_folder(key, cx);
+            self.scan_folder(key, mode, cx);
         }
     }
 
     /// Rescans one folder, following it again if its watcher failed.
     pub(super) fn refresh_folder(&mut self, key: u64, cx: &mut Context<Self>) {
+        self.scan_folder(key, CacheMode::Validate, cx);
+    }
+
+    fn scan_folder(&mut self, key: u64, mode: CacheMode, cx: &mut Context<Self>) {
         if self
             .folder(key)
             .is_some_and(|folder| folder.watch_error.is_some())
         {
             self.follow(key, cx);
         }
-        self.start_scan(key, cx);
+        self.start_scan(key, mode, cx);
     }
 
     /// Shows or hides the files the ignore rules leave out, by rescanning
@@ -91,28 +99,35 @@ impl AppState {
             return;
         }
         self.show_ignored = !self.show_ignored;
-        self.refresh(cx);
+        self.rescan_all(CacheMode::Validate, cx);
         cx.notify();
+    }
+
+    /// A rescan keeps the size column populated when a sized tree is already
+    /// on screen. An unreadable placeholder's zero is not a measured size.
+    fn folder_has_sizes(&self, key: u64) -> bool {
+        let Some(top) = self
+            .folder(key)
+            .and_then(|folder| self.folder_node(&folder.path))
+        else {
+            return false;
+        };
+        self.explorer.as_ref().is_some_and(|explorer| {
+            let tree = explorer.tree();
+            tree.kind(top) == Kind::Dir && tree.size(top).is_some()
+        })
     }
 
     /// Scans the folder `key` on the background executor and puts its tree
     /// on screen, superseding its running scan.
-    pub(super) fn start_scan(&mut self, key: u64, cx: &mut Context<Self>) {
+    pub(super) fn start_scan(&mut self, key: u64, mode: CacheMode, cx: &mut Context<Self>) {
+        let cache = self.scan_cache.clone();
         let options = ScanOptions {
             show_ignored: self.show_ignored,
         };
         self.scans += 1;
         let generation = self.scans;
-        // Sizes first when the tree on screen has them, so the Size column
-        // never blanks.
-        // An unreadable folder's size of 0 does not count: it has none to
-        // keep.
-        let sizes_first = self.folder(key).is_some_and(|folder| {
-            let top = self.folder_node(&folder.path);
-            let tree = self.explorer.as_ref().map(Explorer::tree);
-            top.zip(tree)
-                .is_some_and(|(top, tree)| tree.kind(top) == Kind::Dir && tree.size(top).is_some())
-        });
+        let sizes_first = self.folder_has_sizes(key);
         let Some(folder) = self.folder_mut(key) else {
             return;
         };
@@ -165,7 +180,13 @@ impl AppState {
             let worker_cancel = Arc::clone(&cancel);
             let mut scanned = cx
                 .background_spawn(async move {
-                    scan_observed(&root, options, &worker_cancel, Some(&entries))
+                    explorer::scan_with_cache(
+                        &root,
+                        options,
+                        &worker_cancel,
+                        Some(&entries),
+                        cache.as_deref().map(|dir| (dir, mode)),
+                    )
                 })
                 .await
                 .map(Arc::new);

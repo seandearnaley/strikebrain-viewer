@@ -1738,8 +1738,13 @@ dependencies = [
  "fixedbitset",
  "icu_collator",
  "ignore",
+ "log",
  "memchr",
  "proptest",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2 0.11.2",
  "tempfile",
 ]
 

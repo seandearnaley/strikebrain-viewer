@@ -31,6 +31,8 @@ use crate::{Kind, Tree, TreeError};
 mod changes;
 mod outline;
 mod sizes;
+#[cfg(target_os = "macos")]
+mod smb;
 
 pub use changes::changes_matter;
 pub use outline::DirectoryOutline;
@@ -58,6 +60,15 @@ pub struct ScanOptions {
     /// and the global git excludes would hide. `.git` and `.DS_Store` stay
     /// skipped.
     pub show_ignored: bool,
+}
+
+/// How a scan uses the local directory listing cache on supported volumes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CacheMode {
+    /// Validate every directory and reread any whose stamp changed.
+    Validate,
+    /// Reread all listings, including on servers with coarse timestamps.
+    Rebuild,
 }
 
 /// Why a scan produced no tree.
@@ -173,6 +184,31 @@ pub fn scan_observed(
         return Err(ScanError::Cancelled);
     }
     Ok(tree)
+}
+
+/// Scans as [`scan_observed`] does. On macOS SMB mounts a configured local
+/// cache can reuse directory listings. Progress on those mounts counts names
+/// inspected before the current ignore rules are applied.
+///
+/// # Errors
+///
+/// The same errors as [`scan_observed`].
+pub fn scan_with_cache(
+    root: &Path,
+    options: ScanOptions,
+    cancel: &AtomicBool,
+    progress: Option<&AtomicUsize>,
+    cache: Option<(&Path, CacheMode)>,
+) -> Result<Tree, ScanError> {
+    #[cfg(target_os = "macos")]
+    if let Some((cache, mode)) = cache
+        && smb::is_smb(root)?
+    {
+        return smb::scan(root, options, cancel, progress, cache, mode);
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = cache;
+    scan_observed(root, options, cancel, progress)
 }
 
 /// What to scan: `root` made absolute and canonical, so the tree's root is

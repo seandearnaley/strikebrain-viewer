@@ -585,3 +585,105 @@ fn walker_progress_counts_each_listed_entry_once() {
     .unwrap();
     assert_eq!(count.load(Ordering::Relaxed), tree.node_count() - 1);
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn reopening_reuses_only_unchanged_directory_listings_and_reads_rules_and_sizes_live() {
+    let dir = folder(&[
+        ("a/deep/old", "x"),
+        ("b/keep", "a"),
+        ("b/hide", "h"),
+        (".ignore", "hide\n"),
+    ]);
+    let cache = tempfile::tempdir().unwrap();
+    let manifest = cache.path().join("index");
+    let root = crate::canonical(dir.path()).unwrap();
+    let cancel = AtomicBool::new(false);
+    let reopen = || {
+        super::smb::indexed(
+            &root,
+            ScanOptions::default(),
+            &cancel,
+            None,
+            &manifest,
+            super::CacheMode::Validate,
+        )
+        .unwrap()
+    };
+    let (first, read) = reopen();
+    assert_eq!(read, 4);
+    assert_eq!(paths(&first), paths(&scan_default(&root)));
+    assert_eq!(reopen().1, 0);
+    fs::rename(root.join("a/deep/old"), root.join("a/deep/new")).unwrap();
+    fs::write(root.join(".ignore"), "keep\n").unwrap();
+    fs::write(root.join("b/hide"), "updated").unwrap();
+    let (next, read) = reopen();
+    assert_eq!(read, 1);
+    assert_eq!(paths(&next), paths(&scan_default(&root)));
+    read_sizes(&next, &cancel).unwrap();
+    assert_eq!(next.size(id(&next, "b/hide")), Some(7));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn damaged_cache_is_rebuilt_and_cancelled_scans_do_not_replace_it() {
+    use super::{CacheMode, smb::indexed};
+    let dir = folder(&[("a/b", "b")]);
+    let root = crate::canonical(dir.path()).unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let file = cache.path().join("cache");
+    fs::write(&file, b"incomplete").unwrap();
+    let scan = |mode, stop| {
+        indexed(
+            &root,
+            ScanOptions::default(),
+            &AtomicBool::new(stop),
+            None,
+            &file,
+            mode,
+        )
+    };
+    assert_eq!(scan(CacheMode::Validate, false).unwrap().1, 2);
+    let before = fs::read(&file).unwrap();
+    assert!(matches!(
+        scan(CacheMode::Rebuild, true),
+        Err(ScanError::Cancelled)
+    ));
+    assert_eq!(fs::read(&file).unwrap(), before);
+    assert_eq!(scan(CacheMode::Validate, false).unwrap().1, 0);
+    assert_eq!(scan(CacheMode::Rebuild, false).unwrap().1, 2);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn reopening_after_directory_replacement_treats_links_as_leaves_and_prunes_deleted_folders() {
+    use super::{CacheMode, smb::indexed};
+    use std::os::unix::fs::symlink;
+    let dir = folder(&[("a/b/old", "x"), ("delete/gone", "y")]);
+    let outside = folder(&[("external", "z")]);
+    let root = crate::canonical(dir.path()).unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let file = cache.path().join("cache");
+    let reopen = || {
+        indexed(
+            &root,
+            ScanOptions::default(),
+            &AtomicBool::new(false),
+            None,
+            &file,
+            CacheMode::Validate,
+        )
+        .unwrap()
+    };
+    assert_eq!(reopen().1, 4);
+    fs::remove_dir_all(root.join("a/b")).unwrap();
+    symlink(outside.path(), root.join("a/b")).unwrap();
+    fs::remove_dir_all(root.join("delete")).unwrap();
+    fs::create_dir(root.join("new")).unwrap();
+    fs::write(root.join("new/file"), "z").unwrap();
+    let (tree, reads) = reopen();
+    assert_eq!(reads, 3);
+    assert_eq!(tree.kind(id(&tree, "a/b")), Kind::Symlink);
+    assert_eq!(paths(&tree), paths(&scan_default(&root)));
+    assert_eq!(reopen().1, 0);
+}

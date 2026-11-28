@@ -38,6 +38,7 @@ pub(crate) use names::{extension_of, push_lowercase};
 
 /// What a node is on disk.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(target_os = "macos", derive(serde::Serialize, serde::Deserialize))]
 pub enum Kind {
     /// A folder whose entries were read.
     Dir,

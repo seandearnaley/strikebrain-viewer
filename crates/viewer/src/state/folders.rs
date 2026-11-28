@@ -263,7 +263,7 @@ impl AppState {
             self.next_key += 1;
             self.folders.push(Folder::new(key, path, saved));
             self.follow(key, cx);
-            self.start_scan(key, cx);
+            self.start_scan(key, explorer::CacheMode::Validate, cx);
         }
         if !files.is_empty() {
             let check = files.len() > 1;
@@ -304,7 +304,7 @@ impl AppState {
         entry.file = true;
         self.folders.push(entry);
         self.follow(key, cx);
-        self.start_scan(key, cx);
+        self.start_scan(key, explorer::CacheMode::Validate, cx);
     }
 
     /// Shows the files each call asked for once a tree lists every one of
