@@ -28,6 +28,22 @@ use super::{AppState, ScanStatus, StateEvent};
 use crate::menus::APP_NAME;
 use crate::persist::resolve;
 
+/// Work underway for this generation. Sizes can be read before a
+/// replacement is shown or after the first listing is on screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ScanPhase {
+    Listing,
+    Sizes { on_screen: bool },
+}
+
+/// Progress for an active scan, sampled independently of the UI frame rate.
+#[derive(Debug)]
+pub(super) struct ScanActivity {
+    pub(super) phase: ScanPhase,
+    pub(super) slow: bool,
+    pub(super) found: usize,
+}
+
 /// One folder asked for, or a file opened on its own: where it is, its
 /// latest scan, its watcher, and the saved view waiting for it.
 pub(super) struct Folder {
@@ -46,8 +62,9 @@ pub(super) struct Folder {
     pub(super) waiting: Option<SavedFolder>,
     /// The latest scan's number; a result from an older one is dropped.
     pub(super) generation: u64,
-    /// Whether the latest scan runs, and whether it is slow.
-    pub(super) scanning: Option<bool>,
+    pub(super) activity: Option<ScanActivity>,
+    /// The on-demand directory reader during a slow initial scan.
+    pub(super) browse: Option<super::browse::Browse>,
     /// Stops the latest scan's worker threads.
     pub(super) cancel: Arc<AtomicBool>,
     /// The latest scan, kept until replaced: it reads sizes after the tree
@@ -99,7 +116,7 @@ impl std::fmt::Debug for Folder {
         f.debug_struct("Folder")
             .field("path", &self.path)
             .field("shown", &self.shown)
-            .field("scanning", &self.scanning)
+            .field("activity", &self.activity)
             .field("error", &self.error)
             .finish_non_exhaustive()
     }
@@ -120,7 +137,8 @@ impl Folder {
             error: None,
             waiting,
             generation: 0,
-            scanning: None,
+            activity: None,
+            browse: None,
             cancel: Arc::new(AtomicBool::new(false)),
             scan_task: None,
             slow_task: None,
@@ -132,12 +150,21 @@ impl Folder {
         }
     }
 
+    /// A replacement tree has not landed yet. Changes on disk during the
+    /// later size measurement can start a new scan immediately.
+    pub(super) fn awaits_tree(&self) -> bool {
+        self.activity
+            .as_ref()
+            .is_some_and(|a| a.phase != (ScanPhase::Sizes { on_screen: true }))
+    }
+
     /// Where its latest scan stands.
     pub(super) fn status(&self) -> ScanStatus {
-        match self.scanning {
-            None => ScanStatus::Idle,
-            Some(slow) => ScanStatus::Scanning { slow },
-        }
+        self.activity
+            .as_ref()
+            .map_or(ScanStatus::Idle, |activity| ScanStatus::Scanning {
+                slow: activity.slow,
+            })
     }
 
     /// Whether `path` is inside this folder, or is it.
@@ -236,7 +263,7 @@ impl AppState {
             self.next_key += 1;
             self.folders.push(Folder::new(key, path, saved));
             self.follow(key, cx);
-            self.start_scan(key, cx);
+            self.start_scan(key, explorer::CacheMode::Validate, cx);
         }
         if !files.is_empty() {
             let check = files.len() > 1;
@@ -277,7 +304,7 @@ impl AppState {
         entry.file = true;
         self.folders.push(entry);
         self.follow(key, cx);
-        self.start_scan(key, cx);
+        self.start_scan(key, explorer::CacheMode::Validate, cx);
     }
 
     /// Shows the files each call asked for once a tree lists every one of
@@ -355,8 +382,7 @@ impl AppState {
             return Standing::Listed;
         }
         let waits = self.folders.iter().any(|folder| {
-            (!folder.shown && folder.holds(path))
-                || (folder.path == path && folder.scanning.is_some())
+            (!folder.shown && folder.holds(path)) || (folder.path == path && folder.awaits_tree())
         });
         if waits {
             Standing::Waits
@@ -373,7 +399,7 @@ impl AppState {
     pub(super) fn listed(&self, path: &Path) -> Option<NodeId> {
         self.folders
             .iter()
-            .filter(|folder| folder.shown && folder.error.is_none() && folder.holds(path))
+            .filter(|folder| folder.error.is_none() && folder.holds(path))
             .find_map(|folder| self.node_in(&folder.path, path))
     }
 

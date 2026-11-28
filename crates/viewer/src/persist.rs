@@ -282,6 +282,7 @@ impl Snapshot {
 pub struct StateStore {
     path: PathBuf,
     written: Arc<Mutex<Written>>,
+    pub(crate) scan_cache: PathBuf,
 }
 
 /// What the store last wrote.
@@ -299,8 +300,10 @@ impl StateStore {
     /// The state file at `path`. Tests point this at a temporary folder.
     #[must_use]
     pub fn at(path: impl Into<PathBuf>) -> Self {
+        let path = path.into();
         Self {
-            path: path.into(),
+            scan_cache: path.with_added_extension("smb-listings-v1"),
+            path,
             written: Arc::default(),
         }
     }
@@ -312,7 +315,10 @@ impl StateStore {
         if let Some(path) = std::env::var_os(STATE_FILE_VAR).filter(|path| !path.is_empty()) {
             return Some(Self::at(path));
         }
-        project_dirs().map(|dirs| Self::at(dirs.config_dir().join("state.json")))
+        project_dirs().map(|dirs| Self {
+            scan_cache: dirs.cache_dir().join("smb-listings-v1"),
+            ..Self::at(dirs.config_dir().join("state.json"))
+        })
     }
 
     /// Where the file is.

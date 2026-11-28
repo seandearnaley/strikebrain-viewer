@@ -185,6 +185,7 @@ impl AppView {
         let options = StateOptions {
             view: session.view,
             watch: session.watch,
+            scan_cache: session.store.as_ref().map(|store| store.scan_cache.clone()),
             quiet: session.store.as_ref().map_or_default(StateStore::own_files),
         };
         let app_state = cx.new(|cx| AppState::with_options(launch, options, cx));

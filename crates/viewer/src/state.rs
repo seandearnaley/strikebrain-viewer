@@ -13,6 +13,7 @@
 //! `state/history.rs`, filtering in `state/filter.rs`, and restoring a
 //! saved view in `state/restore.rs`.
 
+mod browse;
 mod checks;
 mod filter;
 mod folders;
@@ -67,6 +68,8 @@ pub struct StateOptions {
     /// Changes to these files never cause a rescan: the app's own state
     /// file and its temporary name, should an open folder hold them.
     pub quiet: Vec<PathBuf>,
+    /// Local storage for validated directory listings on SMB volumes.
+    pub scan_cache: Option<PathBuf>,
 }
 
 /// Where the folders' scans stand.
@@ -221,6 +224,7 @@ pub struct AppState {
     restore_top: Option<PathBuf>,
     /// How to follow the folders on disk; `None` does not.
     watching: Option<Watching>,
+    scan_cache: Option<PathBuf>,
     /// Which row is at the top of the tree's scroll, given how many rows
     /// there are: a probe the tree view hands over, so a change of folders
     /// can keep that row at the top, and a save can name it.
@@ -285,6 +289,7 @@ impl AppState {
             asked_files: Vec::new(),
             restore: None,
             restore_top: None,
+            scan_cache: options.scan_cache,
             watching: options.watch.then_some(Watching {
                 quiet: options.quiet,
             }),

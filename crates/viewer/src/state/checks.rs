@@ -17,6 +17,9 @@ impl AppState {
         let Some(explorer) = self.explorer.as_mut() else {
             return;
         };
+        if !explorer.can_check(id) {
+            return;
+        }
         let current_was_checked = self.current.is_some_and(|c| explorer.is_selected(c));
         explorer.toggle_check(id);
 
@@ -165,6 +168,7 @@ impl AppState {
     /// Space on the focus row.
     pub fn toggle_focus_check(&mut self, cx: &mut Context<Self>) {
         if let Some(focus) = self.focus {
+            self.use_browsed_row(focus);
             self.toggle_check(focus, cx);
         }
     }
@@ -172,6 +176,7 @@ impl AppState {
     /// Enter on the focus row.
     pub fn show_focus(&mut self, cx: &mut Context<Self>) {
         if let Some(focus) = self.focus {
+            self.use_browsed_row(focus);
             self.show(focus, cx);
         }
     }

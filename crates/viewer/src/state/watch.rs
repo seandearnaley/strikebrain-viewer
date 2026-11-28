@@ -111,7 +111,7 @@ impl AppState {
         let Some(folder) = self.folder_mut(key) else {
             return;
         };
-        if folder.scanning.is_some() {
+        if folder.awaits_tree() {
             folder.rescan_pending = true;
         } else {
             self.refresh_folder(key, cx);
@@ -151,6 +151,9 @@ impl AppState {
         let Some(folder) = self.folder(key) else {
             return Watched::Gone;
         };
+        if !folder.shown && folder.awaits_tree() {
+            return Watched::FirstScan;
+        }
         let top = self.folder_node(&folder.path);
         match (&self.explorer, top) {
             (Some(explorer), Some(top)) if folder.error.is_none() => {
@@ -159,7 +162,6 @@ impl AppState {
                 };
                 Watched::Tree(Arc::clone(explorer.tree()), top, options)
             }
-            (_, None) if folder.scanning.is_some() => Watched::FirstScan,
             _ => Watched::Nothing,
         }
     }

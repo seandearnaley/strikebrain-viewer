@@ -239,10 +239,20 @@ impl Explorer {
         &self.selection
     }
 
+    /// Whether a checkbox can address the whole row. Individual files
+    /// are always available; a partial directory still has unknown members.
+    #[must_use]
+    pub fn can_check(&self, id: NodeId) -> bool {
+        self.tree.is_file(id) || !self.tree.is_partial(id)
+    }
+
     /// A click on a checkbox: flips a file; clears a checked folder, hidden
     /// files included; otherwise checks every file of the folder that the
     /// filter shows.
     pub fn toggle_check(&mut self, id: NodeId) {
+        if !self.can_check(id) {
+            return;
+        }
         self.catch_up();
         self.selection.toggle(&self.tree, &self.visibility, id);
         self.forget_gallery();

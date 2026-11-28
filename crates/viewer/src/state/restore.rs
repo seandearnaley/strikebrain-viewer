@@ -170,7 +170,9 @@ impl AppState {
             .filter(|folder| !folder.file)
             .map(|folder| match &folder.waiting {
                 Some(waiting) => FolderSnapshot::Waiting(waiting.clone()),
-                None if folder.shown && folder.error.is_none() => {
+                None if folder.error.is_none()
+                    && (folder.shown || self.folder_node(&folder.path).is_some()) =>
+                {
                     FolderSnapshot::Live(folder.path.clone())
                 }
                 // Still to be scanned, or never read: open, as it will show.
