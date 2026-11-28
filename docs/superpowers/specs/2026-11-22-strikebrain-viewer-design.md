@@ -19,7 +19,7 @@ Platform: macOS on Apple silicon. GPUI also targets Windows and Linux. Nothing h
 ## Settled decisions
 
 1. **GPUI through GPUI Kit.** `gpui-kit = "=0.10.0"`. The explorer tree is built directly on GPUI's `uniform_list`, not the Kit's `Tree`.
-2. **The stage has two views.** The gallery, a grid of the checked files, and the file view, where one file fills the right pane and ← and → move through the checked files. The checks decide which shows; see [Stage](#stage) and [Gallery](#gallery).
+2. **The stage shows folders, files and the gallery.** Opening a folder lists its immediate children in display order. Opening a file fills the pane. The gallery groups checked files, and ← and → in the file view move through that selection; see [Stage](#stage) and [Gallery](#gallery).
 3. **Space depends on focus.** It toggles a checkbox in the tree and starts the presentation on the stage.
 4. **Filter terms are ANDed.** A file must contain every include term.
 5. **The filter block is small.** One text input and three kinds: All, Images, Text. No presets, chips, glob lists or regex mode.
@@ -275,7 +275,7 @@ A file opened on its own is a top-level row too, at the left edge like a folder'
 Row behaviour:
 
 - Clicking a checkbox toggles it.
-- Clicking a chevron opens or closes the folder. Clicking the rest of a folder row only moves focus.
+- Clicking a chevron opens or closes the folder. Clicking the folder name, or pressing Enter on its row, lists its immediate contents on the stage.
 - Clicking a file row shows it on the stage.
 - The row for `current` has the accent background.
 - Hover uses the muted background at half strength.
@@ -296,7 +296,9 @@ Not in version one: column resizing, a column menu, context menus, type-ahead, r
 
 ### Stage
 
-The stage has two views: the gallery (next section), and the file view, which shows `current` filling the pane and is described here. Which shows follows the rules for `current` above. While the gallery shows the file view rests: nothing is read for it, and a read in flight is dropped. Back in the file view, a file other than the one it last showed starts blank until its read lands, so the old file never shows meanwhile.
+Local Markdown links resolve relative to the document on screen. Files, folders and Markdown heading fragments share the stage’s Back and Forward history. Web and mail links use their system handlers.
+
+The folder view lists immediate children in a virtualized list. The title bar shows the path from the open root, with each ancestor available for navigation. The gallery (next section) and the file view show checked files or an individually opened file. Which shows follows the rules for `current` above. While the gallery shows the file view rests: nothing is read for it, and a read in flight is dropped. Back in the file view, a file other than the one it last showed starts blank until its read lands, so the old file never shows meanwhile.
 
 The stage's title is in the bar above it (see Milestone 8, One bar): the file's name in the file view, "Gallery" while the gallery shows, and nothing while the stage is blank, in the foreground colour, truncated. Left of Present, the bar shows an update ready to install (see Milestone 9).
 
@@ -448,7 +450,7 @@ Milestone 6 is built (2026-11-23). As built, where the build settled what this s
 
 ### Milestone 7: the gallery
 
-The stage has two views: the gallery, a grid of the checked files, and the file view that fills the pane, which is the stage as built.
+The gallery is a grid of checked files. A folder listing and a file preview each occupy the same stage.
 
 - **Which shows.** Any change to the checked files shows the gallery when two or more are checked, the one file when one is, and a blank stage when none is. A click on a file row or Enter on it opens that file in the file view, checked or not, as before.
 - **Tiles**, in gallery order. An image tile is the image fitted inside the tile. A text, code or Markdown tile is the top of the file as plain text in the monospace font at 9 px, clipped to the tile, with no highlighting. A file the stage cannot show is its kind's icon. Under each tile, the file's name on one line, truncated. The tile of `current` has the accent background; the focused tile has the focus ring.
@@ -658,7 +660,7 @@ Behaviour tests ported from brainstrike's suite, by name:
 
 - a mixed folder completes on click
 - a fully checked folder clears on click
-- clicking a folder row does not open it; the chevron does
+- clicking a folder row shows its contents; its chevron controls only sidebar expansion
 - Space toggles the checkbox
 - select all under a filter selects only matches
 - unchecking a folder under a filter clears hidden files too

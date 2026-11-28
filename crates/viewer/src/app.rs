@@ -796,7 +796,7 @@ impl Render for AppView {
             return root.child(self.stage.clone().cached(pane()));
         }
         let bar = title_bar::window_bar(
-            self.state.read(cx),
+            &self.state,
             (!self.explorer_hidden).then(|| px(self.explorer_width(cx))),
             self.updater.as_ref().map(|updater| updater.read(cx)),
             window,

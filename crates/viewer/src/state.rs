@@ -184,6 +184,8 @@ pub struct AppState {
     current: Option<NodeId>,
     /// Which of the stage's views shows: the gallery or the file.
     view: StageView,
+    fragment: Option<String>,
+    pending_link: Option<folders::PendingLink>,
     /// The tile with keyboard focus in the gallery, by node.
     tile: Option<NodeId>,
     /// Where `tile` was last seen in the gallery: where its focus goes if
@@ -272,6 +274,8 @@ impl AppState {
             tree_generation: 0,
             current: None,
             view: StageView::File,
+            fragment: None,
+            pending_link: None,
             tile: None,
             tile_at: 0,
             gallery_changes: 0,

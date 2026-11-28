@@ -105,10 +105,19 @@ impl AppState {
             .current
             .as_deref()
             .and_then(|path| tree.find_abs(path))
-            .filter(|&id| tree.is_file(id));
+            .filter(|&id| {
+                if pending.view == StageView::Folder {
+                    tree.kind(id).is_folder()
+                } else {
+                    tree.is_file(id)
+                }
+            });
         let waits_for_sizes = self.sort.key == SortKey::Size && !tree.has_sizes();
         if current.is_some() {
             self.current = current;
+            if pending.view == StageView::Folder {
+                self.view = StageView::Folder;
+            }
         }
         self.selection_changed();
         self.restore_view(pending.view, cx);

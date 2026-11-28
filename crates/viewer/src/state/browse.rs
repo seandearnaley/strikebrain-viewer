@@ -176,7 +176,10 @@ impl AppState {
             return;
         };
         let tree = explorer.tree();
-        if !tree.is_partial(id) || !explorer.is_open(id) || !tree.children(id).is_empty() {
+        if !tree.is_partial(id)
+            || (!explorer.is_open(id) && self.current != Some(id))
+            || !tree.children(id).is_empty()
+        {
             return;
         }
         let Some(top) = tree.folder_of(id) else {

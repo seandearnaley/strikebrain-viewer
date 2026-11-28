@@ -103,6 +103,12 @@ impl Explorer {
         &self.tree
     }
 
+    /// Immediate children in the current display order, including folded rows.
+    #[must_use]
+    pub fn children(&self, folder: NodeId) -> &[NodeId] {
+        self.order.children(&self.tree, folder)
+    }
+
     /// The nodes on screen, top to bottom. The root is never a row.
     #[must_use]
     pub fn rows(&self) -> &[NodeId] {

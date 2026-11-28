@@ -402,3 +402,49 @@ fn a_saved_gallery_a_file_opened_at_launch_replaces_is_no_step(cx: &mut TestAppC
     assert!(!read(cx, &view, AppState::shows_gallery));
     assert!(!read(cx, &view, AppState::can_go_back));
 }
+
+#[gpui_kit::test]
+fn folder_click_opens_contents_and_children_join_navigation_history(cx: &mut TestAppContext) {
+    let (handle, view) = open_app(cx, tree(PROJECT));
+    let docs = node(cx, &view, "docs");
+    let child = node(cx, &view, "docs/a.md");
+    click(cx, handle, row(docs));
+    assert_eq!(current(cx, &view), Some(docs));
+    click(cx, handle, ("folder-entry", child.index()));
+    assert_eq!(current(cx, &view), Some(child));
+    dispatch(cx, handle, GoBack);
+    assert_eq!(current(cx, &view), Some(docs));
+    assert_eq!(read(cx, &view, AppState::selected_count), 0);
+}
+
+#[gpui_kit::test]
+fn tab_then_arrow_and_enter_open_a_folder_child(cx: &mut TestAppContext) {
+    let (handle, view) = open_app(cx, tree(PROJECT));
+    let docs = node(cx, &view, "docs");
+    let first = node(cx, &view, "docs/a.md");
+    click(cx, handle, row(docs));
+    press(cx, handle, "tab");
+    press(cx, handle, "down");
+    press(cx, handle, "enter");
+    assert_eq!(current(cx, &view), Some(first));
+    assert!(!read(cx, &view, AppState::is_presenting));
+}
+
+#[gpui_kit::test]
+fn clicking_an_ancestor_breadcrumb_opens_that_folder(cx: &mut TestAppContext) {
+    let (handle, view) = open_app(cx, tree(PROJECT));
+    let docs = node(cx, &view, "docs");
+    let file = node(cx, &view, "docs/a.md");
+    click(cx, handle, row(docs));
+    click(cx, handle, ("folder-entry", file.index()));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        let title = window.find("stage-title").bounds();
+        crate::click_without_frame(window, point(title.left() + px(9.), title.center().y), cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(current(cx, &view), Some(docs));
+    dispatch(cx, handle, GoBack);
+    assert_eq!(current(cx, &view), Some(file));
+}

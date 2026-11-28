@@ -20,7 +20,7 @@ use super::history::Record;
 use super::{AppState, StateEvent};
 use crate::menus::APP_NAME;
 
-/// Which of the stage's two views shows.
+/// Which content the stage shows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum StageView {
     /// One file fills the pane: `current`, or nothing.
@@ -28,6 +28,8 @@ pub enum StageView {
     File,
     /// The grid of the checked files.
     Gallery,
+    /// The immediate contents of the current folder.
+    Folder,
 }
 
 /// A keyboard movement over the tiles, in gallery order.
@@ -157,6 +159,8 @@ impl AppState {
 
     /// Opens the checked file `id` in the file view.
     fn open(&mut self, id: NodeId, cx: &mut Context<Self>) {
+        self.fragment = None;
+        self.pending_link = None;
         self.current = Some(id);
         self.set_tile(Some(id));
         self.view = StageView::File;
@@ -283,7 +287,14 @@ impl AppState {
     pub(super) fn settle_view(&mut self) {
         self.gallery_changes += 1;
         let len = self.gallery_len();
-        if self.view == StageView::Gallery && len < 2 {
+        if (self.view == StageView::Gallery && len < 2)
+            || (self.view == StageView::Folder
+                && !self.current.is_some_and(|id| {
+                    self.explorer
+                        .as_ref()
+                        .is_some_and(|e| e.tree().kind(id).is_folder())
+                }))
+        {
             self.view = StageView::File;
         }
         let Some(explorer) = self.explorer.as_ref() else {

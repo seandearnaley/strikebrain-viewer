@@ -28,6 +28,9 @@ struct StateFile {
     folders: Vec<FolderFile>,
     show_ignored: bool,
     current: Option<PathBuf>,
+    // An optional field lets older version-2 readers keep the rest of the session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    current_folder: Option<PathBuf>,
     view: ViewFile,
     query: String,
     kind: KindFile,
@@ -161,9 +164,16 @@ pub(super) fn encode(saved: &Saved) -> io::Result<Vec<u8>> {
             })
             .collect(),
         show_ignored: view.show_ignored,
-        current: view.current.clone(),
+        current: view
+            .current
+            .clone()
+            .filter(|_| view.view != StageView::Folder),
+        current_folder: view
+            .current
+            .clone()
+            .filter(|_| view.view == StageView::Folder),
         view: match view.view {
-            StageView::File => ViewFile::File,
+            StageView::File | StageView::Folder => ViewFile::File,
             StageView::Gallery => ViewFile::Gallery,
         },
         query: view.query.clone(),
@@ -227,6 +237,12 @@ pub(super) fn decode(bytes: &[u8]) -> Option<Saved> {
         _ => return None,
     };
     let absolute = |path: Option<PathBuf>| path.filter(|path| path.is_absolute());
+    let folder = absolute(file.current_folder);
+    let stage = match file.view {
+        ViewFile::File if folder.is_some() => StageView::Folder,
+        ViewFile::File => StageView::File,
+        ViewFile::Gallery => StageView::Gallery,
+    };
     let view = SavedView {
         folders: file
             .folders
@@ -242,7 +258,7 @@ pub(super) fn decode(bytes: &[u8]) -> Option<Saved> {
             })
             .collect(),
         show_ignored: file.show_ignored,
-        current: absolute(file.current),
+        current: folder.or_else(|| absolute(file.current)),
         query: file.query,
         kind: match file.kind {
             KindFile::All => KindFilter::All,
@@ -261,10 +277,7 @@ pub(super) fn decode(bytes: &[u8]) -> Option<Saved> {
             },
         },
         top_row: absolute(file.first_visible_row),
-        view: match file.view {
-            ViewFile::File => StageView::File,
-            ViewFile::Gallery => StageView::Gallery,
-        },
+        view: stage,
     };
     Some(Saved {
         view,
@@ -287,6 +300,7 @@ fn from_version_1(file: StateFileV1) -> StateFile {
     StateFile {
         version: VERSION,
         current: under(file.current),
+        current_folder: None,
         view: ViewFile::File,
         first_visible_row: under(file.first_visible_row),
         folders: root

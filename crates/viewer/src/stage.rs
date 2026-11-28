@@ -1,4 +1,4 @@
-//! The stage: the right pane. It has two views: the gallery, a grid of the
+//! The stage: the right pane. It shows a directory listing, the gallery of
 //! checked files (`stage/gallery.rs`), and the file view, which shows one
 //! file at a time and is described here. The state says which shows.
 //!
@@ -41,8 +41,10 @@
 //! Esc leaves, shows no position, and gives an image the whole window.
 
 mod cache;
+mod folder;
 mod gallery;
 mod images;
+mod links;
 mod load;
 mod loading;
 mod render;
@@ -82,6 +84,7 @@ struct Asked {
     presenting: bool,
     /// The gallery shows, not the file view.
     gallery: bool,
+    folder: Option<(explorer::Sort, bool)>,
     /// The file view offers the way back to the gallery: two or more
     /// files are checked.
     back: bool,
@@ -91,12 +94,18 @@ impl Asked {
     fn of(state: &AppState) -> Self {
         let presenting = state.is_presenting();
         let gallery = state.shows_gallery();
-        let file_view = !presenting && !gallery;
+        let folder = state
+            .explorer()
+            .zip(state.current())
+            .filter(|_| state.stage_view() == crate::StageView::Folder)
+            .map(|(e, id)| (e.sort(), e.tree().size(id).is_some()));
+        let file_view = !presenting && !gallery && folder.is_none();
         Self {
             staged: state.staged(),
             position: state.position().filter(|_| file_view),
             presenting,
             gallery,
+            folder,
             back: file_view && state.selected_count() >= 2,
         }
     }
@@ -249,8 +258,13 @@ pub(crate) struct Stage {
     texts: Lru<Arc<Path>, CachedText>,
     text_views: TextViews,
     gallery: Entity<Gallery>,
+    folder: Option<Entity<folder::FolderList>>,
     renders: usize,
     loads: usize,
+    link_task: Option<Task<Result<()>>>,
+    heading_task: Option<Task<Result<()>>>,
+    section: Option<(Arc<Path>, String)>,
+    _markdown_observer: Subscription,
     _observe: Subscription,
 }
 
@@ -264,8 +278,10 @@ impl std::fmt::Debug for Stage {
 }
 
 impl Focusable for Stage {
-    fn focus_handle(&self, _: &App) -> FocusHandle {
-        self.focus_handle.clone()
+    fn focus_handle(&self, cx: &App) -> FocusHandle {
+        self.folder
+            .as_ref()
+            .map_or_else(|| self.focus_handle.clone(), |list| list.focus_handle(cx))
     }
 }
 
@@ -283,6 +299,11 @@ impl Stage {
             let (state, focus) = (state.clone(), focus_handle.clone());
             cx.new(|cx| Gallery::new(state, focus, cx))
         };
+        let text_views = TextViews::new(window, cx);
+        let markdown_observer =
+            cx.observe_in(&text_views.markdown, window, |this, _, window, cx| {
+                this.reveal_fragment(window, cx);
+            });
         let mut this = Self {
             state,
             focus_handle,
@@ -293,8 +314,13 @@ impl Stage {
             preload: None,
             images: cx.new(StageImages::new),
             texts: Lru::new(TEXT_CACHE_BYTES),
-            text_views: TextViews::new(window, cx),
+            text_views,
+            link_task: None,
+            heading_task: None,
+            section: None,
+            _markdown_observer: markdown_observer,
             gallery,
+            folder: None,
             renders: 0,
             loads: 0,
             _observe: observe,

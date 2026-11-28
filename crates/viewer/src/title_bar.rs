@@ -77,12 +77,13 @@ fn command(
 /// update ready to install and, where there is no menu bar, the update
 /// commands.
 pub(crate) fn window_bar(
-    state: &AppState,
+    app_state: &gpui_kit::Entity<AppState>,
     explorer: Option<Pixels>,
     updater: Option<&Updater>,
     window: &Window,
     cx: &App,
 ) -> TitleBar {
+    let state = app_state.read(cx);
     let fullscreen = window.is_fullscreen();
     // In fullscreen the Kit's inner row starts this far in.
     let inset = if fullscreen {
@@ -106,7 +107,7 @@ pub(crate) fn window_bar(
             cx,
         ))
         .child(stage_part(
-            state,
+            app_state,
             explorer.is_some(),
             updater.and_then(Updater::offer),
             cx,
@@ -252,11 +253,12 @@ fn more(state: &AppState, open: bool, automatic: Option<bool>) -> impl IntoEleme
 /// `offer` if any, and Present. Beside the explorer its left border is the
 /// rule that continues the split's divider.
 fn stage_part(
-    state: &AppState,
+    app_state: &gpui_kit::Entity<AppState>,
     beside_explorer: bool,
     offer: Option<&Offer>,
     cx: &App,
 ) -> impl IntoElement {
+    let state = app_state.read(cx);
     h_flex()
         .id("bar-stage")
         .test_support()
@@ -291,7 +293,7 @@ fn stage_part(
                     .truncate()
                     .text_sm()
                     .text_color(cx.theme().foreground)
-                    .child(title),
+                    .child(breadcrumbs(app_state, title, cx)),
             )
         })
         // Empty, so the window moves from here.
@@ -300,8 +302,9 @@ fn stage_part(
         .child(
             // Disabled while the stage is blank, which is when it has no
             // title.
-            command("present", Icons::Play, "Present", StartPresenting)
-                .disabled(state.stage_title().is_none()),
+            command("present", Icons::Play, "Present", StartPresenting).disabled(
+                state.stage_title().is_none() || state.stage_view() == crate::StageView::Folder,
+            ),
         )
 }
 
@@ -323,6 +326,49 @@ fn install_label(how: How) -> &'static str {
         How::Restart => "Restart to Update",
         How::Install => "Install Update",
     }
+}
+
+/// The path inside the open root, alongside Back and Forward. The current
+/// entry is the last crumb and each ancestor opens its directory.
+fn breadcrumbs(
+    state: &gpui_kit::Entity<AppState>,
+    title: SharedString,
+    cx: &App,
+) -> gpui_kit::AnyElement {
+    use gpui_kit::component::breadcrumb::{Breadcrumb, BreadcrumbItem};
+    let model = state.read(cx);
+    let Some((tree, id)) = model
+        .explorer()
+        .zip(model.current())
+        .filter(|_| !model.shows_gallery())
+    else {
+        return title.into_any_element();
+    };
+    let generation = model.staged().0;
+    let mut ancestors: Vec<_> = std::iter::successors(Some(id), |id| tree.tree().parent(*id))
+        .take_while(|id| *id != explorer::NodeId::ROOT)
+        .collect();
+    if ancestors.len() <= 1 {
+        return title.into_any_element();
+    }
+    ancestors.reverse();
+    let items = ancestors.into_iter().map(|node| {
+        let item = BreadcrumbItem::new(tree.tree().name(node).to_owned())
+            .min_w_0()
+            .truncate();
+        if node == id {
+            return item;
+        }
+        let state = state.clone();
+        item.on_click(move |_, _, cx| {
+            state.update(cx, |state, cx| state.navigate(generation, node, cx));
+        })
+    });
+    Breadcrumb::new()
+        .min_w_0()
+        .overflow_hidden()
+        .children(items)
+        .into_any_element()
 }
 
 #[cfg(test)]

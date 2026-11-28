@@ -72,3 +72,21 @@ fn filtering_and_sorting_a_hundred_thousand_rows_build_only_a_screenful(cx: &mut
     })
     .unwrap();
 }
+
+#[gpui_kit::test]
+fn opening_a_wide_folder_only_draws_visible_children(cx: &mut TestAppContext) {
+    let names: Vec<String> = (0..100_000).map(|i| format!("wide/f{i:06}")).collect();
+    let paths: Vec<&str> = names.iter().map(String::as_str).collect();
+    let (handle, view) = open_app(cx, tree(&paths));
+    let folder = node(cx, &view, "wide");
+    let first = node(cx, &view, "wide/f000000");
+    let far = node(cx, &view, "wide/f099999");
+    click(cx, handle, row(folder));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find(("folder-entry", first.index())).visible());
+        assert!(window.try_find(("folder-entry", far.index())).is_none());
+    })
+    .unwrap();
+    assert_eq!(read(cx, &view, viewer::AppState::scans), 0);
+}

@@ -11,8 +11,7 @@
 //! pointer is over the gutter, and their column is the gap that keeps the
 //! line numbers off the code.
 //!
-//! A link in the Markdown view opens only when it is a web or mail link
-//! (`http`, `https`, `mailto`); any other link does nothing.
+//! Document links navigate the viewer. Web and mail links use their system handlers.
 //!
 //! An image in the Markdown view loads from the file's own folder when its
 //! address is a relative path, as it would on a code host; a `data:` address
@@ -90,7 +89,8 @@ struct Holds {
 /// The code view and the Markdown view. See the module docs.
 pub(crate) struct TextViews {
     code: Entity<EditorState>,
-    markdown: Entity<TextViewState>,
+    pub(super) markdown: Entity<TextViewState>,
+    pub(super) markdown_source: SharedString,
     code_holds: Option<Holds>,
     markdown_holds: Option<Holds>,
     /// Whether the code view shows prose: wrapped, with no line numbers.
@@ -121,6 +121,7 @@ impl TextViews {
             markdown,
             code_holds: None,
             markdown_holds: None,
+            markdown_source: SharedString::default(),
             code_prose: false,
         }
     }
@@ -192,6 +193,7 @@ impl TextViews {
             return;
         }
         self.markdown_holds = Some(holds);
+        self.markdown_source = text.clone();
         self.markdown.update(cx, |markdown, cx| {
             markdown.set_text(text, cx);
             markdown.list_state().scroll_to(ListOffset::default());
@@ -254,9 +256,14 @@ impl TextViews {
 
     /// The Markdown view, labelled with the file's name: the text view in
     /// a centred column, its scrolling taking the wheel over the margins.
-    pub(crate) fn render_markdown(&self, name: SharedString) -> impl IntoElement {
+    pub(super) fn render_markdown(
+        &self,
+        name: SharedString,
+        stage: gpui_kit::WeakEntity<super::Stage>,
+    ) -> impl IntoElement {
         let markdown = self.markdown.clone();
         let file = self.markdown_holds.as_ref().map(|holds| holds.path.clone());
+        let source = file.clone();
         div()
             .id("stage-markdown")
             .test_support()
@@ -281,7 +288,17 @@ impl TextViews {
                 TextView::new(&self.markdown)
                     .scrollable(true)
                     .selectable(true)
-                    .on_link_click(open_link)
+                    .on_link_click(move |url, event, window, cx| {
+                        if !is_activation(event) {
+                            return;
+                        }
+                        if is_web_or_mail(url) {
+                            cx.open_url(url);
+                        } else if let (Some(source), Some(stage)) = (&source, stage.upgrade()) {
+                            stage
+                                .update(cx, |stage, cx| stage.follow_link(source, url, window, cx));
+                        }
+                    })
                     .image_source(move |url| {
                         let folder = file.as_deref().and_then(Path::parent);
                         image_source(folder, url)
@@ -327,15 +344,6 @@ pub(crate) fn is_prose(name: &str, extension: &str) -> bool {
                     .any(|code| name.eq_ignore_ascii_case(code))
         }
         _ => false,
-    }
-}
-
-/// A click on a Markdown link: opens it as the Kit would by default, but
-/// only a web or mail link. A file can hold any URL, and a `file://` URL
-/// or an app's own scheme would open whatever it names, a script included.
-fn open_link(url: &SharedString, event: &ClickEvent, _: &mut Window, cx: &mut App) {
-    if is_activation(event) && is_web_or_mail(url) {
-        cx.open_url(url);
     }
 }
 

@@ -22,9 +22,37 @@ impl Stage {
     pub(super) fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let asked = Asked::of(self.state.read(cx));
         if asked == self.asked {
+            self.reveal_fragment(window, cx);
             return;
         }
+        if self.asked.staged.1 != asked.staged.1 {
+            self.link_task = None;
+        }
         let was = std::mem::replace(&mut self.asked, asked);
+        if asked.folder.is_some() {
+            self.load = None;
+            self.preload = None;
+            let focused = self.folder.as_ref().is_some_and(|list| {
+                gpui_kit::Focusable::focus_handle(list, cx).contains_focused(window, cx)
+            });
+            self.folder = Some(super::folder::sync(
+                self.folder.as_ref(),
+                &self.state,
+                window,
+                cx,
+            ));
+            if focused && let Some(list) = &self.folder {
+                list.update(cx, |list, cx| list.focus(window, cx));
+            }
+            self.content = Content::Blank;
+            self.showing = None;
+            cx.notify();
+            return;
+        }
+        if was.folder.is_some() {
+            self.focus_from_view(window, cx);
+        }
+        self.folder = None;
         if asked.gallery {
             self.load = None;
             self.preload = None;
@@ -45,7 +73,7 @@ impl Stage {
             self.start_load(window, cx);
         }
         let shape = |asked: Asked| (asked.position, asked.presenting, asked.gallery, asked.back);
-        if shape(asked) != shape(was) {
+        if shape(asked) != shape(was) || was.folder.is_some() {
             cx.notify();
         }
     }
@@ -190,6 +218,7 @@ impl Stage {
         }
         self.loads += 1;
         self.show(content, Some(showing), window, cx);
+        self.reveal_fragment(window, cx);
         self.preload_neighbours(window, cx);
     }
 

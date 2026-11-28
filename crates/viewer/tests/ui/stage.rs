@@ -697,9 +697,9 @@ fn a_rescan_leaves_focus_scroll_and_the_editor_alone(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn only_web_and_mail_links_open(cx: &mut TestAppContext) {
+fn only_web_and_mail_links_open_an_external_handler(cx: &mut TestAppContext) {
     let urls = [
-        // Never opened: a file, an app's scheme, a relative path, script.
+        // Local links stay in the viewer. Custom schemes do not launch an app.
         ("1.md", "file:///tmp/evil.command", false),
         ("2.md", "vscode://file/tmp/evil", false),
         ("3.md", "other.md", false),
@@ -809,4 +809,78 @@ fn the_wheel_scrolls_markdown_over_its_margins_too(cx: &mut TestAppContext) {
     // Over the text.
     wheel(cx, 300.);
     assert!(scroll(cx) > 100., "the column scrolls itself");
+}
+
+#[gpui_kit::test]
+fn a_relative_markdown_link_opens_in_the_same_stage_and_goes_back(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "start.md",
+        "[Follow the local file](page%202.md)",
+    );
+    write(dir.path(), "page 2.md", "# Destination");
+    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
+    let start = node(cx, &view, "start.md");
+    show(cx, handle, start);
+    assert_eq!(shown(cx, handle), Some(Shown::Markdown("start.md".into())));
+    click_first_link(cx, handle);
+    assert_eq!(shown(cx, handle), Some(Shown::Markdown("page 2.md".into())));
+    dispatch(cx, handle, viewer::keys::GoBack);
+    assert_eq!(shown(cx, handle), Some(Shown::Markdown("start.md".into())));
+}
+
+fn click_first_link(cx: &mut TestAppContext, handle: AnyWindowHandle) {
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        let bounds = window.find("stage-markdown").bounds();
+        crate::click_without_frame(
+            window,
+            point(bounds.left() + px(60.), bounds.top() + px(36.)),
+            cx,
+        );
+    })
+    .expect("click the first Markdown link");
+    cx.run_until_parked();
+}
+
+#[gpui_kit::test]
+fn a_markdown_heading_is_revealed_and_back_returns_to_the_document_top(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let source = format!(
+        "[Jump to the **next section**](#next-section-1)\n\n# Next section\n\n{}\n\n# Next section\n",
+        "Paragraph.\n\n".repeat(120)
+    );
+    write(dir.path(), "guide.md", source);
+    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().join("guide.md")]));
+    assert_eq!(shown(cx, handle), Some(Shown::Markdown("guide.md".into())));
+    click_first_link(cx, handle);
+    assert!(
+        probe(cx, &view).scroll() > 100.,
+        "the second heading is offscreen"
+    );
+    dispatch(cx, handle, viewer::keys::GoBack);
+    assert_eq!(probe(cx, &view).scroll(), 0.);
+    dispatch(cx, handle, viewer::keys::GoForward);
+    assert!(probe(cx, &view).scroll() > 100.);
+}
+
+#[gpui_kit::test]
+fn a_document_opened_on_its_own_can_link_to_a_sibling_folder(cx: &mut TestAppContext) {
+    let dir = crate::folder(&[
+        ("guide.md", "[Open the examples](examples/)"),
+        ("examples/one.txt", "one"),
+    ]);
+    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().join("guide.md")]));
+    assert_eq!(shown(cx, handle), Some(Shown::Markdown("guide.md".into())));
+    click_first_link(cx, handle);
+    let target = crate::node_at(cx, &view, &dir.path().join("examples"));
+    assert_eq!(current(cx, &view), Some(target));
+    let child = crate::node_at(cx, &view, &dir.path().join("examples/one.txt"));
+    click(cx, handle, ("folder-entry", child.index()));
+    assert_eq!(shown(cx, handle), Some(Shown::Code("one.txt".into())));
+    dispatch(cx, handle, viewer::keys::GoBack);
+    assert_eq!(current(cx, &view), Some(target));
+    dispatch(cx, handle, viewer::keys::GoBack);
+    assert_eq!(shown(cx, handle), Some(Shown::Markdown("guide.md".into())));
 }

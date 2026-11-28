@@ -173,6 +173,14 @@ impl Folder {
     }
 }
 
+/// A local document link awaiting the tree that contains its target.
+#[derive(Debug)]
+pub(super) struct PendingLink {
+    path: PathBuf,
+    file: bool,
+    fragment: Option<String>,
+}
+
 impl AppState {
     /// Shows the system folder picker and adds the folders chosen.
     pub fn prompt_for_folders(cx: &mut Context<Self>) {
@@ -274,6 +282,64 @@ impl AppState {
         }
         self.settle_asked_files(cx);
         cx.notify();
+    }
+
+    /// Follows a local link using the same file and folder scans as Open.
+    /// Only the latest pending destination can take the stage.
+    pub(crate) fn follow_document(
+        &mut self,
+        path: PathBuf,
+        file: bool,
+        fragment: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        self.pending_link = Some(PendingLink {
+            path: path.clone(),
+            file,
+            fragment,
+        });
+        if self.land_link(cx) {
+            return;
+        }
+        if file {
+            self.open_file(path, cx);
+        } else {
+            self.open_paths(vec![path], Vec::new(), cx);
+        }
+    }
+
+    fn land_link(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(link) = &self.pending_link else {
+            return false;
+        };
+        let Some(id) = self
+            .explorer
+            .as_ref()
+            .and_then(|e| e.tree().find_abs(&link.path))
+        else {
+            return false;
+        };
+        let fragment = self.pending_link.take().and_then(|link| link.fragment);
+        self.use_browsed_row(id);
+        self.reveal(id, cx);
+        self.open_entry(id, cx);
+        self.fragment = fragment;
+        self.record(Record::Add);
+        cx.notify();
+        true
+    }
+
+    pub(super) fn settle_link(&mut self, cx: &mut Context<Self>) {
+        if !self.land_link(cx)
+            && let Some(link) = &self.pending_link
+            && link.file
+        {
+            self.open_file(link.path.clone(), cx);
+        }
+    }
+
+    pub(crate) fn fragment(&self) -> Option<&str> {
+        self.fragment.as_deref()
     }
 
     /// A file asked for that no tree lists, and that no folder being read
@@ -466,6 +532,13 @@ impl AppState {
             .and_then(|at| Some((*rows.get(at)?, at)));
         let none_left = explorer.tree().folders().len() == 0;
         self.folders.retain(|folder| folder.path != path);
+        if self
+            .pending_link
+            .as_ref()
+            .is_some_and(|link| link.path.starts_with(&path))
+        {
+            self.pending_link = None;
+        }
         for asked in &mut self.asked_files {
             asked.paths.retain(|file| !file.starts_with(&path));
         }
