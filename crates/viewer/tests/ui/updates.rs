@@ -687,14 +687,9 @@ fn more_is_on_the_bar_with_nothing_open_where_there_is_no_menu_bar(cx: &mut Test
         })
         .unwrap()
     };
-    if cfg!(target_os = "macos") {
-        // The app menu has the update commands.
-        assert!(!more(cx));
-        return;
-    }
     assert!(more(cx));
     click(cx, handle, "more");
-    // Only the update commands: the explorer's would act on nothing.
+    // Storage is available with no folder open, alongside platform update commands.
     let names = cx
         .update_window(handle, |_, window, cx| {
             window.render_frame(cx);
@@ -706,7 +701,18 @@ fn more_is_on_the_bar_with_nothing_open_where_there_is_no_menu_bar(cx: &mut Test
                 .collect::<Vec<_>>()
         })
         .unwrap();
-    assert_eq!(names, ["Check for Updates…", "Check Automatically"]);
+    if cfg!(target_os = "macos") {
+        assert_eq!(names, ["Content Search…"]);
+    } else {
+        assert_eq!(
+            names,
+            [
+                "Content Search…",
+                "Check for Updates…",
+                "Check Automatically"
+            ]
+        );
+    }
 }
 
 #[gpui_kit::test]
@@ -941,6 +947,7 @@ fn more_ends_with_the_update_commands_where_there_is_no_menu_bar(cx: &mut TestAp
         .filter_map(|(label, _)| label.as_deref())
         .collect();
     let explorers = [
+        "Content Search…",
         "Expand All",
         "Collapse All",
         "Show Ignored",

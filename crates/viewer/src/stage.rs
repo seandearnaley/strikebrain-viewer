@@ -45,7 +45,7 @@ mod folder;
 mod gallery;
 mod images;
 mod links;
-mod load;
+pub(crate) mod load;
 mod loading;
 mod render;
 mod text;

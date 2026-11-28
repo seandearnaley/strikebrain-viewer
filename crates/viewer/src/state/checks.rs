@@ -86,7 +86,7 @@ impl AppState {
     }
 
     /// Opens an entry on the stage without changing its checkbox.
-    pub(super) fn show(&mut self, id: NodeId, cx: &mut Context<Self>) {
+    pub(crate) fn show(&mut self, id: NodeId, cx: &mut Context<Self>) {
         if self.gallery_len() < 2 {
             self.show_browser_entry(id, Record::Add, cx);
             return;

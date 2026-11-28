@@ -165,7 +165,7 @@ fn starts_https(url: &str) -> bool {
 /// A GET of `url`, refused before any request unless [`allowed`] passes
 /// it, held to `https` on every redirect when it starts there, and with no
 /// proxy when it is on this machine.
-fn get(agent: &Agent, url: &str) -> Result<RequestBuilder<WithoutBody>, Error> {
+pub(crate) fn get(agent: &Agent, url: &str) -> Result<RequestBuilder<WithoutBody>, Error> {
     if !allowed(url) {
         return Err(Error::NotHttps(url.to_owned()));
     }

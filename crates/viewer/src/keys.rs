@@ -113,6 +113,8 @@ actions!(
         PreviousPane,
         /// Moves keyboard focus to the filter input.
         FocusFilter,
+        /// Manage the optional content-search model.
+        ManageContentSearch,
         /// Moves keyboard focus to the explorer's tree.
         FocusExplorer,
         /// Shows the application's name and version.

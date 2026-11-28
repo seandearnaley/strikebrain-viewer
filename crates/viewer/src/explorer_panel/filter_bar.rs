@@ -5,7 +5,10 @@
 //! or with none moves focus to the tree.
 
 use explorer::KindFilter;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::h_flex;
 use gpui_kit::component::input::Input;
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, v_flex};
 use gpui_kit::{
@@ -32,17 +35,23 @@ impl ExplorerPanel {
             .unwrap_or_default();
 
         let input = div()
+            .flex_1()
+            .min_w_0()
             .key_context(FILTER)
             .on_action(cx.listener(Self::cancel_filter))
             .child(
-                Input::new(&self.filter)
-                    .id("filter")
-                    .prefix(
-                        Icon::new(IconName::Search)
-                            .size_4()
-                            .text_color(theme.muted_foreground),
-                    )
-                    .cleanable(true),
+                Input::new(if self.content.enabled {
+                    &self.content.input
+                } else {
+                    &self.filter
+                })
+                .id("filter")
+                .prefix(
+                    Icon::new(IconName::Search)
+                        .size_4()
+                        .text_color(theme.muted_foreground),
+                )
+                .cleanable(true),
             );
 
         // A segment takes no keyboard focus on a click: focus stays in the
@@ -71,12 +80,49 @@ impl ExplorerPanel {
             .flex_shrink_0()
             .p_2()
             .gap_2()
-            .child(input)
-            .child(kinds)
+            .child(
+                h_flex()
+                    .gap_1()
+                    .items_center()
+                    .child(input)
+                    .child(self.scope_selector(cx)),
+            )
+            .children((!self.content.enabled).then_some(kinds))
+    }
+
+    fn scope_selector(&self, cx: &Context<Self>) -> impl IntoElement + use<> {
+        let contents = self.content.enabled;
+        let panel = cx.weak_entity();
+        Button::new("search-scope")
+            .small()
+            .ghost()
+            .label(if contents { "Contents" } else { "File Names" })
+            .accessibility_label("Search scope")
+            .dropdown_menu(move |mut menu, _, _| {
+                for (scope, label) in [(false, "File Names"), (true, "Contents")] {
+                    let panel = panel.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new(label)
+                            .checked(scope == contents)
+                            .on_click(move |_, window, cx| {
+                                let _alive = panel.update(cx, |this, cx| {
+                                    this.content.enabled = scope;
+                                    this.focus_filter(window, cx);
+                                    cx.notify();
+                                });
+                            }),
+                    );
+                }
+                menu
+            })
     }
 
     /// Esc in the filter input.
     fn cancel_filter(&mut self, _: &CancelFilter, window: &mut Window, cx: &mut Context<Self>) {
+        if self.content.enabled {
+            self.dismiss_content(cx);
+            return;
+        }
         if self.filter.read(cx).value().is_empty() {
             self.focus_tree(window, cx);
         } else {

@@ -125,6 +125,7 @@ fn more_holds_the_explorers_commands(cx: &mut TestAppContext) {
     assert_eq!(
         items,
         [
+            "Content Search…",
             "Expand All",
             "Collapse All",
             "Show Ignored",

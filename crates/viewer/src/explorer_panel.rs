@@ -6,6 +6,7 @@
 //! starts at the filter: its commands are in the window's title bar
 //! (`title_bar.rs`). With no folder the pane shows only "Add Folder".
 
+mod content;
 mod filter_bar;
 mod selection_bar;
 
@@ -62,7 +63,8 @@ pub(crate) struct ExplorerPanel {
     /// The row under the pointer, which shows its remove button if it is
     /// a top-level folder's.
     hovered: Option<NodeId>,
-    _subscriptions: [Subscription; 3],
+    content: content::Content,
+    _subscriptions: [Subscription; 4],
 }
 
 impl std::fmt::Debug for ExplorerPanel {
@@ -83,6 +85,7 @@ impl ExplorerPanel {
     pub(crate) fn new(
         state: Entity<AppState>,
         stage_focus: FocusHandle,
+        search_dir: Option<std::path::PathBuf>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -98,7 +101,15 @@ impl ExplorerPanel {
         state.update(cx, |state, _| {
             state.probe_top_row(Rc::new(move |rows| top_index(&probe, rows)));
         });
+        let content = content::Content::new(search_dir, window, cx);
         let subscriptions = [
+            cx.subscribe(&content.input, |this, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::PressEnter { .. }) {
+                    this.submit_content(cx);
+                } else if matches!(event, InputEvent::Change) {
+                    this.edit_content(cx);
+                }
+            }),
             cx.observe(&state, |_, _, cx| cx.notify()),
             cx.subscribe(&state, |this, _, event: &StateEvent, cx| match event {
                 StateEvent::RowsReplaced => this.reveal_focus(cx),
@@ -131,6 +142,7 @@ impl ExplorerPanel {
             scroll,
             ring: false,
             hovered: None,
+            content,
             _subscriptions: subscriptions,
         }
     }
@@ -139,7 +151,13 @@ impl ExplorerPanel {
 
     /// Which part of the pane holds keyboard focus, if any.
     pub(crate) fn focused(&self, window: &Window, cx: &App) -> Option<ExplorerFocus> {
-        if self.filter.focus_handle(cx).contains_focused(window, cx) {
+        if self.filter.focus_handle(cx).contains_focused(window, cx)
+            || self
+                .content
+                .input
+                .focus_handle(cx)
+                .contains_focused(window, cx)
+        {
             Some(ExplorerFocus::Filter)
         } else if self.focus_handle.contains_focused(window, cx) {
             Some(ExplorerFocus::Tree)
@@ -160,7 +178,12 @@ impl ExplorerPanel {
         if !self.filter_on_screen(cx) {
             return;
         }
-        self.filter.update(cx, |input, cx| {
+        let input = if self.content.enabled {
+            &self.content.input
+        } else {
+            &self.filter
+        };
+        input.update(cx, |input, cx| {
             input.focus(window, cx);
             input.select_all(window, cx);
         });
@@ -573,6 +596,9 @@ impl Render for ExplorerPanel {
             .capture_any_mouse_down(cx.listener(|this, _, _, cx| this.pointer_down(cx)));
 
         let state = self.state.read(cx);
+        if state.is_empty() && self.content.enabled {
+            return panel.child(self.search_controls(cx));
+        }
         if state.is_empty() {
             return panel.child(self.render_without_tree(Some(Self::render_empty())));
         }
@@ -589,8 +615,18 @@ impl Render for ExplorerPanel {
             None => (None, self.render_without_tree(None)),
         };
 
+        if let Some(hits) = self.search_hits(cx) {
+            return panel
+                .child(self.render_filter_bar(cx))
+                .child(self.search_controls(cx))
+                .child(hits);
+        }
         panel
             .child(self.render_filter_bar(cx))
+            .when(self.content.enabled, |el| {
+                el.child(self.search_controls(cx))
+            })
+            .children(self.background_search(cx))
             .children(header)
             .child(body)
             .when_some(state.folder_activity(), |panel, label| {

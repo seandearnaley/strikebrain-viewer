@@ -13,6 +13,12 @@ name = "strikebrain-viewer"
 path = "src/main.rs"
 
 [dependencies]
+# Rust inference from local Google model files.
+lattice-model-embeddinggemma2 = "0.18.0"
+anyhow = "1"
+hex = "0.4.3"
+rusqlite = { version = "0.43.0", features = ["bundled"] }
+fs2 = "0.4.3"
 # The platform's config folder for the saved state.
 # Decodes the image in a Markdown `data:` URL, as the Kit does until the
 # Markdown view sets its own image source. The Kit already builds this crate.
@@ -67,6 +73,9 @@ libc = "0.2.191"
 # GPUI already builds this crate for its own manifest.
 [target.'cfg(windows)'.build-dependencies]
 embed-resource = "3.0.12"
+
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
+lattice-model-embeddinggemma2 = { version = "0.18.0", features = ["metal-gpu"] }
 
 [dev-dependencies]
 gpui-kit = { workspace = true, features = ["test-support"] }

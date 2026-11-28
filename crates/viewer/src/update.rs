@@ -14,7 +14,7 @@
 //! running app's and runs it, and it relaunches the app; on Linux, `linux`
 //! opens the `.deb` with `xdg-open`.
 
-mod download;
+pub(crate) mod download;
 mod feed;
 mod install;
 #[cfg(any(not(any(target_os = "macos", windows)), test))]
@@ -22,7 +22,7 @@ mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(test)]
-mod test_server;
+pub(crate) mod test_server;
 #[cfg(any(windows, test))]
 mod windows;
 

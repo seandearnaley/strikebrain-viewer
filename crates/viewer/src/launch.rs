@@ -58,6 +58,7 @@ pub fn open_main_window(
         None => (None, None),
     };
     let session = Session {
+        search_dir: crate::search::store(),
         view: plan.view,
         explorer_width: plan.explorer_width,
         explorer_hidden: plan.explorer_hidden,

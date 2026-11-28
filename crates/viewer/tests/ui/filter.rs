@@ -286,3 +286,29 @@ fn no_rows_after_filtering_leaves_the_tree_blank(cx: &mut TestAppContext) {
     })
     .unwrap();
 }
+
+#[gpui_kit::test]
+fn content_scope_keeps_filename_search_independent(cx: &mut TestAppContext) {
+    let folder = tempfile::tempdir().unwrap();
+    crate::write(folder.path(), "readme.md", "sea cliffs");
+    let store = tempfile::tempdir().unwrap();
+    let (window, _) = crate::open_app_with_session(
+        cx,
+        viewer::Launch::Folders(vec![folder.path().to_owned()]),
+        viewer::Session {
+            search_dir: Some(store.path().to_owned()),
+            ..Default::default()
+        },
+    );
+    crate::search_scope(cx, window, "Contents");
+    type_query(cx, window, "ocean waves");
+    assert!(rows_now(cx, window).iter().any(|row| row == "readme.md"));
+    press(cx, window, "enter");
+    cx.update_window(window, |_, window, _| {
+        assert!(window.find("search-consent").visible());
+    })
+    .unwrap();
+    crate::click(cx, window, "search-dismiss");
+    assert!(store.path().read_dir().unwrap().next().is_none());
+    assert_eq!(filter_value(cx, window), "ocean waves");
+}

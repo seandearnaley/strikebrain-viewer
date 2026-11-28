@@ -155,9 +155,7 @@ fn explorer_part(
         })
         // Where More holds the update commands it shows with nothing open
         // too, holding only them: the explorer's would act on nothing.
-        .when(open || automatic.is_some(), |part| {
-            part.child(more(state, open, automatic))
-        })
+        .child(more(state, open, automatic))
         .when(slow, |part| {
             part.child(
                 div()
@@ -223,7 +221,11 @@ fn more(state: &AppState, open: bool, automatic: Option<bool>) -> impl IntoEleme
         .tooltip("More")
         .accessibility_label("More")
         .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
-            menu.when(open, |menu| {
+            menu.menu(
+                "Content Search…",
+                Box::new(crate::keys::ManageContentSearch),
+            )
+            .when(open, |menu| {
                 menu.menu_with_disabled(expand, Box::new(ExpandAll), !has_tree)
                     .menu_with_disabled("Collapse All", Box::new(CollapseAll), !has_tree)
                     .separator()

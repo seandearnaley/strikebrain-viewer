@@ -36,6 +36,12 @@ Add Folder (⌘O, the bar's folder button, or File > Add Folder…) adds more, a
 
 Click a folder in the sidebar to preview its contents. Up and Down preview each highlighted row. Double-click a folder or press Enter to move into it. In the folder pane, click once to select an item and double-click or press Enter to open it. Switch between **Gallery** and **List** in the folder toolbar (⌘1 and ⌘2 on macOS, Ctrl+1 and Ctrl+2 elsewhere). The viewer remembers the layout. The two views share the sidebar’s filter and sort order. In List, click **Name**, **Type**, or **Size** to sort, and click again to reverse the order.
 
+## Search file contents
+
+Open a folder, choose **Contents** beside the explorer search field, enter a description and press Return. **Download & Index** installs Google’s EmbeddingGemma 2 model (1.52 GB) and indexes images and UTF-8 text in the named folder on your device. Files and queries stay local. Results appear as indexing proceeds. Click a result to preview it, then use ↑ and ↓ to browse the matches.
+
+The viewer reuses the model across folders and reuses embeddings for files with the same size and modification time. **More → Content Search…** can download the model ahead of time or remove the model and individual folder indexes. [Benchmark and reproduction steps](docs/research/2026-11-28-content-search-benchmark.md)
+
 ## Keys
 
 | Key | Tree | Gallery | Stage | Presentation |

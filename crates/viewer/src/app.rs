@@ -68,6 +68,8 @@ pub const SAVE_DELAY: Duration = Duration::from_millis(500);
 /// default does none of these.
 #[derive(Debug, Default)]
 pub struct Session {
+    /// Persistent model and index storage. Tests supply an isolated directory.
+    pub search_dir: Option<PathBuf>,
     /// The saved view of the folders being opened.
     pub view: Option<SavedView>,
     /// The explorer's saved width, in pixels.
@@ -87,6 +89,17 @@ pub struct Session {
     /// Check for updates and offer them, as these options say. `None`
     /// checks nothing, and the update commands show disabled.
     pub updates: Option<UpdateOptions>,
+}
+
+impl Session {
+    fn take_state_options(&mut self) -> StateOptions {
+        StateOptions {
+            view: self.view.take(),
+            watch: self.watch,
+            scan_cache: self.store.as_ref().map(|store| store.scan_cache.clone()),
+            quiet: self.store.as_ref().map_or_default(StateStore::own_files),
+        }
+    }
 }
 
 /// What the root view knows of the window's fullscreen.
@@ -179,21 +192,24 @@ impl AppView {
     /// unless there is nothing to open: the empty state is in the explorer.
     pub fn with_session(
         launch: Launch,
-        session: Session,
+        mut session: Session,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let options = StateOptions {
-            view: session.view,
-            watch: session.watch,
-            scan_cache: session.store.as_ref().map(|store| store.scan_cache.clone()),
-            quiet: session.store.as_ref().map_or_default(StateStore::own_files),
-        };
+        let options = session.take_state_options();
         let app_state = cx.new(|cx| AppState::with_options(launch, options, cx));
         let explorer_hidden = session.explorer_hidden && !app_state.read(cx).is_empty();
         let stage = cx.new(|cx| Stage::new(app_state.clone(), window, cx));
         let stage_focus = stage.focus_handle(cx);
-        let explorer = cx.new(|cx| ExplorerPanel::new(app_state.clone(), stage_focus, window, cx));
+        let explorer = cx.new(|cx| {
+            ExplorerPanel::new(
+                app_state.clone(),
+                stage_focus,
+                session.search_dir,
+                window,
+                cx,
+            )
+        });
         let split = cx.new(|_| ResizableState::default());
         let update_settings = session.update_settings;
         let updater = session
@@ -695,6 +711,16 @@ impl AppView {
     }
 
     /// ⌘F: the filter, showing the explorer if it is hidden.
+    fn manage_search(
+        &mut self,
+        _: &crate::keys::ManageContentSearch,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.show_explorer(window, cx);
+        self.explorer.update(cx, ExplorerPanel::manage_content);
+    }
+
     fn focus_filter(&mut self, _: &FocusFilter, window: &mut Window, cx: &mut Context<Self>) {
         self.show_explorer(window, cx);
         self.focus_pane(Pane::Filter, window, cx);
@@ -791,6 +817,7 @@ impl Render for AppView {
             .on_action(cx.listener(Self::next_pane))
             .on_action(cx.listener(Self::previous_pane))
             .on_action(cx.listener(Self::focus_filter))
+            .on_action(cx.listener(Self::manage_search))
             .on_action(cx.listener(Self::focus_explorer))
             .on_action(cx.listener(Self::start_presenting))
             .on_action(cx.listener(Self::toggle_show_ignored))

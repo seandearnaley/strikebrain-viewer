@@ -26,6 +26,7 @@ const CHUNK: usize = 64 * 1024;
 pub(crate) struct Reply {
     status: &'static str,
     location: Option<String>,
+    range: Option<String>,
     body: Body,
 }
 
@@ -53,8 +54,17 @@ impl Reply {
     pub(crate) fn ok(body: impl Into<Vec<u8>>) -> Self {
         Self {
             status: "200 OK",
+            range: None,
             location: None,
             body: Body::Bytes(body.into()),
+        }
+    }
+
+    pub(crate) fn partial(bytes: &[u8], range: &str) -> Self {
+        Self {
+            status: "206 Partial Content",
+            range: Some(range.to_owned()),
+            ..Self::ok(bytes)
         }
     }
 
@@ -64,6 +74,7 @@ impl Reply {
     pub(crate) fn long(byte: u8, length: u64) -> Self {
         Self {
             status: "200 OK",
+            range: None,
             location: None,
             body: Body::Repeated { byte, length },
         }
@@ -73,6 +84,7 @@ impl Reply {
     pub(crate) fn redirect(location: &str) -> Self {
         Self {
             status: "302 Found",
+            range: None,
             location: Some(location.to_owned()),
             body: Body::Bytes(Vec::new()),
         }
@@ -81,6 +93,7 @@ impl Reply {
     fn not_found() -> Self {
         Self {
             status: "404 Not Found",
+            range: None,
             location: None,
             body: Body::Bytes(Vec::new()),
         }
@@ -248,9 +261,12 @@ fn answer(stream: &TcpStream, routes: &Routes, requests: &Requests) -> io::Resul
     let location = reply
         .location
         .map_or_else(String::new, |to| format!("Location: {to}\r\n"));
+    let range = reply
+        .range
+        .map_or_else(String::new, |r| format!("Content-Range: {r}\r\n"));
     let length = reply.body.len();
     let head = format!(
-        "HTTP/1.1 {}\r\nContent-Length: {length}\r\nConnection: close\r\n{location}\r\n",
+        "HTTP/1.1 {}\r\nContent-Length: {length}\r\nConnection: close\r\n{location}{range}\r\n",
         reply.status,
     );
     let mut stream = stream;
