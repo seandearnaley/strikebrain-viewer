@@ -35,6 +35,7 @@ impl AppState {
         self.kind = view.kind;
         self.show_ignored = view.show_ignored;
         self.sort = view.sort;
+        self.folder_layout = view.folder_layout;
         self.restore = Some(Pending {
             current: view.current,
             top_row: view.top_row,
@@ -207,6 +208,7 @@ impl AppState {
                 sort,
                 top_row,
                 view,
+                folder_layout: self.folder_layout,
             },
         }
     }

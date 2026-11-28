@@ -32,6 +32,17 @@ pub enum StageView {
     Folder,
 }
 
+/// How the immediate children of an opened folder are displayed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FolderLayout {
+    /// Thumbnails and file names.
+    #[default]
+    Gallery,
+    /// Rows with sortable columns.
+    List,
+}
+
 /// A keyboard movement over the tiles, in gallery order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TileMotion {
@@ -83,6 +94,19 @@ pub(crate) fn tile_after(motion: TileMotion, from: usize, len: usize, columns: u
 }
 
 impl AppState {
+    /// The layout last chosen for browsing folders.
+    #[must_use]
+    pub fn folder_layout(&self) -> FolderLayout {
+        self.folder_layout
+    }
+
+    pub(crate) fn set_folder_layout(&mut self, layout: FolderLayout, cx: &mut Context<Self>) {
+        if self.folder_layout != layout {
+            self.folder_layout = layout;
+            cx.notify();
+        }
+    }
+
     /// Which view the stage is asked for. While presenting the stage shows
     /// the file whatever this says, and returns to it after.
     #[must_use]

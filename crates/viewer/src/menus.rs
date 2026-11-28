@@ -16,9 +16,9 @@ use gpui_kit::component::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
 use gpui_kit::{App, Menu, MenuItem, OsAction, PromptLevel, SystemMenuType, Window};
 
 use crate::keys::{
-    About, AddFolder, CheckForUpdates, CloseWindow, CopyPath, GoBack, GoForward, Hide, HideOthers,
-    Minimize, Quit, Refresh, Reveal, ShowAll, StartPresenting, ToggleCheckAutomatically,
-    ToggleShowIgnored, ToggleSidebar, Zoom,
+    About, AddFolder, CheckForUpdates, CloseWindow, CopyPath, FolderGalleryView, FolderListView,
+    GoBack, GoForward, Hide, HideOthers, Minimize, Quit, Refresh, Reveal, ShowAll, StartPresenting,
+    ToggleCheckAutomatically, ToggleShowIgnored, ToggleSidebar, Zoom,
 };
 use crate::update::UpdateEvent;
 
@@ -35,6 +35,7 @@ const REVEAL: &str = if cfg!(target_os = "macos") {
 /// What the menu bar shows of the window's state.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct MenuBar {
+    pub(crate) folder_layout: crate::FolderLayout,
     /// Whether Show Ignored is checked.
     pub(crate) shows_ignored: bool,
     /// Whether the View menu offers Show Sidebar.
@@ -96,6 +97,11 @@ pub(crate) fn install(bar: MenuBar, cx: &App) {
             MenuItem::separator(),
             MenuItem::action("Show Ignored", ToggleShowIgnored).checked(bar.shows_ignored),
             MenuItem::action("Refresh", Refresh),
+            MenuItem::separator(),
+            MenuItem::action("As Gallery", FolderGalleryView)
+                .checked(bar.folder_layout == crate::FolderLayout::Gallery),
+            MenuItem::action("As List", FolderListView)
+                .checked(bar.folder_layout == crate::FolderLayout::List),
         ]),
         Menu::new("Go").items([
             MenuItem::action("Back", GoBack),
@@ -231,7 +237,10 @@ mod tests {
                 "Present",
                 "-",
                 "Show Ignored",
-                "Refresh"
+                "Refresh",
+                "-",
+                "As Gallery",
+                "As List"
             ]
         );
         assert_eq!(items(4), ["Back", "Forward"]);

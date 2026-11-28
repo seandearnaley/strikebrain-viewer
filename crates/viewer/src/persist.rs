@@ -56,6 +56,8 @@ pub struct SavedView {
     pub top_row: Option<PathBuf>,
     /// Which of the stage's views showed: the gallery or the file.
     pub view: StageView,
+    /// The last layout used to browse folders.
+    pub folder_layout: crate::FolderLayout,
 }
 
 /// Where the window was, relative to the display it was on, and that

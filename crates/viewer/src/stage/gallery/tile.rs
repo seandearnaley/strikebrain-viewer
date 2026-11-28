@@ -10,7 +10,7 @@
 
 use std::rc::Rc;
 
-use explorer::NodeId;
+use explorer::{Kind, NodeId};
 use gpui_kit::component::{ActiveTheme as _, Icon, v_flex};
 use gpui_kit::{
     AnyElement, App, ClickEvent, IntoElement, ObjectFit, ParentElement as _, Pixels, RenderOnce,
@@ -51,6 +51,7 @@ pub(crate) struct Tile {
     name: SharedString,
     /// The extension, for the kind's icon.
     ext: SharedString,
+    folder_entry: Option<Kind>,
     look: Option<Look>,
     size: Size<Pixels>,
     current: bool,
@@ -73,12 +74,18 @@ impl Tile {
             name: name.to_owned().into(),
             ext: ext.to_owned().into(),
             look: None,
+            folder_entry: None,
             size,
             current: false,
             focus: Focus::Elsewhere,
             at: (0, 0),
             on_click: Rc::new(on_click),
         }
+    }
+
+    pub(crate) fn folder_entry(mut self, kind: Option<Kind>) -> Self {
+        self.folder_entry = kind;
+        self
     }
 
     /// What the tile shows: `None` until it is read.
@@ -152,9 +159,15 @@ impl Tile {
                 .items_center()
                 .justify_center()
                 .child(
-                    Icon::new(file_icon(&self.ext))
-                        .size_8()
-                        .text_color(theme.muted_foreground),
+                    match self.folder_entry {
+                        Some(Kind::Dir | Kind::Unreadable) => {
+                            Icon::new(gpui_kit::assets::IconName::Folder).text_color(theme.info)
+                        }
+                        Some(Kind::Symlink) => Icon::new(gpui_kit::assets::IconName::FileSymlink)
+                            .text_color(theme.muted_foreground),
+                        _ => Icon::new(file_icon(&self.ext)).text_color(theme.muted_foreground),
+                    }
+                    .size_8(),
                 )
                 .into_any_element(),
         })
@@ -218,7 +231,14 @@ impl RenderOnce for Tile {
         let on_click = Rc::clone(&self.on_click);
 
         v_flex()
-            .id(("tile", self.id.index()))
+            .id((
+                if self.folder_entry.is_some() {
+                    "folder-entry"
+                } else {
+                    "tile"
+                },
+                self.id.index(),
+            ))
             .test_support()
             .role(Role::GridCell)
             .aria_label(self.name.clone())

@@ -22,7 +22,7 @@ pub use persist::{
     APP_ID, Plan, STATE_FILE_VAR, Saved, SavedView, SavedWindow, StateStore, fit, plan_launch,
 };
 pub use stage::{GalleryProbe, StageProbe};
-pub use state::{AppState, Launch, ScanStatus, StageView, StateOptions};
+pub use state::{AppState, FolderLayout, Launch, ScanStatus, StageView, StateOptions};
 pub use update::{Owner, UpdateOptions, UpdateSettings};
 
 use gpui_kit::App;

@@ -818,10 +818,16 @@ fn the_open_folder_is_restored_after_quit(cx: &mut TestAppContext) {
     let (handle, view) = launch(cx, &[root.path()], &store);
     let docs = node(cx, &view, "docs");
     click(cx, handle, row(docs));
+    click(cx, handle, "folder-list-view");
     cx.quit();
     assert_eq!(saved(store.path()).view.view, StageView::Folder);
     let mut cx = cx.new_app();
-    let (_, view) = launch(&mut cx, &[], &store);
+    let (handle, view) = launch(&mut cx, &[], &store);
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("folder-list").is_some());
+    })
+    .unwrap();
     assert_eq!(
         read(&mut cx, &view, AppState::stage_view),
         StageView::Folder

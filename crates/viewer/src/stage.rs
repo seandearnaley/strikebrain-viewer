@@ -84,7 +84,7 @@ struct Asked {
     presenting: bool,
     /// The gallery shows, not the file view.
     gallery: bool,
-    folder: Option<(explorer::Sort, bool)>,
+    folder: Option<folder::Options>,
     /// The file view offers the way back to the gallery: two or more
     /// files are checked.
     back: bool,
@@ -98,7 +98,7 @@ impl Asked {
             .explorer()
             .zip(state.current())
             .filter(|_| state.stage_view() == crate::StageView::Folder)
-            .map(|(e, id)| (e.sort(), e.tree().size(id).is_some()));
+            .map(|(e, id)| folder::Options::new(e, id));
         let file_view = !presenting && !gallery && folder.is_none();
         Self {
             staged: state.staged(),
@@ -258,7 +258,6 @@ pub(crate) struct Stage {
     texts: Lru<Arc<Path>, CachedText>,
     text_views: TextViews,
     gallery: Entity<Gallery>,
-    folder: Option<Entity<folder::FolderList>>,
     renders: usize,
     loads: usize,
     link_task: Option<Task<Result<()>>>,
@@ -278,10 +277,8 @@ impl std::fmt::Debug for Stage {
 }
 
 impl Focusable for Stage {
-    fn focus_handle(&self, cx: &App) -> FocusHandle {
-        self.folder
-            .as_ref()
-            .map_or_else(|| self.focus_handle.clone(), |list| list.focus_handle(cx))
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus_handle.clone()
     }
 }
 
@@ -320,7 +317,6 @@ impl Stage {
             section: None,
             _markdown_observer: markdown_observer,
             gallery,
-            folder: None,
             renders: 0,
             loads: 0,
             _observe: observe,
@@ -397,7 +393,7 @@ impl Stage {
     /// Tab or shift-Tab brought keyboard focus to the stage: the gallery's
     /// focus ring shows, as the tree's does.
     pub(crate) fn focused_by_key(&mut self, cx: &mut Context<Self>) {
-        if self.state.read(cx).shows_gallery() {
+        if self.asked.gallery || self.asked.folder.is_some() {
             self.gallery.update(cx, Gallery::key_pressed);
         }
     }

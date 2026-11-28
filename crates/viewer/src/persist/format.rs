@@ -32,6 +32,7 @@ struct StateFile {
     #[serde(skip_serializing_if = "Option::is_none")]
     current_folder: Option<PathBuf>,
     view: ViewFile,
+    folder_layout: crate::FolderLayout,
     query: String,
     kind: KindFile,
     sort: SortFile,
@@ -172,6 +173,7 @@ pub(super) fn encode(saved: &Saved) -> io::Result<Vec<u8>> {
             .current
             .clone()
             .filter(|_| view.view == StageView::Folder),
+        folder_layout: view.folder_layout,
         view: match view.view {
             StageView::File | StageView::Folder => ViewFile::File,
             StageView::Gallery => ViewFile::Gallery,
@@ -278,6 +280,7 @@ pub(super) fn decode(bytes: &[u8]) -> Option<Saved> {
         },
         top_row: absolute(file.first_visible_row),
         view: stage,
+        folder_layout: file.folder_layout,
     };
     Some(Saved {
         view,
@@ -302,6 +305,7 @@ fn from_version_1(file: StateFileV1) -> StateFile {
         current: under(file.current),
         current_folder: None,
         view: ViewFile::File,
+        folder_layout: crate::FolderLayout::default(),
         first_visible_row: under(file.first_visible_row),
         folders: root
             .iter()

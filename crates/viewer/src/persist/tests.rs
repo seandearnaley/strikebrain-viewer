@@ -66,6 +66,7 @@ fn full(root: &Path) -> Saved {
             },
             top_row: Some(root.join("src/app")),
             view: StageView::Gallery,
+            folder_layout: crate::FolderLayout::List,
         },
         explorer_width: Some(412.5),
         explorer_hidden: true,

@@ -12,30 +12,32 @@ use std::rc::Rc;
 use explorer::{Direction, Sort, SortKey};
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName};
 use gpui_kit::{
-    App, Context, Div, FontWeight, IntoElement, ParentElement as _, RenderOnce, Role, SharedString,
+    App, Div, Entity, FontWeight, IntoElement, ParentElement as _, RenderOnce, Role, SharedString,
     StatefulInteractiveElement as _, Styled as _, TestSupportExt as _, Window, container_query,
     div, prelude::*,
 };
 
-use super::ExplorerPanel;
-use crate::columns::{self, Columns};
+use super::{self as columns, Columns};
+use crate::state::AppState;
 
 type SortHandler = Rc<dyn Fn(&SortKey, &mut Window, &mut App)>;
 
-impl ExplorerPanel {
-    pub(super) fn render_header(sort: Sort, cx: &Context<Self>) -> impl IntoElement + use<> {
-        ColumnHeader {
-            sort,
-            on_sort: Rc::new(cx.listener(|this, key: &SortKey, _, cx| {
-                this.state.update(cx, |state, cx| state.sort_by(*key, cx));
-            })),
-        }
+pub(crate) fn column_header(
+    id: &'static str,
+    sort: Sort,
+    state: Entity<AppState>,
+) -> impl IntoElement {
+    ColumnHeader {
+        id,
+        sort,
+        on_sort: Rc::new(move |key, _, cx| state.update(cx, |state, cx| state.sort_by(*key, cx))),
     }
 }
 
 /// The header row.
 #[derive(IntoElement)]
 struct ColumnHeader {
+    id: &'static str,
     sort: Sort,
     on_sort: SortHandler,
 }
@@ -43,7 +45,7 @@ struct ColumnHeader {
 impl RenderOnce for ColumnHeader {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         div()
-            .id("header")
+            .id(self.id)
             .test_support()
             .role(Role::Group)
             .flex_shrink_0()

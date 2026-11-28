@@ -784,11 +784,33 @@ fn main() {
         // a file the stage cannot show.
         let (_stage, stage) = stage_folder();
         let mut cx = context();
-        let (handle, _) = open_sized(
+        let (handle, view) = open_sized(
             &mut cx,
             Launch::Folders(vec![stage.clone()]),
             size(px(1200.), px(760.)),
         );
+        let root = folder_row(&mut cx, &view, &stage);
+        cx.update_window(handle, |_, window, cx| window.click(root, cx))
+            .expect("browse the folder");
+        cx.update_window(handle, |_, window, cx| window.hover("stage", cx))
+            .expect("move off the toolbar");
+        written.push(save(
+            &mut cx,
+            handle,
+            mode,
+            &dir,
+            &format!("folder-gallery-{suffix}"),
+        ));
+        click(&mut cx, handle, "folder-list-view");
+        cx.update_window(handle, |_, window, cx| window.hover("stage", cx))
+            .expect("move off the toolbar");
+        written.push(save(
+            &mut cx,
+            handle,
+            mode,
+            &dir,
+            &format!("folder-list-{suffix}"),
+        ));
         dispatch(&mut cx, handle, SelectAllFiles);
         written.push(save(
             &mut cx,

@@ -154,6 +154,10 @@ actions!(
         DeselectAll,
         /// Hides the explorer, or shows it again.
         ToggleSidebar,
+        /// Browse the current folder as thumbnails.
+        FolderGalleryView,
+        /// Browse the current folder in columns.
+        FolderListView,
         /// Shows what the stage showed before.
         GoBack,
         /// Shows again what Back left.
@@ -255,13 +259,34 @@ pub(crate) const FORWARD: &str = if cfg!(target_os = "macos") {
     "alt-right"
 };
 
+/// Keyboard navigation in both thumbnail grids and the folder list.
+fn gallery_bindings() -> [KeyBinding; 14] {
+    let gallery = Some(GALLERY);
+    [
+        KeyBinding::new("left", FocusPreviousTile, gallery),
+        KeyBinding::new("right", FocusNextTile, gallery),
+        KeyBinding::new("up", FocusTileAbove, gallery),
+        KeyBinding::new("down", FocusTileBelow, gallery),
+        KeyBinding::new("home", FocusFirstTile, gallery),
+        KeyBinding::new("end", FocusLastTile, gallery),
+        KeyBinding::new("pageup", FocusTilePageUp, gallery),
+        KeyBinding::new("pagedown", FocusTilePageDown, gallery),
+        KeyBinding::new("enter", OpenTile, gallery),
+        KeyBinding::new("space", Present, gallery),
+        KeyBinding::new("escape", FocusExplorer, gallery),
+        KeyBinding::new(secondary!("f"), FocusFilter, gallery),
+        KeyBinding::new("tab", NextPane, gallery),
+        KeyBinding::new("shift-tab", PreviousPane, gallery),
+    ]
+}
+
 /// Every key binding of the application.
 ///
 /// Learning exercise: Sean may rewrite this body; the tests below define it.
 #[must_use]
 pub(crate) fn bindings() -> Vec<KeyBinding> {
     let (explorer, filter, stage) = (Some(EXPLORER), Some(FILTER), Some(STAGE));
-    let (body, gallery) = (Some(EXPLORER_BODY), Some(GALLERY));
+    let body = Some(EXPLORER_BODY);
     let mut bindings = vec![
         KeyBinding::new("up", FocusPrevious, explorer),
         KeyBinding::new("down", FocusNext, explorer),
@@ -294,6 +319,8 @@ pub(crate) fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new(secondary!("alt-c"), CopyPath, None),
         KeyBinding::new(FULL_SCREEN, ToggleFullScreen, None),
         KeyBinding::new(SIDEBAR, ToggleSidebar, None),
+        KeyBinding::new(secondary!("1"), FolderGalleryView, None),
+        KeyBinding::new(secondary!("2"), FolderListView, None),
         KeyBinding::new(BACK, GoBack, None),
         KeyBinding::new(FORWARD, GoForward, None),
     ];
@@ -324,23 +351,7 @@ pub(crate) fn bindings() -> Vec<KeyBinding> {
             KeyBinding::new("shift-tab", PreviousPane, stage),
         ]);
     }
-    // The gallery's keys: focus moves over the tiles.
-    bindings.extend([
-        KeyBinding::new("left", FocusPreviousTile, gallery),
-        KeyBinding::new("right", FocusNextTile, gallery),
-        KeyBinding::new("up", FocusTileAbove, gallery),
-        KeyBinding::new("down", FocusTileBelow, gallery),
-        KeyBinding::new("home", FocusFirstTile, gallery),
-        KeyBinding::new("end", FocusLastTile, gallery),
-        KeyBinding::new("pageup", FocusTilePageUp, gallery),
-        KeyBinding::new("pagedown", FocusTilePageDown, gallery),
-        KeyBinding::new("enter", OpenTile, gallery),
-        KeyBinding::new("space", Present, gallery),
-        KeyBinding::new("escape", FocusExplorer, gallery),
-        KeyBinding::new(secondary!("f"), FocusFilter, gallery),
-        KeyBinding::new("tab", NextPane, gallery),
-        KeyBinding::new("shift-tab", PreviousPane, gallery),
-    ]);
+    bindings.extend(gallery_bindings());
     // The presentation's keys, likewise. Space moves on, as in a slideshow.
     for presentation in [Some(PRESENTATION), Some(PRESENTATION_EDITOR)] {
         bindings.extend([

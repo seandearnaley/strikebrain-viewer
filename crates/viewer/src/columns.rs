@@ -6,6 +6,9 @@
 //! 420 px wide tree, Size from 300 px. Every width is on the rem scale,
 //! exact at the theme's 16 px base.
 
+mod header;
+pub(crate) use header::column_header;
+
 use gpui_kit::component::h_flex;
 use gpui_kit::{Div, Pixels, Rems, Styled as _, div};
 

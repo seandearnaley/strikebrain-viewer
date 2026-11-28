@@ -146,8 +146,15 @@ impl AppState {
     /// A click on a column header: sorts by `key`, or flips the direction
     /// when the tree is already sorted by it.
     pub fn sort_by(&mut self, key: SortKey, cx: &mut Context<Self>) {
-        if let Some(explorer) = self.explorer.as_mut() {
-            let sort = explorer.sort().clicked(key);
+        if let Some(explorer) = self.explorer.as_ref() {
+            self.set_sort(explorer.sort().clicked(key), cx);
+        }
+    }
+
+    pub(crate) fn set_sort(&mut self, sort: explorer::Sort, cx: &mut Context<Self>) {
+        if let Some(explorer) = &mut self.explorer
+            && explorer.sort() != sort
+        {
             explorer.set_sort(sort);
             self.sort = sort;
             // The gallery's order is the display order.

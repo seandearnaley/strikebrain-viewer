@@ -231,7 +231,8 @@ impl Visibility {
 
     /// Which universe this is: 0 for the inactive filter (every file of
     /// whatever tree), otherwise unique to one run of the filter.
-    pub(crate) fn stamp(&self) -> u64 {
+    #[must_use]
+    pub fn stamp(&self) -> u64 {
         self.sets.as_ref().map_or(0, |sets| sets.stamp)
     }
 }

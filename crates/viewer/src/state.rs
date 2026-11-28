@@ -34,8 +34,8 @@ use gpui_kit::{Context, EventEmitter, Result, Task};
 
 use crate::persist::SavedView;
 use folders::{AskedFiles, Folder};
-pub use gallery::StageView;
-pub(crate) use gallery::{DrawnTile, TileMotion};
+pub(crate) use gallery::{DrawnTile, TileMotion, tile_after};
+pub use gallery::{FolderLayout, StageView};
 use history::{Record, Step};
 use restore::Pending;
 use watch::Watching;
@@ -184,6 +184,7 @@ pub struct AppState {
     current: Option<NodeId>,
     /// Which of the stage's views shows: the gallery or the file.
     view: StageView,
+    folder_layout: FolderLayout,
     fragment: Option<String>,
     pending_link: Option<folders::PendingLink>,
     /// The tile with keyboard focus in the gallery, by node.
@@ -274,6 +275,7 @@ impl AppState {
             tree_generation: 0,
             current: None,
             view: StageView::File,
+            folder_layout: FolderLayout::default(),
             fragment: None,
             pending_link: None,
             tile: None,

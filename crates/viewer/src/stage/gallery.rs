@@ -1,4 +1,5 @@
-//! The gallery: the stage's grid of the checked files, in gallery order.
+//! The stage’s virtualized gallery and folder list. Both folder layouts use
+//! the open directory’s filtered children. The checked gallery uses gallery order.
 //!
 //! One GPUI `uniform_list` of rows of tiles, inside a `container_query` that
 //! hands it the pane's size: the columns, the tiles' size and the rows'
@@ -31,8 +32,12 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use explorer::NodeId;
+use super::folder::{self, Folder};
+use crate::columns::{self, Columns};
+use crate::state::{FolderLayout, StageView, tile_after};
+use explorer::{Explorer, Kind, NodeId};
 use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::component::{ActiveTheme as _, v_flex};
 use gpui_kit::{
     AnyElement, App, AppContext as _, Context, Entity, FocusHandle, IntoElement,
     ParentElement as _, Render, Result, Role, ScrollStrategy, SharedString,
@@ -65,6 +70,7 @@ struct Load {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct Seen {
     shows: bool,
+    folder_layout: Option<FolderLayout>,
     version: (u64, u64),
     current: Option<NodeId>,
     tile: Option<NodeId>,
@@ -74,6 +80,7 @@ impl Seen {
     fn of(state: &AppState) -> Self {
         Self {
             shows: state.shows_gallery(),
+            folder_layout: (state.stage_view() == StageView::Folder).then(|| state.folder_layout()),
             version: state.gallery_version(),
             current: state.current(),
             tile: state.tile(),
@@ -173,6 +180,7 @@ pub(crate) struct Gallery {
     /// The stage's focus handle, which holds keyboard focus for the
     /// gallery.
     focus: FocusHandle,
+    folder: Option<Folder>,
     scroll: UniformListScrollHandle,
     /// The grid as last laid out.
     grid: Option<Grid>,
@@ -215,8 +223,8 @@ impl Gallery {
                     if seen.tile != this.seen.tile {
                         this.reveal = true;
                     }
-                    if !seen.shows {
-                        // Hidden: its reads stop.
+                    if !seen.shows && seen.folder_layout != Some(FolderLayout::Gallery) {
+                        // Thumbnails are hidden: their reads stop.
                         for load in this.loading.values() {
                             load.stop.store(true, Ordering::Relaxed);
                         }
@@ -242,6 +250,7 @@ impl Gallery {
         Self {
             state,
             focus,
+            folder: None,
             scroll: UniformListScrollHandle::new(),
             grid: None,
             reveal: true,
@@ -278,11 +287,59 @@ impl Gallery {
         }
     }
 
+    /// A change of folder, sort, filter, or layout. Only a different source
+    /// starts a fresh scroll position. A refreshed tree can renumber every id.
+    pub(super) fn sync_folder(&mut self, cx: &mut Context<Self>) {
+        let state = self.state.read(cx);
+        let mut same = false;
+        self.folder = state
+            .explorer()
+            .zip(state.current())
+            .filter(|_| state.stage_view() == StageView::Folder)
+            .map(|(e, id)| {
+                let mut folder = Folder::new(e, id, state.staged().0);
+                same = self
+                    .folder
+                    .as_ref()
+                    .is_some_and(|was| folder.carry_focus(was, e));
+                folder
+            });
+        if !same {
+            self.scroll = UniformListScrollHandle::new();
+            self.grid = None;
+            self.drawn = 0..0;
+            self.ring = false;
+        }
+        if !same
+            || state.folder_layout() == FolderLayout::List
+            || self
+                .folder
+                .as_ref()
+                .zip(state.explorer())
+                .is_some_and(|(f, e)| f.entries(e).is_empty())
+        {
+            for load in self.loading.values() {
+                load.stop.store(true, Ordering::Relaxed);
+            }
+        }
+        self.reveal = true;
+        cx.notify();
+    }
+
+    fn is_showing(&self, state: &AppState) -> bool {
+        self.folder
+            .as_ref()
+            .map_or_else(|| state.shows_gallery(), |folder| folder.is_current(state))
+    }
+
     // Keys, from the stage
 
     /// Moves tile focus by `motion`, keeps the tile on screen and shows
     /// the ring.
     pub(crate) fn move_focus(&mut self, motion: TileMotion, cx: &mut Context<Self>) {
+        if !self.is_showing(self.state.read(cx)) {
+            return;
+        }
         let grid = self.grid;
         let columns = grid.map_or(1, |grid| grid.columns);
         let motion = match (motion, grid) {
@@ -290,8 +347,20 @@ impl Gallery {
             (TileMotion::PageDown(_), Some(grid)) => TileMotion::PageDown(grid.page()),
             (motion, _) => motion,
         };
-        self.state
-            .update(cx, |state, cx| state.move_tile(motion, columns, cx));
+        if let Some(folder) = &mut self.folder {
+            if let Some(e) = self.state.read(cx).explorer() {
+                let len = folder.entries(e).len();
+                let to = match folder.focused() {
+                    Some(from) => tile_after(motion, from, len, columns),
+                    None if motion == TileMotion::Last => len.saturating_sub(1),
+                    None => 0,
+                };
+                folder.focus(to, e);
+            }
+        } else {
+            self.state
+                .update(cx, |state, cx| state.move_tile(motion, columns, cx));
+        }
         self.key_pressed(cx);
     }
 
@@ -310,10 +379,42 @@ impl Gallery {
         }
     }
 
-    /// A click on a drawn tile: opens its file, with keyboard focus on the
-    /// stage.
-    fn open(&mut self, tile: crate::state::DrawnTile, window: &mut Window, cx: &mut Context<Self>) {
-        if self.state.update(cx, |state, cx| state.open_tile(tile, cx)) {
+    pub(super) fn open_focused(&mut self, cx: &mut Context<Self>) {
+        let state = self.state.read(cx);
+        if !self.is_showing(state) {
+            return;
+        }
+        if let Some(folder) = &self.folder {
+            let id = state
+                .explorer()
+                .and_then(|e| folder.entries(e).get(folder.focused().unwrap_or(0)))
+                .copied();
+            if let Some(id) = id {
+                let generation = state.staged().0;
+                self.state
+                    .update(cx, |state, cx| state.navigate(generation, id, cx));
+            }
+        } else {
+            self.state.update(cx, AppState::open_focus_tile);
+        }
+    }
+
+    fn open(&mut self, entry: Entry, window: &mut Window, cx: &mut Context<Self>) {
+        let opened = self.state.update(cx, |state, cx| match entry {
+            Entry::Checked(tile) => state.shows_gallery() && state.open_tile(tile, cx),
+            Entry::Child {
+                parent,
+                id,
+                generation,
+            } if state.staged() == (generation, Some(parent))
+                && state.stage_view() == StageView::Folder =>
+            {
+                state.navigate(generation, id, cx);
+                true
+            }
+            Entry::Child { .. } => false,
+        });
+        if opened {
             window.focus(&self.focus, cx);
         }
     }
@@ -326,10 +427,13 @@ impl Gallery {
     fn laid_out(&mut self, grid: Grid, cx: &mut Context<Self>) {
         let focused = {
             let state = self.state.read(cx);
-            state
-                .explorer()
-                .zip(state.tile())
-                .and_then(|(explorer, tile)| explorer.gallery_position(tile))
+            match &self.folder {
+                Some(folder) => folder.focused(),
+                None => state
+                    .explorer()
+                    .zip(state.tile())
+                    .and_then(|(e, tile)| e.gallery_position(tile)),
+            }
         };
         if let Some(was) = self.grid
             && (was.row_height != grid.row_height || was.columns != grid.columns)
@@ -381,15 +485,55 @@ impl Gallery {
         // The list measures its first row, then builds the rows on screen:
         // the last range asked for is what the frame shows.
         self.drawn = range.clone();
-        self.queue_pump(window, cx);
+        if !self.is_showing(self.state.read(cx)) {
+            return Vec::new();
+        }
+        if self.folder.is_none() || self.state.read(cx).folder_layout() == FolderLayout::Gallery {
+            self.queue_pump(window, cx);
+        }
         let state = self.state.read(cx);
         let Some(explorer) = state.explorer() else {
             return Vec::new();
         };
         let tree = explorer.tree();
-        let (current, focus) = (state.current(), state.tile());
+        let current = state.current();
+        let folder = self.folder.as_ref();
+        let items = Items::new(explorer, folder);
+        let focus = match folder {
+            Some(f) => f
+                .focused()
+                .and_then(|ix| f.entries(explorer).get(ix))
+                .copied(),
+            None => state.tile(),
+        };
         let ring = self.ring && self.focus.is_focused(window);
-        let mut files = explorer.gallery_from(range.start * grid.columns);
+        let mut files = items.from(range.start * grid.columns);
+        let drawn = |id| match folder {
+            Some(f) => Entry::Child {
+                parent: f.id,
+                id,
+                generation: state.staged().0,
+            },
+            None => Entry::Checked(state.drawn_tile(id)),
+        };
+        if folder.is_some() && state.folder_layout() == FolderLayout::List {
+            let columns = Columns::for_width(grid.tile.width, window.rem_size());
+            return files
+                .take(range.len())
+                .map(|id| {
+                    let entry = drawn(id);
+                    folder::details_row(
+                        explorer,
+                        id,
+                        columns,
+                        ring && Some(id) == focus,
+                        cx.listener(move |this, _, window, cx| this.open(entry, window, cx)),
+                        cx,
+                    )
+                    .into_any_element()
+                })
+                .collect();
+        }
         range
             .map(|row| {
                 let tiles: Vec<Tile> = (0..grid.columns)
@@ -397,12 +541,13 @@ impl Gallery {
                     .map(|(column, id)| {
                         let path: Arc<Path> = tree.abs_path(id).into();
                         // A tree built in memory names files it has not got.
-                        let look = if path.is_absolute() {
+                        let kind = folder.map(|_| tree.kind(id));
+                        let look = if path.is_absolute() && kind.is_none_or(|k| k == Kind::File) {
                             self.thumbs.get(&path)
                         } else {
                             Some(thumbs::Look::Icon)
                         };
-                        let drawn = state.drawn_tile(id);
+                        let drawn = drawn(id);
                         Tile::new(
                             id,
                             tree.name(id),
@@ -410,6 +555,7 @@ impl Gallery {
                             grid.tile,
                             cx.listener(move |this, _, window, cx| this.open(drawn, window, cx)),
                         )
+                        .folder_entry(kind)
                         .look(look)
                         .current(current == Some(id))
                         .focus(match (focus == Some(id), ring) {
@@ -476,9 +622,12 @@ impl Gallery {
         let (Some(grid), Some(explorer)) = (self.grid, state.explorer()) else {
             return Vec::new();
         };
-        if !state.shows_gallery() {
+        if !self.is_showing(state)
+            || self.folder.is_some() && state.folder_layout() == FolderLayout::List
+        {
             return Vec::new();
         }
+        let items = Items::new(explorer, self.folder.as_ref());
         let tree = explorer.tree();
         let generation = state.gallery_version().0;
         let fit = grid.thumbnail_box();
@@ -488,7 +637,10 @@ impl Gallery {
         let mut wanted = Vec::new();
         for rows in [drawn, below, above] {
             let count = rows.len() * grid.columns;
-            for id in explorer.gallery_from(rows.start * grid.columns).take(count) {
+            for id in items.from(rows.start * grid.columns).take(count) {
+                if self.folder.is_some() && tree.kind(id) != Kind::File {
+                    continue;
+                }
                 let path: Arc<Path> = tree.abs_path(id).into();
                 if !path.is_absolute() {
                     continue;
@@ -552,6 +704,41 @@ impl Gallery {
     }
 }
 
+#[derive(Clone, Copy)]
+enum Entry {
+    Checked(crate::state::DrawnTile),
+    Child {
+        parent: NodeId,
+        id: NodeId,
+        generation: u64,
+    },
+}
+
+/// Random access into either source, without materializing the checked set
+/// or walking offscreen siblings to find the first row of the viewport.
+enum Items<'a> {
+    Checked(&'a Explorer),
+    Children(&'a [NodeId]),
+}
+
+impl<'a> Items<'a> {
+    fn new(e: &'a Explorer, folder: Option<&'a Folder>) -> Self {
+        folder.map_or(Self::Checked(e), |f| Self::Children(f.entries(e)))
+    }
+    fn len(&self) -> usize {
+        match self {
+            Self::Checked(e) => e.gallery_len(),
+            Self::Children(ids) => ids.len(),
+        }
+    }
+    fn from(&self, start: usize) -> Box<dyn Iterator<Item = NodeId> + '_> {
+        match self {
+            Self::Checked(e) => Box::new(e.gallery_from(start)),
+            Self::Children(ids) => Box::new(ids.get(start..).unwrap_or_default().iter().copied()),
+        }
+    }
+}
+
 /// A count of rows or tiles as a multiplier of pixels.
 #[expect(
     clippy::cast_precision_loss,
@@ -584,11 +771,38 @@ struct Want {
 impl Render for Gallery {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.renders += 1;
-        let tiles = self
-            .state
-            .read(cx)
+        let state = self.state.read(cx);
+        let folder = self
+            .folder
+            .as_ref()
+            .filter(|f| f.is_current(state))
+            .zip(state.explorer());
+        let tiles = state
             .explorer()
-            .map_or(0, explorer::Explorer::gallery_len);
+            .map_or(0, |e| Items::new(e, folder.map(|(f, _)| f)).len());
+        let options = folder.map(|(f, e)| folder::Options::new(e, f.id));
+        let toolbar = folder.zip(options).map(|((f, e), opts)| {
+            folder::toolbar(
+                opts,
+                state.folder_layout(),
+                tiles,
+                e.children(f.id).len(),
+                &self.state,
+            )
+        });
+        let list = folder.is_some() && state.folder_layout() == FolderLayout::List;
+        let header = options
+            .filter(|_| list)
+            .map(|o| columns::column_header("folder-header", o.sort, self.state.clone()));
+        let empty = folder.filter(|_| tiles == 0).map(|(f, e)| f.empty_label(e));
+        let surface = if list {
+            "folder-list"
+        } else if folder.is_some() {
+            "folder-gallery"
+        } else {
+            "gallery"
+        };
+        let row_height = window.rem_size() * 2.;
         let scale = window.scale_factor();
         let rows = cx.processor(|this, (range, grid): (Range<usize>, Grid), window, cx| {
             this.render_rows(range, grid, window, cx)
@@ -596,13 +810,13 @@ impl Render for Gallery {
         let laid_out = cx.processor(|this, grid: Grid, _, cx| this.laid_out(grid, cx));
         let scroll = self.scroll.clone();
 
-        div()
-            .id("gallery")
+        let body = div()
+            .id(surface)
             .test_support()
-            .role(Role::Grid)
-            .aria_label("Gallery")
+            .role(if list { Role::List } else { Role::Grid })
+            .aria_label(if list { "Folder contents" } else { "Gallery" })
             // As last laid out: the list builds only the rows on screen.
-            .when_some(self.grid, |grid, laid_out| {
+            .when_some(self.grid.filter(|_| !list), |grid, laid_out| {
                 grid.aria_row_count(laid_out.rows)
                     .aria_column_count(laid_out.columns)
             })
@@ -610,7 +824,11 @@ impl Render for Gallery {
             .size_full()
             .capture_any_mouse_down(cx.listener(|this, _, _, cx| this.pointer_down(cx)))
             .child(container_query(move |size, window, cx| {
-                let grid = Grid::new(size, tiles, scale);
+                let grid = if list {
+                    Grid::list(size, tiles, row_height)
+                } else {
+                    Grid::new(size, tiles, scale)
+                };
                 laid_out(grid, window, cx);
                 uniform_list("tiles", grid.rows, move |range, window, cx| {
                     rows((range, grid), window, cx)
@@ -619,6 +837,28 @@ impl Render for Gallery {
                 .size_full()
                 .pb(GAP)
             }))
-            .vertical_scrollbar(&self.scroll)
+            .vertical_scrollbar(&self.scroll);
+        v_flex()
+            .size_full()
+            .children(toolbar)
+            .children(header)
+            .child(div().flex_1().min_h_0().relative().child(body).when_some(
+                empty,
+                |view, label| {
+                    view.child(
+                        div()
+                            .id("folder-empty")
+                            .test_support()
+                            .absolute()
+                            .inset_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(label),
+                    )
+                },
+            ))
     }
 }

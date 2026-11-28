@@ -29,30 +29,18 @@ impl Stage {
             self.link_task = None;
         }
         let was = std::mem::replace(&mut self.asked, asked);
+        if asked.folder.is_some() || was.folder.is_some() {
+            self.gallery.update(cx, super::Gallery::sync_folder);
+        }
         if asked.folder.is_some() {
             self.load = None;
             self.preload = None;
-            let focused = self.folder.as_ref().is_some_and(|list| {
-                gpui_kit::Focusable::focus_handle(list, cx).contains_focused(window, cx)
-            });
-            self.folder = Some(super::folder::sync(
-                self.folder.as_ref(),
-                &self.state,
-                window,
-                cx,
-            ));
-            if focused && let Some(list) = &self.folder {
-                list.update(cx, |list, cx| list.focus(window, cx));
-            }
+            self.focus_from_view(window, cx);
             self.content = Content::Blank;
             self.showing = None;
             cx.notify();
             return;
         }
-        if was.folder.is_some() {
-            self.focus_from_view(window, cx);
-        }
-        self.folder = None;
         if asked.gallery {
             self.load = None;
             self.preload = None;

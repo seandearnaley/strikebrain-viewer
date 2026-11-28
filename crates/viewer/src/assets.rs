@@ -17,7 +17,10 @@ icon_assets!(
         ListChecks,
         ListX,
         FolderPlus,
-        LayoutGrid
+        LayoutGrid,
+        List,
+        ListFilter,
+        ArrowUpDown
     ]
 );
 
@@ -58,6 +61,9 @@ mod tests {
             IconName::ListX,
             IconName::FolderPlus,
             IconName::LayoutGrid,
+            IconName::List,
+            IconName::ListFilter,
+            IconName::ArrowUpDown,
         ] {
             assert!(AppAssets.load(&icon.path()).unwrap().is_some());
         }
