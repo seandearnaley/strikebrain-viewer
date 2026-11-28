@@ -59,6 +59,18 @@ impl Grid {
         }
     }
 
+    /// Details use the same virtual rows, one child per row.
+    pub(crate) fn list(pane: Size<Pixels>, entries: usize, row_height: Pixels) -> Self {
+        Self {
+            columns: 1,
+            tile: size(pane.width, row_height),
+            row_height,
+            rows: entries,
+            viewport: pane.height,
+            scale: 1.,
+        }
+    }
+
     /// The row holding the tile at `index`.
     pub(crate) fn row_of(&self, index: usize) -> usize {
         index / self.columns

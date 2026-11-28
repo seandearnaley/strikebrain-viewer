@@ -19,11 +19,11 @@ use crate::keys::{
     FocusTileBelow, FocusTilePageDown, FocusTilePageUp, GALLERY, OpenTile, PRESENTATION, STAGE,
     ScrollDown, ScrollPageDown, ScrollPageUp, ScrollToBottom, ScrollToTop, ScrollUp, ShowGallery,
 };
-use crate::state::{AppState, TileMotion};
+use crate::state::TileMotion;
 use crate::theme::TABULAR_FIGURES;
 
 use super::text::Scroll;
-use super::{Content, File, Stage};
+use super::{Content, File, Gallery, Stage};
 
 impl Stage {
     fn render_content(&self, cx: &Context<Self>) -> Option<AnyElement> {
@@ -187,10 +187,8 @@ fn unsupported(name: SharedString, size: Option<u64>, muted: Hsla) -> AnyElement
 impl Render for Stage {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.renders += 1;
-        let gallery = self.asked.gallery;
-        let content = if let Some(folder) = &self.folder {
-            Some(gpui_kit::component::list::List::new(folder).into_any_element())
-        } else if gallery {
+        let gallery = self.asked.gallery || self.asked.folder.is_some();
+        let content = if gallery {
             Some(self.gallery.clone().into_any_element())
         } else {
             self.render_content(cx)
@@ -254,7 +252,7 @@ impl Render for Stage {
                 this.gallery_key(TileMotion::PageDown(1), cx);
             }))
             .on_action(cx.listener(|this, _: &OpenTile, _, cx| {
-                this.state.update(cx, AppState::open_focus_tile);
+                this.gallery.update(cx, Gallery::open_focused);
             }))
             .size_full()
             // A presented picture sits on black in either mode, as in a

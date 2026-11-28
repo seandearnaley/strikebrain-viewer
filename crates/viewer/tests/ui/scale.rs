@@ -82,11 +82,14 @@ fn opening_a_wide_folder_only_draws_visible_children(cx: &mut TestAppContext) {
     let first = node(cx, &view, "wide/f000000");
     let far = node(cx, &view, "wide/f099999");
     click(cx, handle, row(folder));
-    cx.update_window(handle, |_, window, cx| {
-        window.render_frame(cx);
-        assert!(window.find(("folder-entry", first.index())).visible());
-        assert!(window.try_find(("folder-entry", far.index())).is_none());
-    })
-    .unwrap();
+    for layout in ["folder-gallery-view", "folder-list-view"] {
+        click(cx, handle, layout);
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            assert!(window.find(("folder-entry", first.index())).visible());
+            assert!(window.try_find(("folder-entry", far.index())).is_none());
+        })
+        .unwrap();
+    }
     assert_eq!(read(cx, &view, viewer::AppState::scans), 0);
 }

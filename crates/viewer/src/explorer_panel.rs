@@ -7,7 +7,6 @@
 //! (`title_bar.rs`). With no folder the pane shows only "Add Folder".
 
 mod filter_bar;
-mod header;
 mod selection_bar;
 
 use std::ops::Range;
@@ -566,7 +565,11 @@ impl Render for ExplorerPanel {
         // The header labels rows, so it shows only with a tree.
         let (header, body) = match state.explorer() {
             Some(explorer) => (
-                Some(Self::render_header(explorer.sort(), cx)),
+                Some(crate::columns::column_header(
+                    "header",
+                    explorer.sort(),
+                    self.state.clone(),
+                )),
                 self.render_tree(explorer, state.title(), state.selected_count(), cx),
             ),
             None => (None, self.render_without_tree(None)),

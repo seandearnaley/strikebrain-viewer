@@ -34,6 +34,8 @@ cargo run -p viewer                              # reopen the last folders as yo
 
 Add Folder (⌘O, the bar's folder button, or File > Add Folder…) adds more, as does a folder dropped on the window; each folder is a top-level row, removed with the button that shows on its row when you point at it, or ⌘⌫. A file opened on its own (named on the command line, dropped on the window, or sent by Open With) shows in an open folder that holds it, or else as a row of its own, without reading its folder, until the app quits. The explorer hides with ⌃⌘S, the bar's sidebar button or View > Hide Sidebar, and the stage takes the window. Back and Forward (⌘[ and ⌘], the bar's arrows, the Go menu or the mouse's side buttons) go through what the stage showed. The app remembers the folders, their open folders and checks, the filter, sort, scroll, the file on the stage and whether the gallery showed, the explorer's width and whether it was hidden, and the window, in `~/Library/Application Support/ai.brainstrike.viewer/state.json`. It follows each folder on disk and refreshes it when it changes; a file row is not followed, and Refresh (⌘R), or opening the file again, reads it again.
 
+Click a folder to browse its contents as thumbnails. Switch between **Gallery** and **List** in the folder toolbar (⌘1 and ⌘2 on macOS, Ctrl+1 and Ctrl+2 elsewhere). The viewer remembers the layout. The two views share the sidebar’s filter and sort order. In List, click **Name**, **Type**, or **Size** to sort, and click again to reverse the order.
+
 ## Keys
 
 | Key | Tree | Gallery | Stage | Presentation |

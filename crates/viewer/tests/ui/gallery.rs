@@ -823,3 +823,132 @@ fn presenting_from_the_gallery_brings_the_files_row_into_view_in_the_tree(cx: &m
     press(cx, handle, "escape");
     assert!(row_shown(cx), "the presented file's row is in view");
 }
+
+#[gpui_kit::test]
+fn folder_views_share_filters_sort_and_navigation(cx: &mut TestAppContext) {
+    let root = crate::folder(&[
+        ("docs/a.md", "alpha"),
+        ("docs/b.txt", "beta"),
+        ("docs/c.txt", "longer"),
+    ]);
+    write(root.path(), "docs/photo.png", png(64, 48));
+    let (handle, view) = open_app(cx, Launch::Folders(vec![root.path().to_owned()]));
+    let docs = node(cx, &view, "docs");
+    let a = node(cx, &view, "docs/a.md");
+    let b = node(cx, &view, "docs/b.txt");
+    let c = node(cx, &view, "docs/c.txt");
+    let photo = node(cx, &view, "docs/photo.png");
+    click(cx, handle, row(docs));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("folder-gallery").visible());
+        assert!(
+            window
+                .within(("folder-entry", photo.index()))
+                .find("tile-image")
+                .visible()
+        );
+        assert!(
+            window
+                .within(("folder-entry", b.index()))
+                .find("tile-text")
+                .visible()
+        );
+    })
+    .unwrap();
+    click(cx, handle, "folder-list-view");
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.within("folder-header").click("header-size", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    click(cx, handle, "folder-filter");
+    cx.update_window(handle, |_, window, cx| window.input("txt", cx))
+        .unwrap();
+    cx.run_until_parked();
+    let rows = |cx: &mut TestAppContext| {
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            assert!(window.try_find(("folder-entry", a.index())).is_none());
+            let by = window.find(("folder-entry", b.index())).bounds().top();
+            let cy = window.find(("folder-entry", c.index())).bounds().top();
+            by < cy
+        })
+        .unwrap()
+    };
+    assert!(rows(cx));
+    cx.update_window(handle, |_, window, cx| {
+        window.within("folder-header").click("header-size", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert!(!rows(cx));
+    click(cx, handle, "folder-gallery-view");
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find(("folder-entry", a.index())).is_none());
+        assert!(
+            window.find(("folder-entry", c.index())).bounds().left()
+                < window.find(("folder-entry", b.index())).bounds().left()
+        );
+    })
+    .unwrap();
+    click(cx, handle, ("folder-entry", c.index()));
+    assert_eq!(current(cx, &view), Some(c));
+    assert_eq!(read(cx, &view, AppState::selected_count), 0);
+}
+
+#[gpui_kit::test]
+fn a_folder_keeps_keyboard_focus_across_layouts_and_an_empty_filter_clears(
+    cx: &mut TestAppContext,
+) {
+    let (handle, view) = open_app(cx, tree(&["docs/a.jpg", "docs/b.md", "docs/c.svg"]));
+    let docs = node(cx, &view, "docs");
+    let last = node(cx, &view, "docs/c.svg");
+    click(cx, handle, row(docs));
+    press(cx, handle, "tab");
+    press(cx, handle, "end");
+    press(
+        cx,
+        handle,
+        if cfg!(target_os = "macos") {
+            "cmd-2"
+        } else {
+            "ctrl-2"
+        },
+    );
+    assert_eq!(
+        read(cx, &view, AppState::folder_layout),
+        viewer::FolderLayout::List
+    );
+    press(cx, handle, "enter");
+    assert_eq!(current(cx, &view), Some(last));
+    dispatch(cx, handle, viewer::keys::GoBack);
+    click(cx, handle, "folder-sort");
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        let point = window
+            .within("popup-menu")
+            .find_by_label("Descending")
+            .bounds()
+            .center();
+        crate::click_without_frame(window, point, cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        read(cx, &view, |s| s.explorer().unwrap().sort().direction),
+        explorer::Direction::Descending
+    );
+    crate::type_query(cx, handle, "missing");
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("folder-empty").visible());
+        assert!(window.try_find(("folder-entry", last.index())).is_none());
+    })
+    .unwrap();
+    press(cx, handle, "escape");
+    click(cx, handle, ("folder-entry", last.index()));
+    assert_eq!(current(cx, &view), Some(last));
+}

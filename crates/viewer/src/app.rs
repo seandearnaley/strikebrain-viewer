@@ -38,14 +38,15 @@ use gpui_kit::{
 use crate::explorer_panel::{ExplorerFocus, ExplorerPanel};
 use crate::keys::{
     AddFolder, CheckForUpdates, CloseWindow, CollapseAll, CopyPath, DeselectAll, ExpandAll,
-    FocusExplorer, FocusFilter, GoBack, GoForward, InstallUpdate, Minimize, NextPane, PreviousPane,
-    Refresh, Reveal, SelectAllFiles, StartPresenting, ToggleCheckAutomatically, ToggleFullScreen,
-    ToggleShowIgnored, ToggleSidebar, Zoom,
+    FocusExplorer, FocusFilter, FolderGalleryView, FolderListView, GoBack, GoForward,
+    InstallUpdate, Minimize, NextPane, PreviousPane, Refresh, Reveal, SelectAllFiles,
+    StartPresenting, ToggleCheckAutomatically, ToggleFullScreen, ToggleShowIgnored, ToggleSidebar,
+    Zoom,
 };
 use crate::menus::{self, MenuBar};
 use crate::persist::{SavedView, SavedWindow, Snapshot, StateStore};
 use crate::stage::{GalleryProbe, Stage, StageProbe};
-use crate::state::{AppState, Launch, StateEvent, StateOptions};
+use crate::state::{AppState, FolderLayout, Launch, StateEvent, StateOptions};
 use crate::update::{UpdateEvent, UpdateOptions, UpdateSettings, Updater};
 use crate::{theme, title_bar};
 
@@ -389,6 +390,7 @@ impl AppView {
     /// the updater.
     fn sync_menus(&mut self, cx: &mut Context<Self>) {
         let menu_bar = MenuBar {
+            folder_layout: self.state.read(cx).folder_layout(),
             shows_ignored: self.state.read(cx).shows_ignored(),
             explorer_hidden: self.explorer_hidden,
             check_updates: self
@@ -738,6 +740,21 @@ impl AppView {
         self.focus_pane(order[next], window, cx);
     }
 
+    fn folder_actions(&self, cx: &Context<Self>) -> gpui_kit::Div {
+        let root = v_flex().size_full();
+        if self.state.read(cx).stage_view() != crate::StageView::Folder {
+            return root;
+        }
+        root.on_action(cx.listener(|this, _: &FolderGalleryView, _, cx| {
+            this.state
+                .update(cx, |s, cx| s.set_folder_layout(FolderLayout::Gallery, cx));
+        }))
+        .on_action(cx.listener(|this, _: &FolderListView, _, cx| {
+            this.state
+                .update(cx, |s, cx| s.set_folder_layout(FolderLayout::List, cx));
+        }))
+    }
+
     fn focus_pane(&mut self, pane: Pane, window: &mut Window, cx: &mut Context<Self>) {
         match pane {
             Pane::Filter => self
@@ -768,8 +785,8 @@ fn pane() -> StyleRefinement {
 
 impl Render for AppView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let root = v_flex()
-            .size_full()
+        let root = self
+            .folder_actions(cx)
             .on_action(cx.listener(Self::next_pane))
             .on_action(cx.listener(Self::previous_pane))
             .on_action(cx.listener(Self::focus_filter))
