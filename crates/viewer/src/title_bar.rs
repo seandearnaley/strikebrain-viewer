@@ -204,6 +204,19 @@ fn warning_refresh(message: &SharedString, cx: &App) -> Button {
 /// commands come first.
 fn more(state: &AppState, open: bool, automatic: Option<bool>) -> impl IntoElement {
     let has_tree = state.explorer().is_some();
+    let partial = state
+        .explorer()
+        .is_some_and(|e| e.tree().folders().any(|top| e.tree().is_partial(top)));
+    let expand = if partial {
+        "Expand Listed Folders"
+    } else {
+        "Expand All"
+    };
+    let select = if partial {
+        "Select Listed Files"
+    } else {
+        "Select All"
+    };
     let checked = state.selected_count() > 0;
     let shows_ignored = state.shows_ignored();
     Button::new("more")
@@ -214,13 +227,13 @@ fn more(state: &AppState, open: bool, automatic: Option<bool>) -> impl IntoEleme
         .accessibility_label("More")
         .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
             menu.when(open, |menu| {
-                menu.menu_with_disabled("Expand All", Box::new(ExpandAll), !has_tree)
+                menu.menu_with_disabled(expand, Box::new(ExpandAll), !has_tree)
                     .menu_with_disabled("Collapse All", Box::new(CollapseAll), !has_tree)
                     .separator()
                     .menu_with_check("Show Ignored", shows_ignored, Box::new(ToggleShowIgnored))
                     .menu("Refresh", Box::new(Refresh))
                     .separator()
-                    .menu_with_disabled("Select All", Box::new(SelectAllFiles), !has_tree)
+                    .menu_with_disabled(select, Box::new(SelectAllFiles), !has_tree)
                     .menu_with_disabled("Deselect All", Box::new(DeselectAll), !checked)
             })
             .when_some(automatic, |menu, on| {

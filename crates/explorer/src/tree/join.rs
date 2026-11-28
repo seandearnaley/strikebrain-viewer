@@ -125,6 +125,7 @@ impl Tree {
             .expect("a part is a whole scanned folder");
         Folder {
             top: at,
+            partial: folder.partial,
             path: folder.path.clone(),
             sizes: Arc::clone(&folder.sizes),
         }

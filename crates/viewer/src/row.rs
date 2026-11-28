@@ -80,6 +80,7 @@ pub(crate) struct TreeRow {
     /// The extension, for the Type cell; empty for folders.
     ext: SharedString,
     check: Check,
+    checkable: bool,
     disclosure: Disclosure,
     size: Option<u64>,
     current: bool,
@@ -111,6 +112,7 @@ impl TreeRow {
             name: row.name.to_owned().into(),
             ext: row.ext.to_owned().into(),
             check: row.check,
+            checkable: row.checkable,
             disclosure,
             size: row.size,
             current: false,
@@ -201,7 +203,7 @@ impl RenderOnce for TreeRow {
             .role(Role::TreeItem)
             .aria_label(self.name.clone())
             .aria_level(usize::from(self.depth))
-            .aria_toggled(toggled)
+            .when(self.checkable, |row| row.aria_toggled(toggled))
             .aria_selected(current)
             .when(
                 focus != Focus::Elsewhere,
@@ -442,6 +444,12 @@ impl TreeRow {
             .role(RoleOverride::Presentational)
             .state(state)
             .tab_stop(false)
+            .disabled(!self.checkable)
+            .when(!self.checkable, |check| {
+                check.opacity(0.45).tooltip(|window, cx| {
+                    Tooltip::new("Folder selection is available after indexing").build(window, cx)
+                })
+            })
             .on_change(move |_, _, window, cx| {
                 cx.stop_propagation();
                 on_event(&RowAction::ToggleCheck, window, cx);

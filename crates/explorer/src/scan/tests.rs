@@ -331,6 +331,7 @@ fn a_cancelled_scan_returns_no_tree() {
 fn a_visitor_quits_once_cancelled() {
     let cancel = AtomicBool::new(false);
     let shared = Shared {
+        progress: None,
         cancel: &cancel,
         folders: Mutex::new(HashMap::new()),
         batches: Mutex::new(Vec::new()),
@@ -491,4 +492,96 @@ mod unix {
         read_sizes(&tree, &AtomicBool::new(false)).unwrap();
         assert_eq!(tree.size(NodeId::ROOT), Some(2));
     }
+}
+
+#[test]
+fn an_outline_reads_only_requested_directories_with_the_full_scans_rules() {
+    let dir = folder(&[
+        (".gitignore", "*.tmp"),
+        ("a/hidden.tmp", ""),
+        ("a/b/x.txt", ""),
+        ("root.txt", ""),
+    ]);
+    let root = crate::canonical(dir.path()).unwrap();
+    let cancel = AtomicBool::new(false);
+    let (mut outline, first) =
+        super::DirectoryOutline::open(&root, ScanOptions::default(), None, &cancel).unwrap();
+    assert_eq!(paths(&first), ["a", ".gitignore", "root.txt"]);
+    // Changing an unvisited directory before expanding it proves the read is on demand.
+    fs::write(root.join("a/new.txt"), "").unwrap();
+    let expanded = outline.read(&root.join("a"), &cancel).unwrap().unwrap();
+    assert_eq!(
+        paths(&expanded),
+        ["a", "a/b", "a/new.txt", ".gitignore", "root.txt"]
+    );
+    assert!(outline.read(&root.join("a"), &cancel).unwrap().is_none());
+    let last = outline.read(&root.join("a/b"), &cancel).unwrap().unwrap();
+    assert_eq!(paths(&last), paths(&scan_default(&root)));
+}
+
+#[test]
+fn restoring_an_outline_reads_the_saved_branches_and_retains_explicit_file_checks() {
+    let dir = folder(&[
+        ("a/b/read.txt", ""),
+        ("c/chosen.txt", ""),
+        ("other/skipped.txt", ""),
+    ]);
+    let root = crate::canonical(dir.path()).unwrap();
+    let saved = crate::SavedFolder {
+        path: root.clone(),
+        open: vec![String::new(), "a/b".into()],
+        selection: crate::SavedSelection {
+            folders: vec![],
+            files: vec!["c/chosen.txt".into()],
+        },
+    };
+    let (_, tree) = super::DirectoryOutline::open(
+        &root,
+        ScanOptions::default(),
+        Some(&saved),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert!(tree.find("a/b/read.txt").is_some());
+    assert!(tree.find("c/chosen.txt").is_some());
+    assert!(tree.find("other/skipped.txt").is_none());
+}
+
+#[test]
+fn outline_cancellation_and_missing_directories_do_not_publish_a_complete_tree() {
+    let dir = folder(&[("gone/", "")]);
+    let root = crate::canonical(dir.path()).unwrap();
+    let cancel = AtomicBool::new(false);
+    let (mut outline, _) =
+        super::DirectoryOutline::open(&root, ScanOptions::default(), None, &cancel).unwrap();
+    let gone = root.join("gone");
+    fs::remove_dir(&gone).unwrap();
+    let tree = outline.read(&gone, &cancel).unwrap().unwrap();
+    assert_eq!(tree.kind(id(&tree, "gone")), Kind::Unreadable);
+    assert!(matches!(
+        super::DirectoryOutline::open(&gone, ScanOptions::default(), None, &cancel),
+        Err(ScanError::Root(_))
+    ));
+    cancel.store(true, Ordering::Relaxed);
+    assert!(matches!(
+        super::DirectoryOutline::open(&root, ScanOptions::default(), None, &cancel),
+        Err(ScanError::Cancelled)
+    ));
+}
+
+#[test]
+fn walker_progress_counts_each_listed_entry_once() {
+    let dir = folder(&[("nested/", ""), (".gitignore", "*.tmp"), ("skip.tmp", "")]);
+    for n in 0..1100 {
+        fs::write(dir.path().join("nested").join(n.to_string()), "").unwrap();
+    }
+    let count = std::sync::atomic::AtomicUsize::new(0);
+    let tree = super::scan_observed(
+        dir.path(),
+        ScanOptions::default(),
+        &AtomicBool::new(false),
+        Some(&count),
+    )
+    .unwrap();
+    assert_eq!(count.load(Ordering::Relaxed), tree.node_count() - 1);
 }

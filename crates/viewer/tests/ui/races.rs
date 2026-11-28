@@ -317,6 +317,12 @@ fn a_scan_slower_than_200_ms_shows_the_progress_bar_until_it_lands(cx: &mut Test
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         assert!(window.find("scan-progress").visible());
+        let activity = window.find("folder-activity");
+        assert!(activity.visible());
+        assert_eq!(
+            activity.label(),
+            Some(format!("Reading {}", crate::name_of(dir.path())).as_str())
+        );
     })
     .unwrap();
 

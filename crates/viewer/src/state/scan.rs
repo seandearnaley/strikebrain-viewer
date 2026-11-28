@@ -10,22 +10,52 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use explorer::{
     Explorer, IdMap, Kind, NodeId, SavedFolder, ScanError, ScanOptions, SortKey, Tree, TreeError,
-    read_sizes, scan,
+    read_sizes, scan_observed,
 };
-use gpui_kit::{AppContext as _, Context};
+use gpui_kit::{AppContext as _, Context, SharedString};
 
 use super::AppState;
+use super::folders::{ScanActivity, ScanPhase};
 use super::history::Record;
 
 /// A scan that takes longer than this shows the progress bar.
-const SLOW_SCAN: Duration = Duration::from_millis(200);
+pub(super) const SLOW_SCAN: Duration = Duration::from_millis(200);
 
 impl AppState {
+    /// A slow operation's actual phase, folder and discovery count.
+    pub(crate) fn folder_activity(&self) -> Option<SharedString> {
+        let (folder, activity) = self
+            .folders
+            .iter()
+            .filter_map(|folder| Some((folder, folder.activity.as_ref()?)))
+            .find(|(_, activity)| activity.slow)?;
+        let name = folder
+            .path
+            .file_name()
+            .unwrap_or(folder.path.as_os_str())
+            .to_string_lossy();
+        let label = if matches!(activity.phase, ScanPhase::Sizes { .. }) {
+            format!("Reading sizes for {name}")
+        } else if let Some(err) = &folder.error
+            && !folder.shown
+        {
+            format!("Reading {name} · {err}")
+        } else if activity.found > 0 {
+            format!(
+                "Indexing {name} · {} entries",
+                crate::explorer_panel::grouped(activity.found)
+            )
+        } else {
+            format!("Reading {name}")
+        };
+        Some(label.into())
+    }
+
     /// Whether scans list the files the ignore rules leave out.
     #[must_use]
     pub fn shows_ignored(&self) -> bool {
@@ -87,27 +117,71 @@ impl AppState {
             return;
         };
         folder.rescan_pending = false;
+        let entries = Arc::new(AtomicUsize::new(0));
+        let reported = Arc::clone(&entries);
         folder.cancel.store(true, Ordering::Relaxed);
         let cancel = Arc::new(AtomicBool::new(false));
         folder.cancel = Arc::clone(&cancel);
         folder.generation = generation;
-        folder.scanning = Some(false);
+        folder.activity = Some(ScanActivity {
+            phase: ScanPhase::Listing,
+            slow: false,
+            found: 0,
+        });
+        folder.browse = None;
         let root = folder.path.clone();
 
         // Each task ends early with an error only when the state is gone.
         let timer = cx.background_executor().timer(SLOW_SCAN);
         folder.slow_task = Some(cx.spawn(async move |this, cx| {
             timer.await;
-            this.update(cx, |this, cx| this.mark_slow(key, generation, cx))
+            this.update(cx, |this, cx| this.mark_slow(key, generation, cx))?;
+            // Sample the workers at the progress indicator's cadence. Walkers
+            // never wake the UI or contend with drawing on a per-entry basis.
+            loop {
+                let active = this.update(cx, |this, cx| {
+                    let Some(activity) = this
+                        .folder_mut(key)
+                        .filter(|f| f.generation == generation)
+                        .and_then(|f| f.activity.as_mut())
+                        .filter(|a| a.phase == ScanPhase::Listing)
+                    else {
+                        return false;
+                    };
+                    let found = reported.load(Ordering::Relaxed);
+                    if found != activity.found {
+                        activity.found = found;
+                        cx.notify();
+                    }
+                    true
+                })?;
+                if !active {
+                    return Ok(());
+                }
+                cx.background_executor().timer(SLOW_SCAN).await;
+            }
         }));
         folder.scan_task = Some(cx.spawn(async move |this, cx| {
             let worker_cancel = Arc::clone(&cancel);
             let mut scanned = cx
-                .background_spawn(async move { scan(&root, options, &worker_cancel) })
+                .background_spawn(async move {
+                    scan_observed(&root, options, &worker_cancel, Some(&entries))
+                })
                 .await
                 .map(Arc::new);
             if sizes_first && let Ok(tree) = &scanned {
                 // A cancelled read means a newer scan has replaced this one.
+                this.update(cx, |this, cx| {
+                    if let Some(folder) = this
+                        .folder_mut(key)
+                        .filter(|folder| folder.generation == generation)
+                    {
+                        if let Some(activity) = &mut folder.activity {
+                            activity.phase = ScanPhase::Sizes { on_screen: false };
+                        }
+                        cx.notify();
+                    }
+                })?;
                 let (sized, sizes_cancel) = (Arc::clone(tree), Arc::clone(&cancel));
                 if let Err(err) = cx
                     .background_spawn(async move { read_sizes(&sized, &sizes_cancel) })
@@ -136,13 +210,20 @@ impl AppState {
     }
 
     fn mark_slow(&mut self, key: u64, generation: u64, cx: &mut Context<Self>) {
-        if let Some(folder) = self.folder_mut(key)
-            && folder.generation == generation
-            && folder.scanning.is_some()
-        {
-            folder.scanning = Some(true);
-            cx.notify();
+        let Some(folder) = self
+            .folder_mut(key)
+            .filter(|folder| folder.generation == generation)
+        else {
+            return;
+        };
+        let Some(activity) = &mut folder.activity else {
+            return;
+        };
+        activity.slow = true;
+        if activity.phase == ScanPhase::Listing {
+            self.start_browsing(key, generation, cx);
         }
+        cx.notify();
     }
 
     /// Puts a finished scan of the folder `key` on screen, if it is still
@@ -158,8 +239,8 @@ impl AppState {
         let folder = self
             .folder_mut(key)
             .filter(|folder| folder.generation == generation)?;
-        folder.scanning = None;
-        folder.slow_task = None;
+        let activity = folder.activity.take();
+        folder.browse = None;
         let old = folder.path.clone();
         let (tree, error) = match scanned {
             Ok(tree) => (tree, None),
@@ -172,7 +253,7 @@ impl AppState {
         let path = tree.root_path().to_path_buf();
         // A first scan of a folder a tree on screen lists already: its files
         // are there.
-        let first = !folder.shown;
+        let first = !folder.shown && self.folder_node(&old).is_none();
         if first && self.listed(&path).is_some() {
             let asked = self.take_folder(key);
             self.settle_asked_inside(asked, cx);
@@ -200,8 +281,8 @@ impl AppState {
             }
         }
         let before = self.before();
-        let joined = self.join(key, &old, &tree, error.is_some());
-        let (map, current) = match joined {
+        let joined = self.install_folder(key, &old, &tree, error.is_some());
+        let map = match joined {
             Ok(joined) => joined,
             Err(err) => {
                 // Past the tree's limits: the folder stays as it was.
@@ -212,11 +293,15 @@ impl AppState {
                 return None;
             }
         };
-        self.current = current;
-        self.focus = self.focus.and_then(|focus| map.get(focus));
-        self.tile = self.tile.and_then(|tile| map.get(tile));
-        self.tree_replaced();
         let folder = self.folder_mut(key)?;
+        if error.is_none() && !tree.has_sizes() {
+            folder.activity = activity.map(|a| ScanActivity {
+                phase: ScanPhase::Sizes { on_screen: true },
+                ..a
+            });
+        } else {
+            folder.slow_task = None;
+        }
         folder.shown = true;
         folder.path.clone_from(&path);
         let readable = error.is_none();
@@ -257,6 +342,21 @@ impl AppState {
         (readable && !tree.has_sizes()).then_some(tree)
     }
 
+    pub(super) fn install_folder(
+        &mut self,
+        key: u64,
+        old: &Path,
+        tree: &Tree,
+        unreadable: bool,
+    ) -> Result<IdMap, TreeError> {
+        let (map, current) = self.join(key, old, tree, unreadable)?;
+        self.current = current;
+        self.focus = self.focus.and_then(|focus| map.get(focus));
+        self.tile = self.tile.and_then(|tile| map.get(tile));
+        self.tree_replaced();
+        Ok(map)
+    }
+
     /// Joins `tree`, the folder `key` last seen at `old`, into the tree on
     /// screen: in place of its tree there, or as a new top-level folder in
     /// its place among the folders. A folder that could no longer be read
@@ -276,7 +376,7 @@ impl AppState {
         let shown_after = self.folders[at..]
             .iter()
             .skip(1)
-            .filter(|folder| folder.shown)
+            .filter(|folder| folder.shown || self.folder_node(&folder.path).is_some())
             .count();
         let fresh = self.explorer.is_none().then(|| self.new_explorer());
         let (current, folders) = (self.current, &mut self.folders);
@@ -310,12 +410,14 @@ impl AppState {
     /// they reorder the rows, which keeps the focus row on screen as any
     /// command that rebuilds the rows does.
     fn finish_sizes(&mut self, key: u64, generation: u64, cx: &mut Context<Self>) {
-        if self
-            .folder(key)
-            .is_none_or(|folder| folder.generation != generation)
-        {
+        let Some(folder) = self
+            .folder_mut(key)
+            .filter(|folder| folder.generation == generation)
+        else {
             return;
-        }
+        };
+        folder.activity = None;
+        folder.slow_task = None;
         let Some(explorer) = &mut self.explorer else {
             return;
         };

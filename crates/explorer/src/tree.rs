@@ -148,6 +148,8 @@ pub struct Tree {
 struct Folder {
     /// The folder's node; the folder is this node's subtree.
     top: NodeId,
+    /// Only directories opened so far have been listed.
+    partial: bool,
     /// The top node's absolute path; for a tree from paths, its path
     /// relative to that tree's root, `""` for the root.
     path: PathBuf,
@@ -231,6 +233,17 @@ impl Tree {
             .unwrap_or(path.as_os_str())
             .to_string_lossy();
         one_node(&name, Kind::File, size, path)
+    }
+
+    /// Marks a single-folder tree as a partial directory listing.
+    pub(crate) fn mark_partial(&mut self) {
+        self.folders[0].partial = true;
+    }
+
+    /// Whether the folder containing `id` is still being indexed.
+    #[must_use]
+    pub fn is_partial(&self, id: NodeId) -> bool {
+        self.folder_holding(id).is_some_and(|folder| folder.partial)
     }
 
     /// Absolute path of the root folder. Empty for a tree built from paths,

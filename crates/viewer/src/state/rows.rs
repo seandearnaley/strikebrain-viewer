@@ -33,6 +33,7 @@ impl AppState {
         if !still_drawn {
             return false;
         }
+        self.use_browsed_row(row.id);
         self.set_focus(row.id, row.ix);
         match action {
             RowAction::Show => self.show(row.id, cx),
@@ -56,6 +57,7 @@ impl AppState {
             Motion::Last => last,
         };
         let id = explorer.rows()[to];
+        self.use_browsed_row(id);
         self.set_focus(id, to);
         cx.notify();
         Some(to)
@@ -65,13 +67,15 @@ impl AppState {
     /// child of an open one. Returns the new focus row.
     pub fn expand(&mut self, cx: &mut Context<Self>) -> Option<usize> {
         let row = self.focus_index()?;
+        let id = self.focus?;
+        self.use_browsed_row(id);
         let explorer = self.explorer.as_mut()?;
-        let id = explorer.rows()[row];
         if !explorer.can_open(id) {
             return Some(row);
         }
         if !explorer.is_open(id) {
             explorer.set_open(id, true);
+            self.read_open_directory(id);
             cx.notify();
             return Some(row);
         }
@@ -82,7 +86,10 @@ impl AppState {
                 cx.notify();
                 Some(row + 1)
             }
-            _ => Some(row),
+            _ => {
+                self.read_open_directory(id);
+                Some(row)
+            }
         }
     }
 
@@ -90,8 +97,9 @@ impl AppState {
     /// folder. Returns the new focus row.
     pub fn collapse(&mut self, cx: &mut Context<Self>) -> Option<usize> {
         let row = self.focus_index()?;
+        let id = self.focus?;
+        self.use_browsed_row(id);
         let explorer = self.explorer.as_mut()?;
-        let id = explorer.rows()[row];
         if explorer.can_open(id) && explorer.is_open(id) {
             explorer.set_open(id, false);
             cx.notify();
@@ -113,6 +121,7 @@ impl AppState {
     fn toggle_folder(&mut self, id: NodeId, cx: &mut Context<Self>) {
         if let Some(explorer) = self.explorer.as_mut() {
             explorer.toggle_folder(id);
+            self.read_open_directory(id);
             cx.notify();
         }
     }

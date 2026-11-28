@@ -23,7 +23,7 @@ pub(crate) const NO_PARENT: u32 = u32::MAX;
 /// Nodes in any order, each naming its parent by raw index. Raw index 0 is
 /// the root folder. A node whose parent is [`NO_PARENT`] or not a
 /// [`Kind::Dir`] is left out of the tree, with its descendants.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct RawTree {
     names: NameArena,
     parent: Vec<u32>,
@@ -218,6 +218,7 @@ impl RawTree {
         let (child_start, child_ids) = children_by_id(&parent);
         let tree = Tree {
             folders: Box::new([Folder {
+                partial: false,
                 top: NodeId::ROOT,
                 path: root_path,
                 sizes: Arc::default(),

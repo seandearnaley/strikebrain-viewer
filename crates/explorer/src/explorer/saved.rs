@@ -165,6 +165,17 @@ fn compact_from(
     folders: &mut Vec<NodeId>,
     files: &mut Vec<NodeId>,
 ) {
+    // An outline may list just one checked file in a directory with unseen
+    // descendants. Only checked paths can carry across or be persisted.
+    if tree.is_partial(top) {
+        let range = tree.subtree(top);
+        let next =
+            |from| bits::next_one(selection.as_bitset(), from).filter(|&bit| bit < range.end);
+        files.extend(
+            std::iter::successors(next(range.start), |bit| next(bit + 1)).map(NodeId::from_index),
+        );
+        return;
+    }
     let all = Visibility::all();
     let check = |id| selection.check(tree, &all, id);
     if tree.is_file(top) {

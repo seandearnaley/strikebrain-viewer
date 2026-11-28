@@ -34,6 +34,7 @@ use crate::row::TreeRow;
 use crate::state::{AppState, DrawnRow, Motion, RowAction, StateEvent};
 
 use selection_bar::SelectionBar;
+pub(crate) use selection_bar::grouped;
 
 /// Rows a page key moves when the tree has not been laid out yet.
 const FALLBACK_PAGE: usize = 10;
@@ -573,6 +574,22 @@ impl Render for ExplorerPanel {
 
         panel
             .child(self.render_filter_bar(cx))
+            .when_some(state.folder_activity(), |panel, label| {
+                panel.child(
+                    div()
+                        .id("folder-activity")
+                        .test_support()
+                        .role(Role::Status)
+                        .aria_label(label.clone())
+                        .px_3()
+                        .py_1()
+                        .flex_shrink_0()
+                        .truncate()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(label),
+                )
+            })
             .children(header)
             .child(body)
     }

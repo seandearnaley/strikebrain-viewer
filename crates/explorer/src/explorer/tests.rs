@@ -337,6 +337,7 @@ fn a_row_view_holds_what_a_row_draws() {
     assert_eq!(
         folder,
         RowView {
+            checkable: true,
             id: docs,
             depth: 1,
             kind: Kind::Dir,

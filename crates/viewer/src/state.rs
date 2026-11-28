@@ -13,6 +13,7 @@
 //! `state/history.rs`, filtering in `state/filter.rs`, and restoring a
 //! saved view in `state/restore.rs`.
 
+mod browse;
 mod checks;
 mod filter;
 mod folders;

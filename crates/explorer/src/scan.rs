@@ -20,7 +20,7 @@ use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, PoisonError};
 
 use ignore::{DirEntry, ParallelVisitor, ParallelVisitorBuilder, WalkBuilder, WalkState};
@@ -29,9 +29,11 @@ use crate::tree::{NO_PARENT, RawTree};
 use crate::{Kind, Tree, TreeError};
 
 mod changes;
+mod outline;
 mod sizes;
 
 pub use changes::changes_matter;
+pub use outline::DirectoryOutline;
 pub use sizes::read_sizes;
 
 /// Names skipped in every scan, whatever the ignore rules say.
@@ -45,6 +47,9 @@ const MAX_WALK_THREADS: usize = 6;
 
 /// The root folder's key in the shared folder map.
 const ROOT_KEY: usize = 0;
+
+/// Amortizes progress messages over entries already recorded by a worker.
+const PROGRESS_BATCH: usize = 1024;
 
 /// How to scan.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -131,12 +136,29 @@ impl From<TreeError> for ScanError {
 /// [`ScanError::Cancelled`] if `cancel` was set; [`ScanError::Tree`] past
 /// the tree's id limits.
 pub fn scan(root: &Path, options: ScanOptions, cancel: &AtomicBool) -> Result<Tree, ScanError> {
+    scan_observed(root, options, cancel, None)
+}
+
+/// Scans as [`scan`] does. If supplied, `progress` accumulates the number
+/// of entries recorded below the root. Workers add in batches so a UI can
+/// sample the count without synchronizing on every file.
+///
+/// # Errors
+///
+/// The same errors as [`scan`].
+pub fn scan_observed(
+    root: &Path,
+    options: ScanOptions,
+    cancel: &AtomicBool,
+    progress: Option<&AtomicUsize>,
+) -> Result<Tree, ScanError> {
     let (root, file) = resolve_root(root)?;
     if let Some(size) = file {
         return Ok(Tree::file(&root, size));
     }
     let shared = Shared {
         cancel,
+        progress,
         folders: Mutex::new(HashMap::from([(root.clone(), ROOT_KEY)])),
         batches: Mutex::new(Vec::new()),
     };
@@ -251,6 +273,7 @@ fn walk_threads() -> usize {
 /// State the walker threads share.
 struct Shared<'a> {
     cancel: &'a AtomicBool,
+    progress: Option<&'a AtomicUsize>,
     /// Every folder seen, by absolute path, with its key.
     folders: Mutex<HashMap<PathBuf, usize>>,
     /// Each finished thread's batch.
@@ -340,11 +363,8 @@ impl Collector<'_> {
             return;
         };
         // The type comes from the folder listing; nothing here stats the file.
-        let kind = match entry.file_type() {
-            Some(t) if t.is_symlink() => Kind::Symlink,
-            Some(t) if t.is_dir() => Kind::Dir,
-            Some(t) if is_special(t) => return,
-            _ => Kind::File,
+        let Some(kind) = entry.file_type().map_or(Some(Kind::File), entry_kind) else {
+            return;
         };
         let parent = self.parent_key(parent);
         let batch = &mut self.batch;
@@ -353,6 +373,11 @@ impl Collector<'_> {
         batch.name_ends.push(batch.names.len());
         batch.parent_key.push(parent);
         batch.kind.push(kind);
+        if batch.len().is_multiple_of(PROGRESS_BATCH)
+            && let Some(report) = self.shared.progress
+        {
+            report.fetch_add(PROGRESS_BATCH, Ordering::Relaxed);
+        }
         if kind == Kind::Dir {
             batch
                 .folders
@@ -375,11 +400,30 @@ impl Collector<'_> {
 impl Drop for Collector<'_> {
     fn drop(&mut self) {
         let batch = std::mem::take(&mut self.batch);
+        let remaining = batch.len() % PROGRESS_BATCH;
+        if remaining != 0
+            && let Some(report) = self.shared.progress
+        {
+            report.fetch_add(remaining, Ordering::Relaxed);
+        }
         self.shared
             .batches
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(batch);
+    }
+}
+
+/// Kinds the explorer can display without opening a special file.
+fn entry_kind(file_type: fs::FileType) -> Option<Kind> {
+    if file_type.is_symlink() {
+        Some(Kind::Symlink)
+    } else if file_type.is_dir() {
+        Some(Kind::Dir)
+    } else if is_special(file_type) {
+        None
+    } else {
+        Some(Kind::File)
     }
 }
 

@@ -83,7 +83,7 @@ impl RenderOnce for SelectionBar {
 }
 
 /// `n` with its digits grouped in threes: 1,650,231.
-fn grouped(n: usize) -> String {
+pub(crate) fn grouped(n: usize) -> String {
     let digits = n.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
     for (ix, digit) in digits.chars().enumerate() {

@@ -285,7 +285,9 @@ Row behaviour:
 States:
 
 - Nothing open, no folder and no file row: one "Add Folder" button centred in the pane. The stage is blank. Removing the last top-level row, a folder's or a file's, comes back here.
-- Any folder scanning for more than 200 ms: a thin indeterminate bar along the bottom edge of the bar's part over the explorer.
+- After 200 ms of scanning, the explorer names the folder, reports the number of entries found, then shows when it is reading file sizes. The title bar also shows indeterminate progress.
+- During a slow first scan, the ordinary tree shows the root listing. Opening a directory reads its immediate children on demand. A file can be viewed or checked as soon as its row appears. Filtering and bulk commands operate on listed entries until the full index arrives. Whole-directory checkboxes become available with the full index. The handoff keeps open rows, individual file checks, the stage and focus by path.
+- A restored view can use early listings for its open directories and individually checked files. A saved whole-folder selection, or adding a parent around an existing root, waits for the recursive scan so selection and overlap are resolved against the complete tree. Refresh keeps an existing tree available.
 - No rows after filtering: the tree area is blank. A folder with no match hides like any other folder row.
 - A folder that cannot be read: its row, with the warning icon where the chevron would be; its tooltip gives its path and, on a second line, the operating system's error message. It keeps the checks and open folders it had, saved as they were, and a scan that can read it again (Refresh, or the next launch) brings them back. A file row whose file is gone or cannot be read shows the same way, until Refresh finds it again.
 

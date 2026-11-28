@@ -19,6 +19,8 @@ pub struct RowView<'a> {
     pub name: &'a str,
     /// The checkbox.
     pub check: Check,
+    /// A whole directory can be checked once its files are indexed.
+    pub checkable: bool,
     /// Whether the folder shows its children ([`Explorer::is_open`]).
     pub open: bool,
     /// Whether the row has a chevron ([`Explorer::can_open`]).
@@ -44,6 +46,7 @@ impl Explorer {
             kind: tree.kind(id),
             name: tree.name(id),
             check: self.check(id),
+            checkable: self.can_check(id),
             open: self.is_open(id),
             can_open: self.can_open(id),
             size: tree.size(id),
