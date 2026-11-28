@@ -26,13 +26,13 @@ use super::text::Scroll;
 use super::{Content, File, Stage};
 
 impl Stage {
-    fn render_content(&self, cx: &App) -> Option<AnyElement> {
+    fn render_content(&self, cx: &Context<Self>) -> Option<AnyElement> {
         Some(match &self.content {
             Content::Blank => return None,
             Content::Image(file, len) => self.render_image(file, *len, cx),
             Content::Markdown(file) => self
                 .text_views
-                .render_markdown(file.name.clone())
+                .render_markdown(file.name.clone(), cx.weak_entity())
                 .into_any_element(),
             Content::Code(file) => self
                 .text_views
@@ -188,7 +188,9 @@ impl Render for Stage {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.renders += 1;
         let gallery = self.asked.gallery;
-        let content = if gallery {
+        let content = if let Some(folder) = &self.folder {
+            Some(gpui_kit::component::list::List::new(folder).into_any_element())
+        } else if gallery {
             Some(self.gallery.clone().into_any_element())
         } else {
             self.render_content(cx)

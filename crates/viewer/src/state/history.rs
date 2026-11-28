@@ -19,7 +19,7 @@ use super::{AppState, StageView, StateEvent};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Step {
     /// A file in the file view, by its path on disk.
-    File(PathBuf),
+    Entry(PathBuf, Option<String>),
     /// The gallery.
     Gallery,
 }
@@ -40,7 +40,10 @@ impl AppState {
             return Some(Step::Gallery);
         }
         let explorer = self.explorer.as_ref()?;
-        Some(Step::File(explorer.tree().abs_path(self.current?)))
+        Some(Step::Entry(
+            explorer.tree().abs_path(self.current?),
+            self.fragment.clone(),
+        ))
     }
 
     /// Enters what the stage shows now into the history, `how` says how. A
@@ -62,9 +65,9 @@ impl AppState {
     fn can_show(&self, step: &Step) -> bool {
         match step {
             Step::Gallery => self.gallery_len() >= 2,
-            Step::File(path) => self.explorer.as_ref().is_some_and(|explorer| {
+            Step::Entry(path, _) => self.explorer.as_ref().is_some_and(|explorer| {
                 let tree = explorer.tree();
-                tree.find_abs(path).is_some_and(|id| tree.is_file(id))
+                tree.find_abs(path).is_some()
             }),
         }
     }
@@ -133,14 +136,20 @@ impl AppState {
     /// Shows `step`, which can be shown, adding no step: a file in the file
     /// view, checked or not; the gallery with `current`'s tile focused.
     fn show_step(&mut self, step: Step, cx: &mut Context<Self>) {
+        self.pending_link = None;
+        self.fragment = None;
         match step {
-            Step::File(path) => {
+            Step::Entry(path, fragment) => {
                 let id = self
                     .explorer
                     .as_ref()
                     .and_then(|explorer| explorer.tree().find_abs(&path));
-                self.current = id;
-                self.view = StageView::File;
+                if let Some(id) = id {
+                    self.use_browsed_row(id);
+                    self.open_entry(id, cx);
+                    self.fragment = fragment;
+                    self.reveal(id, cx);
+                }
                 cx.emit(StateEvent::CurrentMoved);
             }
             Step::Gallery => {

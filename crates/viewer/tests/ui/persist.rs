@@ -809,3 +809,23 @@ fn a_file_alone_reopens_the_saved_folders_and_shows_the_file(cx: &mut TestAppCon
     assert_eq!(read(&mut cx, &view, AppState::current), Some(b));
     assert!(!read(&mut cx, &view, AppState::shows_gallery));
 }
+
+#[gpui_kit::test]
+fn the_open_folder_is_restored_after_quit(cx: &mut TestAppContext) {
+    let root = folder(&[("docs/file", "x")]);
+    let state_dir = tempfile::tempdir().unwrap();
+    let store = StateStore::at(state_dir.path().join("state.json"));
+    let (handle, view) = launch(cx, &[root.path()], &store);
+    let docs = node(cx, &view, "docs");
+    click(cx, handle, row(docs));
+    cx.quit();
+    assert_eq!(saved(store.path()).view.view, StageView::Folder);
+    let mut cx = cx.new_app();
+    let (_, view) = launch(&mut cx, &[], &store);
+    assert_eq!(
+        read(&mut cx, &view, AppState::stage_view),
+        StageView::Folder
+    );
+    let docs = node(&mut cx, &view, "docs");
+    assert_eq!(read(&mut cx, &view, AppState::current), Some(docs));
+}

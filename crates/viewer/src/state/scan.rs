@@ -359,6 +359,7 @@ impl AppState {
             .map_or_else(Vec::new, |folder| std::mem::take(&mut folder.asked_inside));
         self.settle_asked_inside(asked, cx);
         self.settle_asked_files(cx);
+        self.settle_link(cx);
         self.scan_settled(key, cx);
         (readable && !tree.has_sizes()).then_some(tree)
     }

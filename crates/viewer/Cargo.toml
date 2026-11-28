@@ -17,6 +17,10 @@ path = "src/main.rs"
 # Decodes the image in a Markdown `data:` URL, as the Kit does until the
 # Markdown view sets its own image source. The Kit already builds this crate.
 data-url = "0.3.2"
+# URL resolution for document links and the Markdown parser used by the Kit.
+url = "2.5.9"
+markdown = "1.0.0"
+percent-encoding = "2.3.2"
 directories = "6.0.0"
 explorer = { path = "../explorer" }
 # The channel that carries the file watcher's events from its thread into a

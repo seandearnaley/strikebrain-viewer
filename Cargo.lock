@@ -7772,13 +7772,16 @@ dependencies = [
  "gpui-kit",
  "image",
  "libc",
+ "markdown",
  "notify 9.0.0",
+ "percent-encoding",
  "semver",
  "serde",
  "serde_json",
  "sha2 0.11.2",
  "tempfile",
  "ureq",
+ "url",
 ]
 
 [[package]]

@@ -71,6 +71,8 @@ impl AppState {
     /// After the person changed the checks, the file on the stage having
     /// been `before`: the stage shows what they hold, a new step.
     fn checks_changed(&mut self, before: Option<NodeId>, cx: &mut Context<Self>) {
+        self.fragment = None;
+        self.pending_link = None;
         self.settle_checks(before, cx);
         self.record(Record::Add);
     }
@@ -83,12 +85,39 @@ impl AppState {
         cx.notify();
     }
 
-    /// Shows `id` in the file view if it is a file, checked or not, a new
-    /// step. Does nothing on a folder.
+    /// Opens an entry on the stage without changing its checkbox.
     pub(super) fn show(&mut self, id: NodeId, cx: &mut Context<Self>) {
-        if self.show_file(id, cx) {
-            self.record(Record::Add);
+        self.fragment = None;
+        self.pending_link = None;
+        self.open_entry(id, cx);
+        self.record(Record::Add);
+    }
+
+    pub(super) fn open_entry(&mut self, id: NodeId, cx: &mut Context<Self>) {
+        if !self.show_file(id, cx) {
+            let Some(explorer) = self.explorer.as_ref() else {
+                return;
+            };
+            if !explorer.tree().kind(id).is_folder() {
+                return;
+            }
+            self.current = Some(id);
+            self.view = super::StageView::Folder;
+            self.presenting = false;
+            self.read_open_directory(id);
+            cx.notify();
         }
+    }
+
+    /// Opens an entry from a folder listing or breadcrumb and reveals it in
+    /// the sidebar. The generation guards callbacks from a replaced tree.
+    pub(crate) fn navigate(&mut self, generation: u64, id: NodeId, cx: &mut Context<Self>) {
+        if generation != self.tree_generation {
+            return;
+        }
+        self.use_browsed_row(id);
+        self.reveal(id, cx);
+        self.show(id, cx);
     }
 
     /// Shows `id` in the file view as [`AppState::show`] does, recording
@@ -99,6 +128,8 @@ impl AppState {
             .as_ref()
             .is_some_and(|explorer| explorer.tree().is_file(id));
         if is_file {
+            self.fragment = None;
+            self.pending_link = None;
             self.current = Some(id);
             self.view = super::StageView::File;
             cx.notify();
@@ -120,6 +151,9 @@ impl AppState {
     }
 
     fn step(&mut self, forward: bool, cx: &mut Context<Self>) {
+        if self.view == super::StageView::Folder {
+            return;
+        }
         let (Some(explorer), Some(current)) = (&self.explorer, self.current) else {
             return;
         };
@@ -129,6 +163,7 @@ impl AppState {
             explorer.gallery_previous(current)
         };
         if let Some(to) = to {
+            self.fragment = None;
             self.current = Some(to);
             self.record(Record::Replace);
             cx.emit(StateEvent::CurrentMoved);
@@ -140,7 +175,7 @@ impl AppState {
     /// the stage, or from the gallery of its focused tile. Does nothing with
     /// no file there.
     pub fn start_presenting(&mut self, cx: &mut Context<Self>) {
-        if self.presenting {
+        if self.presenting || self.view == super::StageView::Folder {
             return;
         }
         if self.shows_gallery() && self.tile.is_some() && self.tile != self.current {

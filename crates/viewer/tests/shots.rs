@@ -544,6 +544,37 @@ fn main() {
             &format!("tree-states-{suffix}"),
         ));
 
+        let mut folders = context();
+        let (folder_window, folder_view) = open(&mut folders, fixture());
+        let assets = node(&mut folders, &folder_view, "assets");
+        folders
+            .update_window(folder_window, |_, window, cx| window.click(assets, cx))
+            .expect("open the assets folder");
+        folders.run_until_parked();
+        let icons = folders.update(|cx| {
+            folder_view
+                .read(cx)
+                .state()
+                .read(cx)
+                .explorer()
+                .expect("a tree is open")
+                .tree()
+                .find("assets/icons")
+                .expect("fixture has icons")
+        });
+        folders
+            .update_window(folder_window, |_, window, cx| {
+                window.click(("folder-entry", icons.index()), cx)
+            })
+            .expect("browse into icons");
+        written.push(save(
+            &mut folders,
+            folder_window,
+            mode,
+            &dir,
+            &format!("folder-{suffix}"),
+        ));
+
         // 480 px: the Type column joins Size.
         drag_divider(&mut cx, handle, 480.);
         written.push(save(&mut cx, handle, mode, &dir, &format!("wide-{suffix}")));
