@@ -687,3 +687,48 @@ fn reopening_after_directory_replacement_treats_links_as_leaves_and_prunes_delet
     assert_eq!(paths(&tree), paths(&scan_default(&root)));
     assert_eq!(reopen().1, 0);
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn reopen_displays_previous_sizes_until_offline_edits_are_verified() {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let dir = folder(&[("images/a", "abc"), ("images/b", "12345")]);
+    let root = crate::canonical(dir.path()).unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let cancel = AtomicBool::new(false);
+    let reopen = || {
+        super::smb::indexed(
+            &root,
+            ScanOptions::default(),
+            &cancel,
+            None,
+            &cache.path().join("index"),
+            super::CacheMode::Validate,
+        )
+        .unwrap()
+        .0
+    };
+    let first = reopen();
+    read_sizes(&first, &cancel).unwrap();
+    fs::write(root.join("images/a"), "abcdef").unwrap();
+    drop(first);
+    let next = reopen();
+    assert!(!next.has_sizes());
+    assert_eq!(next.display_size(id(&next, "images/a")), Some(3));
+    let joined = Tree::join(&[(&next, NodeId::ROOT)]).unwrap();
+    assert_eq!(joined.display_size(NodeId::ROOT), Some(8));
+    read_sizes(&next, &cancel).unwrap();
+    assert_eq!(joined.display_size(NodeId::ROOT), Some(11));
+    assert_eq!(next.size(id(&next, "images/a")), Some(6));
+    let snapshot = cache.path().join("index.sizes-v1");
+    let written = fs::metadata(&snapshot).unwrap();
+    let unchanged = reopen();
+    read_sizes(&unchanged, &cancel).unwrap();
+    assert_eq!(written.ino(), fs::metadata(&snapshot).unwrap().ino());
+    fs::rename(root.join("images/b"), root.join("images/c")).unwrap();
+    let changed = reopen();
+    assert_eq!(changed.display_size(id(&changed, "images/a")), Some(6));
+    assert_eq!(changed.display_size(id(&changed, "images/c")), None);
+    assert_eq!(changed.display_size(NodeId::ROOT), None);
+}

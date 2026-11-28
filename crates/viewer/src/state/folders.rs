@@ -57,6 +57,7 @@ pub(super) struct Folder {
     /// Why it could not be read at its last scan: the operating system's
     /// message. It shows as one unreadable row.
     pub(super) error: Option<SharedString>,
+    pub(super) size_error: Option<SharedString>,
     /// Its part of a saved view, waiting for a scan that can read it: from
     /// the saved state, or kept from when it could last be read.
     pub(super) waiting: Option<SavedFolder>,
@@ -135,6 +136,7 @@ impl Folder {
             path,
             shown: false,
             error: None,
+            size_error: None,
             waiting,
             generation: 0,
             activity: None,

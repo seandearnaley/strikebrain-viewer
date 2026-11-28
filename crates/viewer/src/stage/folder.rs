@@ -296,7 +296,10 @@ pub(super) fn details_row<F: Fn(&ClickEvent, &mut Window, &mut App) + 'static>(
                     .text_xs()
                     .text_color(muted)
                     .font_features(TABULAR_FIGURES.clone())
-                    .child(tree.size(id).map_or_else(|| "—".into(), format_size)),
+                    .child(
+                        tree.display_size(id)
+                            .map_or_else(|| "—".into(), format_size),
+                    ),
             )
         })
         .on_click(open)

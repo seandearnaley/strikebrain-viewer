@@ -6,8 +6,6 @@
 //! Every column is copied in bulk with its ids shifted; nothing is sorted
 //! again, so a join costs a pass over the nodes.
 
-use std::sync::Arc;
-
 use fixedbitset::FixedBitSet;
 
 use super::build::{Extensions, children_by_id};
@@ -125,9 +123,7 @@ impl Tree {
             .expect("a part is a whole scanned folder");
         Folder {
             top: at,
-            partial: folder.partial,
-            path: folder.path.clone(),
-            sizes: Arc::clone(&folder.sizes),
+            ..folder.clone()
         }
     }
 }

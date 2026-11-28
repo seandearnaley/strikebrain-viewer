@@ -32,7 +32,7 @@ mod changes;
 mod outline;
 mod sizes;
 #[cfg(target_os = "macos")]
-mod smb;
+pub(crate) mod smb;
 
 pub use changes::changes_matter;
 pub use outline::DirectoryOutline;

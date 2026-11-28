@@ -159,6 +159,9 @@ struct Folder {
     /// [`crate::read_sizes`]. Shared by every tree joined from the same
     /// scan, so sizes read into one reach them all.
     sizes: Arc<OnceLock<Box<[u64]>>>,
+    previous: Option<Arc<[Option<u64>]>>,
+    #[cfg(target_os = "macos")]
+    size_cache: Option<crate::scan::smb::SizeCache>,
 }
 
 impl fmt::Debug for Tree {
@@ -371,6 +374,47 @@ impl Tree {
         }
     }
 
+    /// Current size, or the last measured size while a reopened folder is being verified.
+    #[must_use]
+    pub fn display_size(&self, id: NodeId) -> Option<u64> {
+        if let Some(folder) = self.folder_holding(id) {
+            return self
+                .size(id)
+                .or_else(|| folder.previous.as_ref()?[id.index() - folder.top.index()]);
+        }
+        self.folders.iter().try_fold(0_u64, |sum, folder| {
+            Some(sum.saturating_add(self.display_size(folder.top)?))
+        })
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn attach_size_cache(
+        &mut self,
+        cache: crate::scan::smb::SizeCache,
+        previous: Option<Arc<[Option<u64>]>>,
+    ) {
+        self.folders[0].previous = previous;
+        self.folders[0].size_cache = Some(cache);
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn size_cache(&self, id: NodeId) -> Option<&crate::scan::smb::SizeCache> {
+        self.folder_holding(id)?.size_cache.as_ref()
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn sizes_match_previous(&self, top: NodeId) -> bool {
+        self.folder_holding(top).is_some_and(|folder| {
+            folder
+                .previous
+                .as_deref()
+                .zip(folder.sizes.get())
+                .is_some_and(|(previous, live)| {
+                    previous.iter().copied().eq(live.iter().copied().map(Some))
+                })
+        })
+    }
+
     /// Whether [`Tree::size`] has values for every node.
     #[must_use]
     pub fn has_sizes(&self) -> bool {
@@ -403,6 +447,10 @@ impl Tree {
             if let Some(sizes) = folder.sizes.get() {
                 let start = folder.top.index();
                 list[start..start + sizes.len()].copy_from_slice(sizes);
+            } else if let Some(previous) = &folder.previous {
+                for (slot, value) in list[folder.top.index()..].iter_mut().zip(previous.iter()) {
+                    *slot = value.unwrap_or(0);
+                }
             }
         }
         list
