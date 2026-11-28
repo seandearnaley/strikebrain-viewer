@@ -208,7 +208,7 @@ fn is_animated(name: &str, head: &[u8]) -> bool {
 /// open file gives it; `None` for anything else. The open never waits:
 /// a FIFO put in the file's place since its metadata was read would
 /// otherwise wait for a writer, and hold a thread, forever.
-pub(super) fn open_regular(path: &Path) -> io::Result<Option<(File, Metadata)>> {
+pub(crate) fn open_regular(path: &Path) -> io::Result<Option<(File, Metadata)>> {
     let file = open_without_waiting(path)?;
     let metadata = file.metadata()?;
     Ok(metadata.is_file().then_some((file, metadata)))

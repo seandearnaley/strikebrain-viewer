@@ -25,6 +25,7 @@ mod redraw;
 mod refresh;
 mod rows;
 mod scale;
+mod search_bench;
 mod sidebar;
 mod stage;
 mod timing;
@@ -311,6 +312,23 @@ fn click(cx: &mut TestAppContext, handle: AnyWindowHandle, id: impl Into<Element
     let id = id.into();
     cx.update_window(handle, |_, window, cx| window.click(id, cx))
         .expect("click");
+    cx.run_until_parked();
+}
+
+fn search_scope(cx: &mut TestAppContext, handle: AnyWindowHandle, label: &str) {
+    click(cx, handle, "search-scope");
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        let mut menu = window.within("popup-menu");
+        let id = menu
+            .find_by_label(label)
+            .path()
+            .last()
+            .cloned()
+            .expect("a scope menu item has an ID");
+        menu.click(id, cx);
+    })
+    .expect("choose a search scope");
     cx.run_until_parked();
 }
 

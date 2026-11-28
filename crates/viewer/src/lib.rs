@@ -9,6 +9,7 @@ mod launch;
 mod menus;
 mod persist;
 mod row;
+mod search;
 mod stage;
 mod state;
 mod theme;
