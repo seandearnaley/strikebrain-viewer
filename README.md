@@ -62,6 +62,8 @@ Click a folder in the sidebar to preview its contents. Up and Down preview each 
 
 On Windows and Linux, Ctrl stands for ⌘, F11 is fullscreen, Alt+← and Alt+→ go back and forward, and Ctrl+B hides or shows the explorer.
 
+On an open image, scroll to zoom around the pointer and drag to pan. Click the percentage for actual size (100%) or **Fit** to see the whole image. Each image opens fitted.
+
 In a folder, Left and Right browse the visible files in the current sort order. Esc returns to the folder with the last file selected. In a gallery of checked files, clicking a tile opens it and the grid button under the file returns to that gallery. In the filter, Esc clears the text, then returns to the tree.
 
 ## Build the packages
