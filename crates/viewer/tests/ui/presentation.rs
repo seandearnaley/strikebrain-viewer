@@ -382,8 +382,9 @@ fn a_file_outside_an_empty_gallery_is_presented_alone(cx: &mut TestAppContext) {
     for name in ["a.rs", "b.rs", "c.rs"] {
         write(dir.path(), name, name);
     }
-    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
-    let b = node(cx, &view, "b.rs");
+    let path = dir.path().join("b.rs");
+    let (handle, view) = open_app(cx, Launch::Folders(vec![path.clone()]));
+    let b = crate::node_at(cx, &view, &path);
     show(cx, handle, b);
     press(cx, handle, "tab");
     assert!(is_focused(cx, handle, "stage"));

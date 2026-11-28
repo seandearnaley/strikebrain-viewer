@@ -30,7 +30,8 @@ impl Stage {
         }
         let was = std::mem::replace(&mut self.asked, asked);
         if asked.folder.is_some() || was.folder.is_some() {
-            self.gallery.update(cx, super::Gallery::sync_folder);
+            self.gallery
+                .update(cx, |gallery, cx| gallery.sync_folder(was.staged, cx));
         }
         if asked.folder.is_some() {
             self.load = None;
@@ -245,19 +246,16 @@ impl Stage {
     /// stage, so ← and → find them ready.
     fn preload_neighbours(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let state = self.state.read(cx);
-        let (Some(explorer), Some(current)) = (state.explorer(), state.current()) else {
+        let Some(explorer) = state.explorer() else {
             return;
         };
         let tree = explorer.tree();
-        let paths: Vec<Arc<Path>> = [
-            explorer.gallery_next(current),
-            explorer.gallery_previous(current),
-        ]
-        .into_iter()
-        .flatten()
-        .filter(|&id| is_image_extension(tree.extension(id)))
-        .map(|id| tree.abs_path(id).into())
-        .collect();
+        let paths: Vec<Arc<Path>> = [state.neighbour(true), state.neighbour(false)]
+            .into_iter()
+            .flatten()
+            .filter(|&id| is_image_extension(tree.extension(id)))
+            .map(|id| tree.abs_path(id).into())
+            .collect();
         if paths.is_empty() {
             return;
         }

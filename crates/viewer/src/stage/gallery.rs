@@ -289,7 +289,7 @@ impl Gallery {
 
     /// A change of folder, sort, filter, or layout. Only a different source
     /// starts a fresh scroll position. A refreshed tree can renumber every id.
-    pub(super) fn sync_folder(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn sync_folder(&mut self, previous: (u64, Option<NodeId>), cx: &mut Context<Self>) {
         let state = self.state.read(cx);
         let mut same = false;
         self.folder = state
@@ -302,6 +302,14 @@ impl Gallery {
                     .folder
                     .as_ref()
                     .is_some_and(|was| folder.carry_focus(was, e));
+                if !same
+                    && previous.0 == state.staged().0
+                    && let Some(child) = previous.1
+                    && e.tree().parent(child) == Some(id)
+                    && let Some(ix) = folder.entries(e).iter().position(|&entry| entry == child)
+                {
+                    folder.focus(ix, e);
+                }
                 folder
             });
         if !same {
@@ -399,24 +407,50 @@ impl Gallery {
         }
     }
 
-    fn open(&mut self, entry: Entry, window: &mut Window, cx: &mut Context<Self>) {
-        let opened = self.state.update(cx, |state, cx| match entry {
-            Entry::Checked(tile) => state.shows_gallery() && state.open_tile(tile, cx),
-            Entry::Child {
-                parent,
-                id,
-                generation,
-            } if state.staged() == (generation, Some(parent))
-                && state.stage_view() == StageView::Folder =>
-            {
-                state.navigate(generation, id, cx);
-                true
+    fn open(
+        &mut self,
+        entry: Entry,
+        event: &gpui_kit::ClickEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match entry {
+            Entry::Checked(tile) => {
+                let opened = self.state.update(cx, |state, cx| {
+                    state.shows_gallery() && state.open_tile(tile, cx)
+                });
+                if !opened {
+                    return;
+                }
             }
-            Entry::Child { .. } => false,
-        });
-        if opened {
-            window.focus(&self.focus, cx);
+            Entry::Child {
+                index,
+                id,
+                parent,
+                generation,
+            } => {
+                let state = self.state.read(cx);
+                let Some(folder) = self.folder.as_mut().filter(|f| f.is_current(state)) else {
+                    return;
+                };
+                let Some(e) = state.explorer() else {
+                    return;
+                };
+                if folder.id != parent
+                    || state.staged().0 != generation
+                    || folder.entries(e).get(index) != Some(&id)
+                {
+                    return;
+                }
+                folder.focus(index, e);
+                if event.is_keyboard() || event.click_count() == 2 {
+                    self.state
+                        .update(cx, |state, cx| state.navigate(generation, id, cx));
+                }
+                cx.notify();
+            }
         }
+        window.focus(&self.focus, cx);
     }
 
     // Layout and drawing
@@ -508,8 +542,9 @@ impl Gallery {
         };
         let ring = self.ring && self.focus.is_focused(window);
         let mut files = items.from(range.start * grid.columns);
-        let drawn = |id| match folder {
+        let drawn = |id, index| match folder {
             Some(f) => Entry::Child {
+                index,
                 parent: f.id,
                 id,
                 generation: state.staged().0,
@@ -520,14 +555,17 @@ impl Gallery {
             let columns = Columns::for_width(grid.tile.width, window.rem_size());
             return files
                 .take(range.len())
-                .map(|id| {
-                    let entry = drawn(id);
+                .enumerate()
+                .map(|(offset, id)| {
+                    let entry = drawn(id, range.start + offset);
                     folder::details_row(
                         explorer,
                         id,
                         columns,
-                        ring && Some(id) == focus,
-                        cx.listener(move |this, _, window, cx| this.open(entry, window, cx)),
+                        Some(id) == focus,
+                        cx.listener(move |this, event, window, cx| {
+                            this.open(entry, event, window, cx);
+                        }),
                         cx,
                     )
                     .into_any_element()
@@ -547,17 +585,19 @@ impl Gallery {
                         } else {
                             Some(thumbs::Look::Icon)
                         };
-                        let drawn = drawn(id);
+                        let drawn = drawn(id, row * grid.columns + column);
                         Tile::new(
                             id,
                             tree.name(id),
                             tree.extension(id),
                             grid.tile,
-                            cx.listener(move |this, _, window, cx| this.open(drawn, window, cx)),
+                            cx.listener(move |this, event, window, cx| {
+                                this.open(drawn, event, window, cx);
+                            }),
                         )
                         .folder_entry(kind)
                         .look(look)
-                        .current(current == Some(id))
+                        .current(current == Some(id) || (folder.is_some() && focus == Some(id)))
                         .focus(match (focus == Some(id), ring) {
                             (false, _) => Focus::Elsewhere,
                             (true, false) => Focus::Here,
@@ -708,6 +748,7 @@ impl Gallery {
 enum Entry {
     Checked(crate::state::DrawnTile),
     Child {
+        index: usize,
         parent: NodeId,
         id: NodeId,
         generation: u64,

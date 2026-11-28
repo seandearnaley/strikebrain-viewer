@@ -33,23 +33,30 @@ impl AppState {
             .folders
             .iter()
             .filter_map(|folder| Some((folder, folder.activity.as_ref()?)))
-            .find(|(_, activity)| activity.slow)?;
+            .filter(|(_, activity)| activity.slow)
+            .min_by_key(|(folder, activity)| {
+                (folder.shown, activity.phase != ScanPhase::Listing)
+            })?;
         let name = folder
             .path
             .file_name()
             .unwrap_or(folder.path.as_os_str())
             .to_string_lossy();
         let label = if matches!(activity.phase, ScanPhase::Sizes { .. }) {
-            format!("Reading sizes for {name}")
+            format!("Updating file sizes · {name}")
         } else if let Some(err) = &folder.error
             && !folder.shown
         {
             format!("Reading {name} · {err}")
+        } else if folder.shown {
+            format!("Checking for changes · {name}")
         } else if activity.found > 0 {
             format!(
                 "Indexing {name} · {} entries",
                 crate::explorer_panel::grouped(activity.found)
             )
+        } else if self.folder_node(&folder.path).is_some() {
+            format!("Indexing {name}")
         } else {
             format!("Reading {name}")
         };

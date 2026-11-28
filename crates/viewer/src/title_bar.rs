@@ -106,12 +106,7 @@ pub(crate) fn window_bar(
             automatic,
             cx,
         ))
-        .child(stage_part(
-            app_state,
-            explorer.is_some(),
-            updater.and_then(Updater::offer),
-            cx,
-        ))
+        .child(stage_part(app_state, explorer.is_some(), updater, cx))
 }
 
 /// The part over the explorer: `width` wide, or only the lights' room and
@@ -139,7 +134,8 @@ fn explorer_part(
         return part;
     };
     let open = !state.is_empty();
-    let slow = matches!(state.status(), ScanStatus::Scanning { slow: true });
+    let slow =
+        state.explorer().is_none() && matches!(state.status(), ScanStatus::Scanning { slow: true });
     let warning = state.watch_error().cloned();
     part.w(width)
         .pr_2()
@@ -255,7 +251,7 @@ fn more(state: &AppState, open: bool, automatic: Option<bool>) -> impl IntoEleme
 fn stage_part(
     app_state: &gpui_kit::Entity<AppState>,
     beside_explorer: bool,
-    offer: Option<&Offer>,
+    updater: Option<&Updater>,
     cx: &App,
 ) -> impl IntoElement {
     let state = app_state.read(cx);
@@ -298,7 +294,18 @@ fn stage_part(
         })
         // Empty, so the window moves from here.
         .child(div().flex_1())
-        .when_some(offer, |part, offer| part.child(update_button(offer)))
+        .when_some(
+            (!beside_explorer)
+                .then(|| state.folder_activity())
+                .flatten(),
+            |part, label| part.child(activity_label("folder-activity", label, cx)),
+        )
+        .when_some(updater.and_then(Updater::activity), |part, label| {
+            part.child(activity_label("update-activity", label, cx))
+        })
+        .when_some(updater.and_then(Updater::offer), |part, offer| {
+            part.child(update_button(offer))
+        })
         .child(
             // Disabled while the stage is blank, which is when it has no
             // title.
@@ -306,6 +313,23 @@ fn stage_part(
                 state.stage_title().is_none() || state.stage_view() == crate::StageView::Folder,
             ),
         )
+}
+
+pub(crate) fn activity_label(
+    id: &'static str,
+    label: SharedString,
+    cx: &App,
+) -> impl IntoElement + use<> {
+    div()
+        .id(id)
+        .test_support()
+        .role(Role::Status)
+        .aria_label(label.clone())
+        .min_w_0()
+        .truncate()
+        .text_xs()
+        .text_color(cx.theme().muted_foreground)
+        .child(label)
 }
 
 /// The update ready to install: the Kit's primary button, small, named

@@ -629,7 +629,20 @@ fn a_manual_check_asked_for_twice_checks_once_and_answers_once(cx: &mut TestAppC
         window.dispatch_action(Box::new(CheckForUpdates), cx);
     })
     .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        let activity = window.find("update-activity");
+        assert!(activity.visible());
+        assert_eq!(activity.label(), Some("Checking for updates…"));
+    })
+    .unwrap();
+    assert!(server.requests().is_empty(), "{:?}", server.requests());
     cx.run_until_parked();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("update-activity").is_none());
+    })
+    .unwrap();
     assert_eq!(server.requests(), ["/latest"]);
     assert!(cx.has_pending_prompt());
     cx.simulate_prompt_answer("OK");

@@ -894,7 +894,7 @@ fn folder_views_share_filters_sort_and_navigation(cx: &mut TestAppContext) {
         );
     })
     .unwrap();
-    click(cx, handle, ("folder-entry", c.index()));
+    crate::double_click(cx, handle, ("folder-entry", c.index()));
     assert_eq!(current(cx, &view), Some(c));
     assert_eq!(read(cx, &view, AppState::selected_count), 0);
 }
@@ -949,6 +949,75 @@ fn a_folder_keeps_keyboard_focus_across_layouts_and_an_empty_filter_clears(
     })
     .unwrap();
     press(cx, handle, "escape");
-    click(cx, handle, ("folder-entry", last.index()));
+    crate::double_click(cx, handle, ("folder-entry", last.index()));
     assert_eq!(current(cx, &view), Some(last));
+}
+
+#[gpui_kit::test]
+fn browsing_folder_files_uses_visible_siblings_without_checking_them(cx: &mut TestAppContext) {
+    let (handle, view) = open_app(
+        cx,
+        tree(&[
+            "art/child/p.png",
+            "art/a.jpg",
+            "art/b.jpg",
+            "art/c.txt",
+            "other.png",
+        ]),
+    );
+    let art = node(cx, &view, "art");
+    let child = node(cx, &view, "art/child");
+    let a = node(cx, &view, "art/a.jpg");
+    let b = node(cx, &view, "art/b.jpg");
+    click(cx, handle, row(art));
+    click(cx, handle, ("folder-entry", child.index()));
+    assert_eq!(current(cx, &view), Some(art));
+    crate::double_click(cx, handle, ("folder-entry", child.index()));
+    assert_eq!(current(cx, &view), Some(child));
+    dispatch(cx, handle, viewer::keys::GoBack);
+    crate::type_query(cx, handle, ".jpg");
+    crate::double_click(cx, handle, row(art));
+    press(cx, handle, "right");
+    press(cx, handle, "enter");
+    assert_eq!(current(cx, &view), Some(a));
+    press(cx, handle, "right");
+    assert_eq!(current(cx, &view), Some(b));
+    press(cx, handle, "right");
+    assert_eq!(current(cx, &view), Some(b));
+    press(cx, handle, "left");
+    assert_eq!(current(cx, &view), Some(a));
+    press(cx, handle, "escape");
+    assert_eq!(current(cx, &view), Some(art));
+    assert_eq!(read(cx, &view, AppState::selected_count), 0);
+}
+
+#[gpui_kit::test]
+fn sidebar_arrows_preview_images_and_folder_images_browse_with_vertical_keys(
+    cx: &mut TestAppContext,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["a.png", "b.png", "c.png"] {
+        write(dir.path(), name, png(16, 16));
+    }
+    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
+    let a = node(cx, &view, "a.png");
+    let c = node(cx, &view, "c.png");
+    click(cx, handle, row(a));
+    for (key, name) in [("down", "b.png"), ("down", "c.png"), ("up", "b.png")] {
+        press(cx, handle, key);
+        assert_eq!(shown(cx, handle), Some(Shown::Image(name.into())));
+        assert_eq!(crate::focus(cx, &view), Some(node(cx, &view, name)));
+    }
+    let root = crate::node_at(cx, &view, dir.path());
+    crate::double_click(cx, handle, row(root));
+    crate::double_click(cx, handle, ("folder-entry", c.index()));
+    press(cx, handle, "up");
+    assert_eq!(shown(cx, handle), Some(Shown::Image("b.png".into())));
+    press(cx, handle, "down");
+    assert_eq!(shown(cx, handle), Some(Shown::Image("c.png".into())));
+    press(cx, handle, "escape");
+    assert_eq!(current(cx, &view), Some(root));
+    press(cx, handle, "enter");
+    assert_eq!(current(cx, &view), Some(c));
+    assert_eq!(read(cx, &view, AppState::selected_count), 0);
 }

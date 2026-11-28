@@ -116,8 +116,8 @@ impl AppState {
         let waits_for_sizes = self.sort.key == SortKey::Size && !tree.has_sizes();
         if current.is_some() {
             self.current = current;
-            if pending.view == StageView::Folder {
-                self.view = StageView::Folder;
+            if matches!(pending.view, StageView::Folder | StageView::FolderFile) {
+                self.view = pending.view;
             }
         }
         self.selection_changed();

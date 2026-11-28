@@ -19,7 +19,7 @@ use super::{AppState, StageView, StateEvent};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Step {
     /// A file in the file view, by its path on disk.
-    Entry(PathBuf, Option<String>),
+    Entry(PathBuf, Option<String>, StageView),
     /// The gallery.
     Gallery,
 }
@@ -43,6 +43,7 @@ impl AppState {
         Some(Step::Entry(
             explorer.tree().abs_path(self.current?),
             self.fragment.clone(),
+            self.view,
         ))
     }
 
@@ -65,7 +66,7 @@ impl AppState {
     fn can_show(&self, step: &Step) -> bool {
         match step {
             Step::Gallery => self.gallery_len() >= 2,
-            Step::Entry(path, _) => self.explorer.as_ref().is_some_and(|explorer| {
+            Step::Entry(path, _, _) => self.explorer.as_ref().is_some_and(|explorer| {
                 let tree = explorer.tree();
                 tree.find_abs(path).is_some()
             }),
@@ -139,7 +140,7 @@ impl AppState {
         self.pending_link = None;
         self.fragment = None;
         match step {
-            Step::Entry(path, fragment) => {
+            Step::Entry(path, fragment, view) => {
                 let id = self
                     .explorer
                     .as_ref()
@@ -147,6 +148,9 @@ impl AppState {
                 if let Some(id) = id {
                     self.use_browsed_row(id);
                     self.open_entry(id, cx);
+                    if self.view == StageView::File && view == StageView::FolderFile {
+                        self.view = view;
+                    }
                     self.fragment = fragment;
                     self.reveal(id, cx);
                 }

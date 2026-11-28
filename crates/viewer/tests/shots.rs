@@ -564,7 +564,7 @@ fn main() {
         });
         folders
             .update_window(folder_window, |_, window, cx| {
-                window.click(("folder-entry", icons.index()), cx)
+                window.double_click(("folder-entry", icons.index()), cx)
             })
             .expect("browse into icons");
         written.push(save(

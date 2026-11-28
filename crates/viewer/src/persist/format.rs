@@ -31,6 +31,7 @@ struct StateFile {
     // An optional field lets older version-2 readers keep the rest of the session.
     #[serde(skip_serializing_if = "Option::is_none")]
     current_folder: Option<PathBuf>,
+    file_navigation: FileNavigation,
     view: ViewFile,
     folder_layout: crate::FolderLayout,
     query: String,
@@ -95,6 +96,14 @@ enum KindFile {
     All,
     Images,
     Text,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum FileNavigation {
+    #[default]
+    Checked,
+    Folder,
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
@@ -173,9 +182,14 @@ pub(super) fn encode(saved: &Saved) -> io::Result<Vec<u8>> {
             .current
             .clone()
             .filter(|_| view.view == StageView::Folder),
+        file_navigation: if view.view == StageView::FolderFile {
+            FileNavigation::Folder
+        } else {
+            FileNavigation::Checked
+        },
         folder_layout: view.folder_layout,
         view: match view.view {
-            StageView::File | StageView::Folder => ViewFile::File,
+            StageView::File | StageView::Folder | StageView::FolderFile => ViewFile::File,
             StageView::Gallery => ViewFile::Gallery,
         },
         query: view.query.clone(),
@@ -242,6 +256,9 @@ pub(super) fn decode(bytes: &[u8]) -> Option<Saved> {
     let folder = absolute(file.current_folder);
     let stage = match file.view {
         ViewFile::File if folder.is_some() => StageView::Folder,
+        ViewFile::File if matches!(file.file_navigation, FileNavigation::Folder) => {
+            StageView::FolderFile
+        }
         ViewFile::File => StageView::File,
         ViewFile::Gallery => StageView::Gallery,
     };
@@ -304,6 +321,7 @@ fn from_version_1(file: StateFileV1) -> StateFile {
         version: VERSION,
         current: under(file.current),
         current_folder: None,
+        file_navigation: FileNavigation::Checked,
         view: ViewFile::File,
         folder_layout: crate::FolderLayout::default(),
         first_visible_row: under(file.first_visible_row),

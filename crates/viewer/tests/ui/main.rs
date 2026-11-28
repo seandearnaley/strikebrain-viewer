@@ -314,6 +314,13 @@ fn click(cx: &mut TestAppContext, handle: AnyWindowHandle, id: impl Into<Element
     cx.run_until_parked();
 }
 
+fn double_click(cx: &mut TestAppContext, handle: AnyWindowHandle, id: impl Into<ElementId>) {
+    let id = id.into();
+    cx.update_window(handle, |_, window, cx| window.double_click(id, cx))
+        .expect("double-click");
+    cx.run_until_parked();
+}
+
 /// Dispatches `action` from the focused element, as a key, a menu item or
 /// a button does, and lets every task finish.
 fn dispatch(cx: &mut TestAppContext, handle: AnyWindowHandle, action: impl gpui_kit::Action) {

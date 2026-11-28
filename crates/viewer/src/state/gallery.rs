@@ -30,6 +30,8 @@ pub enum StageView {
     Gallery,
     /// The immediate contents of the current folder.
     Folder,
+    /// A file opened from a folder, navigated among its visible siblings.
+    FolderFile,
 }
 
 /// How the immediate children of an opened folder are displayed.
@@ -198,6 +200,15 @@ impl AppState {
     /// that was showing (or the nearest checked file) and scrolled to it,
     /// a new step. Returns false, changing nothing, with fewer than two.
     pub fn show_gallery(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.view == StageView::FolderFile
+            && !self.presenting
+            && let Some(parent) = self
+                .current
+                .and_then(|id| self.explorer.as_ref()?.tree().parent(id))
+        {
+            self.navigate(self.tree_generation, parent, cx);
+            return true;
+        }
         let shown = self.open_gallery(cx);
         if shown {
             self.record(Record::Add);

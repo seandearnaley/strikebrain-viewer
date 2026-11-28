@@ -234,7 +234,17 @@ impl RenderOnce for TreeRow {
                     row.hover(|style| style.bg(hover))
                 }
             })
-            .on_click(move |_, window, cx| on_click(&RowAction::Show, window, cx))
+            .on_click(move |event, window, cx| {
+                on_click(
+                    if event.click_count() == 2 {
+                        &RowAction::Open
+                    } else {
+                        &RowAction::Show
+                    },
+                    window,
+                    cx,
+                );
+            })
             .when_some(on_hover, |row, on_hover| {
                 row.on_hover(move |hovered, window, cx| on_hover(hovered, window, cx))
             })

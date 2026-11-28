@@ -37,12 +37,25 @@ impl AppState {
         self.set_focus(row.id, row.ix);
         match action {
             RowAction::Show => self.show(row.id, cx),
+            RowAction::Open => self.open_row(row.id, cx),
             RowAction::ToggleCheck => self.toggle_check(row.id, cx),
             RowAction::ToggleOpen => self.toggle_folder(row.id, cx),
             RowAction::Remove => self.remove_folder(row.id, cx),
         }
         cx.notify();
         true
+    }
+
+    /// Enters a file or a folder explicitly opened from the sidebar.
+    pub(super) fn open_row(&mut self, id: NodeId, cx: &mut Context<Self>) {
+        if self
+            .explorer
+            .as_ref()
+            .is_some_and(|e| e.can_open(id) && !e.is_open(id))
+        {
+            self.toggle_folder(id, cx);
+        }
+        self.show_browser_entry(id, super::history::Record::Add, cx);
     }
 
     /// Moves keyboard focus; returns the new focus row.
@@ -59,6 +72,7 @@ impl AppState {
         let id = explorer.rows()[to];
         self.use_browsed_row(id);
         self.set_focus(id, to);
+        self.show_browser_entry(id, super::history::Record::Replace, cx);
         cx.notify();
         Some(to)
     }
@@ -83,6 +97,7 @@ impl AppState {
         match child {
             Some(child) if explorer.tree().parent(child) == Some(id) => {
                 self.set_focus(child, row + 1);
+                self.show_browser_entry(child, super::history::Record::Replace, cx);
                 cx.notify();
                 Some(row + 1)
             }
@@ -112,6 +127,7 @@ impl AppState {
             return Some(row);
         };
         self.set_focus(parent, parent_row);
+        self.show_browser_entry(parent, super::history::Record::Replace, cx);
         cx.notify();
         Some(parent_row)
     }
