@@ -29,20 +29,27 @@ pub(super) const SLOW_SCAN: Duration = Duration::from_millis(200);
 impl AppState {
     /// A slow operation's actual phase, folder and discovery count.
     pub(crate) fn folder_activity(&self) -> Option<SharedString> {
-        let (folder, activity) = self
+        let Some((folder, activity)) = self
             .folders
             .iter()
             .filter_map(|folder| Some((folder, folder.activity.as_ref()?)))
             .filter(|(_, activity)| activity.slow)
-            .min_by_key(|(folder, activity)| {
-                (folder.shown, activity.phase != ScanPhase::Listing)
-            })?;
+            .min_by_key(|(folder, activity)| (folder.shown, activity.phase != ScanPhase::Listing))
+        else {
+            return self.folders.iter().find_map(|f| f.size_error.clone());
+        };
         let name = folder
             .path
             .file_name()
             .unwrap_or(folder.path.as_os_str())
             .to_string_lossy();
-        let label = if matches!(activity.phase, ScanPhase::Sizes { .. }) {
+        let label = if matches!(activity.phase, ScanPhase::Sizes { on_screen: true })
+            && self.explorer.as_ref().is_some_and(|e| {
+                e.folder_at(&folder.path)
+                    .is_some_and(|id| e.tree().display_size(id).is_some())
+            }) {
+            format!("Verifying saved sizes · {name}")
+        } else if matches!(activity.phase, ScanPhase::Sizes { .. }) {
             format!("Updating file sizes · {name}")
         } else if let Some(err) = &folder.error
             && !folder.shown
@@ -139,6 +146,7 @@ impl AppState {
             return;
         };
         folder.rescan_pending = false;
+        folder.size_error = None;
         let entries = Arc::new(AtomicUsize::new(0));
         let reported = Arc::clone(&entries);
         folder.cancel.store(true, Ordering::Relaxed);
@@ -185,7 +193,7 @@ impl AppState {
         }));
         folder.scan_task = Some(cx.spawn(async move |this, cx| {
             let worker_cancel = Arc::clone(&cancel);
-            let mut scanned = cx
+            let scanned = cx
                 .background_spawn(async move {
                     explorer::scan_with_cache(
                         &root,
@@ -200,22 +208,17 @@ impl AppState {
             if sizes_first && let Ok(tree) = &scanned {
                 // A cancelled read means a newer scan has replaced this one.
                 this.update(cx, |this, cx| {
-                    if let Some(folder) = this
-                        .folder_mut(key)
-                        .filter(|folder| folder.generation == generation)
-                    {
-                        if let Some(activity) = &mut folder.activity {
-                            activity.phase = ScanPhase::Sizes { on_screen: false };
-                        }
-                        cx.notify();
-                    }
+                    this.measuring_before_display(key, generation, cx);
                 })?;
                 let (sized, sizes_cancel) = (Arc::clone(tree), Arc::clone(&cancel));
                 if let Err(err) = cx
                     .background_spawn(async move { read_sizes(&sized, &sizes_cancel) })
                     .await
                 {
-                    scanned = Err(err);
+                    return this.update(cx, |this, cx| {
+                        this.finish_scan(key, generation, scanned, cx);
+                        this.size_failed(key, generation, &err, cx);
+                    });
                 }
             }
             let shown = this.update(cx, |this, cx| {
@@ -229,12 +232,25 @@ impl AppState {
             let sized = cx
                 .background_spawn(async move { read_sizes(&tree, &cancel) })
                 .await;
-            if sized.is_ok() {
-                this.update(cx, |this, cx| this.finish_sizes(key, generation, cx))?;
-            }
+            this.update(cx, |this, cx| match sized {
+                Ok(()) => this.finish_sizes(key, generation, cx),
+                Err(err) => this.size_failed(key, generation, &err, cx),
+            })?;
             Ok(())
         }));
         cx.notify();
+    }
+
+    fn measuring_before_display(&mut self, key: u64, generation: u64, cx: &mut Context<Self>) {
+        if let Some(folder) = self
+            .folder_mut(key)
+            .filter(|folder| folder.generation == generation)
+        {
+            if let Some(activity) = &mut folder.activity {
+                activity.phase = ScanPhase::Sizes { on_screen: false };
+            }
+            cx.notify();
+        }
     }
 
     fn mark_slow(&mut self, key: u64, generation: u64, cx: &mut Context<Self>) {
@@ -474,6 +490,19 @@ impl AppState {
         if pending {
             self.refresh_folder(key, cx);
         }
+    }
+
+    fn size_failed(&mut self, key: u64, generation: u64, err: &ScanError, cx: &mut Context<Self>) {
+        let Some(folder) = self.folder_mut(key).filter(|f| f.generation == generation) else {
+            return;
+        };
+        folder.activity = None;
+        folder.slow_task = None;
+        if !matches!(err, ScanError::Cancelled) {
+            folder.size_error =
+                Some(format!("Couldn't verify sizes · {} · {err}", folder.path.display()).into());
+        }
+        cx.notify();
     }
 
     /// Puts a tree built in memory on screen, as it is, with the filter

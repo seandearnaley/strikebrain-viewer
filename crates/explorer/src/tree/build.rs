@@ -222,6 +222,9 @@ impl RawTree {
                 top: NodeId::ROOT,
                 path: root_path,
                 sizes: Arc::default(),
+                previous: None,
+                #[cfg(target_os = "macos")]
+                size_cache: None,
             }]),
             names,
             haystack,

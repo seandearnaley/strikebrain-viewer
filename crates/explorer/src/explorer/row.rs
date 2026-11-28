@@ -49,7 +49,7 @@ impl Explorer {
             checkable: self.can_check(id),
             open: self.is_open(id),
             can_open: self.can_open(id),
-            size: tree.size(id),
+            size: tree.display_size(id),
             ext: tree.extension(id),
         })
     }

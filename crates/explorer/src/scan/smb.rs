@@ -124,7 +124,7 @@ fn load(path: &Path) -> HashMap<OsString, Listing> {
     }
 }
 
-fn save(path: &Path, dirs: &Manifest, cancel: &AtomicBool) -> io::Result<()> {
+fn save(path: &Path, dirs: &impl Serialize, cancel: &AtomicBool) -> io::Result<()> {
     let parent = path
         .parent()
         .expect("the manifest is inside the cache directory");
@@ -275,7 +275,23 @@ pub(super) fn indexed(
             result
         })
     }?;
-    let tree = raw.build(root.to_owned())?;
+    let mut tree = raw.build(root.to_owned())?;
+    if let Some(stamp) = current
+        .iter()
+        .find(|(relative, _)| relative.is_empty())
+        .and_then(|(_, listing)| listing.stamp.as_ref())
+    {
+        let mut cache = SizeCache {
+            path: manifest.with_extension("sizes-v1"),
+            device: stamp.device,
+            inode: stamp.inode,
+            same_files: false,
+        };
+        let previous = (mode == CacheMode::Validate)
+            .then(|| cache.load(&tree))
+            .flatten();
+        tree.attach_size_cache(cache, previous);
+    }
     if cancel.load(Ordering::Relaxed) {
         return Err(ScanError::Cancelled);
     }
@@ -354,4 +370,79 @@ fn collect(
         }
     }
     Ok((raw, current, reads))
+}
+
+/// A size snapshot is a display hint. Only a completed live measurement writes it.
+#[derive(Clone, Debug)]
+pub(crate) struct SizeCache {
+    path: PathBuf,
+    device: i32,
+    inode: u64,
+    same_files: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+struct SizeSnapshot {
+    device: i32,
+    inode: u64,
+    files: HashMap<String, u64>,
+}
+
+impl SizeCache {
+    fn load(&mut self, tree: &Tree) -> Option<std::sync::Arc<[Option<u64>]>> {
+        let mut snapshot: SizeSnapshot =
+            match fs::read(&self.path).and_then(|b| Ok(serde_json::from_slice(&b)?)) {
+                Ok(snapshot) => snapshot,
+                Err(err) => {
+                    if err.kind() != io::ErrorKind::NotFound {
+                        log::warn!("Reading SMB size cache {}: {err}", self.path.display());
+                    }
+                    return None;
+                }
+            };
+        if (snapshot.device, snapshot.inode) != (self.device, self.inode) {
+            return None;
+        }
+        let mut sizes = vec![Some(0_u64); tree.node_count()];
+        for index in (0..tree.node_count()).rev() {
+            let id = crate::NodeId::from_index(index);
+            if tree.is_file(id) {
+                sizes[index] = snapshot.files.remove(&tree.path(id));
+            }
+            if let Some(parent) = tree.parent(id) {
+                sizes[parent.index()] = sizes[parent.index()]
+                    .zip(sizes[index])
+                    .map(|(a, b)| a.saturating_add(b));
+            }
+        }
+        self.same_files = snapshot.files.is_empty() && sizes[0].is_some();
+        Some(sizes.into())
+    }
+
+    pub(super) fn store(&self, tree: &Tree, top: crate::NodeId, cancel: &AtomicBool) {
+        if self.same_files && tree.sizes_match_previous(top) {
+            return;
+        }
+        let mut files = HashMap::new();
+        for ix in tree.subtree(top) {
+            if cancel.load(Ordering::Relaxed) {
+                return;
+            }
+            let id = crate::NodeId::from_index(ix);
+            if tree.is_file(id) {
+                files.insert(
+                    tree.path_from(top, id),
+                    tree.size(id).expect("size pass completed"),
+                );
+            }
+        }
+        let snapshot = SizeSnapshot {
+            device: self.device,
+            inode: self.inode,
+            files,
+        };
+        if let Err(err) = save(&self.path, &snapshot, cancel) {
+            log::warn!("Writing SMB size cache {}: {err}", self.path.display());
+        }
+    }
 }
