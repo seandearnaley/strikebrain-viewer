@@ -49,6 +49,7 @@ mod load;
 mod loading;
 mod render;
 mod text;
+mod zoom;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -261,6 +262,7 @@ pub(crate) struct Stage {
     /// Stamps the gallery neighbours to decode ahead. Replaced likewise.
     preload: Option<Task<Result<()>>>,
     images: Entity<StageImages>,
+    zoom: zoom::Zoom,
     texts: Lru<Arc<Path>, CachedText>,
     text_views: TextViews,
     gallery: Entity<Gallery>,
@@ -316,6 +318,7 @@ impl Stage {
             load: None,
             preload: None,
             images: cx.new(StageImages::new),
+            zoom: zoom::Zoom::default(),
             texts: Lru::new(TEXT_CACHE_BYTES),
             text_views,
             link_task: None,

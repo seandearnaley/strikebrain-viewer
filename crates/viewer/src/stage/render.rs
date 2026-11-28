@@ -2,16 +2,14 @@
 //! the position in the gallery.
 
 use std::path::Path;
-use std::sync::Arc;
 
 use explorer::format_size;
 use gpui_kit::assets::IconName as AssetIcon;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, App, Context, Hsla, IntoElement, ObjectFit, ParentElement as _, Render, Role,
-    SharedString, StatefulInteractiveElement as _, Styled as _, StyledImage as _,
-    TestSupportExt as _, Window, div, img, prelude::*,
+    AnyElement, Context, Hsla, IntoElement, ParentElement as _, Render, Role, SharedString,
+    StatefulInteractiveElement as _, Styled as _, TestSupportExt as _, Window, div, prelude::*,
 };
 
 use crate::keys::{
@@ -23,13 +21,13 @@ use crate::state::TileMotion;
 use crate::theme::TABULAR_FIGURES;
 
 use super::text::Scroll;
-use super::{Content, File, Gallery, Stage};
+use super::{Content, Gallery, Stage};
 
 impl Stage {
-    fn render_content(&self, cx: &Context<Self>) -> Option<AnyElement> {
+    fn render_content(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         Some(match &self.content {
             Content::Blank => return None,
-            Content::Image(file, len) => self.render_image(file, *len, cx),
+            Content::Image(file, len) => self.render_image(file, *len, window, cx),
             Content::Markdown(file) => self
                 .text_views
                 .render_markdown(file.name.clone(), cx.weak_entity())
@@ -42,40 +40,6 @@ impl Stage {
                 unsupported(name.clone(), *size, cx.theme().muted_foreground)
             }
         })
-    }
-
-    /// The image, scaled down to fit and never up, centred: inset from the
-    /// pane's edges, or using the whole window while presenting. A file
-    /// GPUI cannot decode shows as unsupported.
-    ///
-    /// An `img` gives itself the picture's aspect ratio, and as a block's
-    /// child it takes its height from its width, so a tall picture would
-    /// run off the bottom. As the only item of a flex frame placed by its
-    /// insets, its full height is the frame's.
-    fn render_image(&self, file: &File, len: u64, cx: &App) -> AnyElement {
-        let name = file.name.clone();
-        let (fallback_name, muted) = (name.clone(), cx.theme().muted_foreground);
-        div()
-            .id("stage-image")
-            .test_support()
-            .role(Role::Image)
-            .aria_label(name)
-            .absolute()
-            .inset_0()
-            .flex()
-            .when(!self.asked.presenting, Styled::p_6)
-            .child(
-                img(Arc::clone(&file.path))
-                    .image_cache(&self.images)
-                    // An id lets an animated GIF play. Keyed by the file,
-                    // so each file starts from its first frame and a
-                    // rescan, which renumbers the tree, does not restart it.
-                    .id(("image", path_key(&file.path)))
-                    .size_full()
-                    .object_fit(ObjectFit::ScaleDown)
-                    .with_fallback(move || unsupported(fallback_name.clone(), Some(len), muted)),
-            )
-            .into_any_element()
     }
 
     /// Whether the presentation shows a picture.
@@ -136,7 +100,7 @@ impl Stage {
 }
 
 /// A number for a path, to key an element by its file.
-fn path_key(path: &Path) -> usize {
+pub(super) fn path_key(path: &Path) -> usize {
     use std::hash::{Hash as _, Hasher as _};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     path.hash(&mut hasher);
@@ -150,7 +114,7 @@ fn path_key(path: &Path) -> usize {
 }
 
 /// A file the stage cannot show: its name and size, centred and muted.
-fn unsupported(name: SharedString, size: Option<u64>, muted: Hsla) -> AnyElement {
+pub(super) fn unsupported(name: SharedString, size: Option<u64>, muted: Hsla) -> AnyElement {
     let size: Option<SharedString> = size.map(|bytes| format_size(bytes).into());
     v_flex()
         .id("stage-unsupported")
@@ -190,13 +154,13 @@ fn unsupported(name: SharedString, size: Option<u64>, muted: Hsla) -> AnyElement
 }
 
 impl Render for Stage {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.renders += 1;
         let gallery = self.asked.gallery || self.asked.folder.is_some();
         let content = if gallery {
             Some(self.gallery.clone().into_any_element())
         } else {
-            self.render_content(cx)
+            self.render_content(window, cx)
         };
         let bar = (self.asked.position.is_some() || self.asked.back.is_some())
             .then(|| self.render_bar(cx));

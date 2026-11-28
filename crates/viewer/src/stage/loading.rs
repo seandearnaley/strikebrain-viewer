@@ -227,6 +227,7 @@ impl Stage {
             _ => false,
         };
         if !same_view {
+            self.zoom = super::zoom::Zoom::default();
             self.focus_from_view(window, cx);
         }
         self.content = content;

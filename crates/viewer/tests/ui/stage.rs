@@ -884,3 +884,54 @@ fn a_document_opened_on_its_own_can_link_to_a_sibling_folder(cx: &mut TestAppCon
     dispatch(cx, handle, viewer::keys::GoBack);
     assert_eq!(shown(cx, handle), Some(Shown::Markdown("guide.md".into())));
 }
+
+#[gpui_kit::test]
+fn wheel_zooms_an_open_image_and_fit_resets_it(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "a.png", png(640, 480));
+    let (handle, view) = open_app(cx, Launch::Folders(vec![dir.path().to_owned()]));
+    let photo = node(cx, &view, "a.png");
+    show(cx, handle, photo);
+    assert_eq!(shown(cx, handle), Some(Shown::Image("a.png".into())));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        let fitted = window.find("zoom-picture").bounds();
+        let anchor = fitted.center() + point(px(25.), px(15.));
+        window.pointer_move(anchor, None, cx);
+        window.dispatch_event(
+            ScrollEvent {
+                position: anchor,
+                delta: ScrollDelta::Lines(point(0., 8.)),
+                ..Default::default()
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.render_frame(cx);
+        let enlarged = window.find("zoom-picture").bounds();
+        let ratio = enlarged.size.width / fitted.size.width;
+        assert!(ratio > 1.);
+        let anchored = enlarged.origin + (anchor - fitted.origin) * ratio;
+        assert!((anchored.x - anchor.x).abs() <= px(1.) && (anchored.y - anchor.y).abs() <= px(1.));
+        let pan = point(px(12.), px(9.));
+        window.drag(anchor, anchor + pan, cx);
+        assert_eq!(
+            window.find("zoom-picture").bounds().origin,
+            enlarged.origin + pan
+        );
+        window.scroll(
+            "stage-image",
+            ScrollDelta::Pixels(point(px(0.), px(-64.))),
+            cx,
+        );
+        assert!(window.find("zoom-picture").bounds().size.width < enlarged.size.width);
+        window.click("zoom-actual", cx);
+        assert_eq!(
+            window.find("zoom-picture").bounds().size.width,
+            px(640. / window.scale_factor())
+        );
+        window.click("zoom-fit", cx);
+        assert_eq!(window.find("zoom-picture").bounds(), fitted);
+    })
+    .unwrap();
+}

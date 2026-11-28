@@ -104,6 +104,16 @@ impl StageImages {
         self.images.used()
     }
 
+    /// Dimensions of the decoded first frame, in source pixels.
+    pub(super) fn dimensions(
+        &self,
+        resource: &Resource,
+        window: &Window,
+    ) -> Option<gpui_kit::Size<gpui_kit::DevicePixels>> {
+        let image = self.images.peek(resource)?.image.use_image(window)?.ok()?;
+        Some(image.size(0))
+    }
+
     /// No image is on the stage: every image may go to make room.
     pub(crate) fn leave_stage(&mut self) {
         self.on_stage = None;
